@@ -1,1 +1,1 @@
-Trigger controlled Android public build test - retry after SDK setup fix.
+Trigger controlled Android public build test - retry with explicit sdkmanager path.
