@@ -1,0 +1,91 @@
+apply plugin: 'com.android.application'
+
+// GitHub Actions can override these values without editing the source for every build.
+def irgunVersionCode = (System.getenv('IRGUN_ANDROID_VERSION_CODE') ?: '94').toInteger()
+def irgunVersionName = System.getenv('IRGUN_ANDROID_VERSION_NAME') ?: '1.0.94'
+def irgunKeystorePath = System.getenv('IRGUN_ANDROID_KEYSTORE_PATH')
+def irgunKeystorePassword = System.getenv('IRGUN_ANDROID_KEYSTORE_PASSWORD')
+def irgunKeyAlias = System.getenv('IRGUN_ANDROID_KEY_ALIAS')
+def irgunKeyPassword = System.getenv('IRGUN_ANDROID_KEY_PASSWORD')
+def irgunHasReleaseSigning = irgunKeystorePath &&
+        irgunKeystorePassword &&
+        irgunKeyAlias &&
+        irgunKeyPassword &&
+        file(irgunKeystorePath).exists()
+
+android {
+    namespace = "org.irgunshiuraitorah.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+
+    defaultConfig {
+        applicationId "org.irgunshiuraitorah.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode irgunVersionCode
+        versionName irgunVersionName
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+            // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+
+    signingConfigs {
+        release {
+            if (irgunHasReleaseSigning) {
+                storeFile file(irgunKeystorePath)
+                storePassword irgunKeystorePassword
+                keyAlias irgunKeyAlias
+                keyPassword irgunKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (irgunHasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir {
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core:$androidxCoreVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+    implementation platform('com.google.firebase:firebase-bom:34.18.0')
+    implementation 'com.google.firebase:firebase-messaging'
+    implementation 'androidx.credentials:credentials:1.6.0'
+    implementation 'androidx.credentials:credentials-play-services-auth:1.6.0'
+    implementation 'com.google.android.libraries.identity.googleid:googleid:1.1.1'
+    def media3Version = '1.11.1'
+    implementation "androidx.media3:media3-exoplayer:$media3Version"
+    implementation "androidx.media3:media3-session:$media3Version"
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

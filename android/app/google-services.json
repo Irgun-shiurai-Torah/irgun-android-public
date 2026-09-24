@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "363860421681",
+    "project_id": "irgun-shiurai-torah",
+    "storage_bucket": "irgun-shiurai-torah.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:363860421681:android:4224a7a59bfea45825b910",
+        "android_client_info": {
+          "package_name": "org.irgunshiuraitorah.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDdG5A0fpt5dqtddWL_A_qo3KqvOkQjv-M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

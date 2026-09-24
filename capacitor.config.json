@@ -1,0 +1,8 @@
+{
+  "appId": "org.irgunshiuraitorah.app",
+  "appName": "Irgun Shiurai Torah",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}

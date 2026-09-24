@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Irgun Shiurai Torah</string>
+    <string name="title_activity_main">Irgun Shiurai Torah</string>
+    <string name="package_name">org.irgunshiuraitorah.app</string>
+    <string name="custom_url_scheme">org.irgunshiuraitorah.app</string>
+    <string name="playback_notification_channel_name">Lecture playback</string>
+</resources>
