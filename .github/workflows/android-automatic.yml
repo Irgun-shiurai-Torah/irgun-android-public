@@ -1,12 +1,15 @@
-name: Irgun Android - Public Build Test
+name: Irgun Android - Automatic Builds
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
-    paths:
-      - ".github/public-test-trigger"
+    paths-ignore:
+      - ".github/**"
+      - "README*"
+      - "**/*.md"
+      - "**/*.txt"
+  workflow_dispatch:
 
 permissions:
   contents: read
