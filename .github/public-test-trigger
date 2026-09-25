@@ -1,1 +1,1 @@
-Trigger controlled Android public build test - retry with Java 21.
+Trigger signed Android public build and Google Play Internal upload after all five secrets were added.
