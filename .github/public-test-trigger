@@ -1,1 +1,1 @@
-Trigger signed Android public build and Google Play Internal upload after all five secrets were added.
+Retry signed Android public build and Google Play Internal upload after enabling Android Publisher API.
