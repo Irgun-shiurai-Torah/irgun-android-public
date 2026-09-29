@@ -189,7 +189,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       try { video.webkitEnterFullscreen?.(); } catch (_) {}
     }
   });
-  const qualitySelect = controls.querySelector('[data-hls-quality]');
+
   qualitySelect.addEventListener('change', () => {
     if (hls) hls.currentLevel = Number(qualitySelect.value);
   });
