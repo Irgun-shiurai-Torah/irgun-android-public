@@ -100,7 +100,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   container.insertBefore(stage, iframe.nextSibling);
   const video = document.createElement('video');
   video.id = 'watchDirectHlsVideo';
-  video.className = 'watch-direct-hls-video';
+  video.className = 'watch-frame watch-direct-hls-video';
   video.controls = false;
   video.playsInline = true;
   video.preload = 'metadata';
