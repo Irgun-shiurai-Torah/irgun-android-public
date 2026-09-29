@@ -107,6 +107,30 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   container.insertBefore(video, iframe.nextSibling);
   iframe.style.display = 'none';
 
+  const qualityControl = document.createElement('label');
+  qualityControl.className = 'watch-hls-quality';
+  qualityControl.innerHTML = '<span>Quality</span><select aria-label="Video quality"><option value="-1">Auto</option></select>';
+  const qualitySelect = qualityControl.querySelector('select');
+  qualityControl.hidden = true;
+  container.appendChild(qualityControl);
+  qualitySelect.addEventListener('change', () => {
+    if (hls) hls.currentLevel = Number(qualitySelect.value);
+  });
+
+  const updateQualityOptions = () => {
+    if (!hls) return;
+    const levels = hls.levels.map((level, index) => ({level, index}))
+      .sort((a, b) => (Number(b.level.height) || 0) - (Number(a.level.height) || 0));
+    qualitySelect.replaceChildren(new Option('Auto', '-1'));
+    for (const {level, index} of levels) {
+      const height = Number(level.height) || 0;
+      const label = height ? `${height}p` : `Level ${index + 1}`;
+      qualitySelect.add(new Option(label, String(index)));
+    }
+    qualityControl.hidden = levels.length === 0;
+    qualitySelect.value = '-1';
+  };
+
   let hls = null;
   let activeSource = '';
   let failed = false;
@@ -149,7 +173,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
             clearTimeout(timer);
             error ? reject(error) : resolve();
           };
-          hls.on(Hls.Events.MANIFEST_PARSED, () => finish());
+          hls.on(Hls.Events.MANIFEST_PARSED, () => { updateQualityOptions(); finish(); });
           hls.on(Hls.Events.ERROR, (_event, info) => {
             if (!info?.fatal) return;
             if (!finished) finish(new Error(`HLS playback failed: ${info.details || 'fatal error'}`));
@@ -221,13 +245,14 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       return true;
     } catch (error) {
       video.remove();
+      qualityControl.remove();
       iframe.style.display = '';
       throw error;
     }
   })();
   const adapter = makePlayerAdapter(video, () => hls, readyPromise);
   // Keep the adapter's reference to the HLS instance current after attachment and recovery.
-  adapter.destroy = () => { try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); video.remove(); iframe.style.display = ''; return Promise.resolve(); };
+  adapter.destroy = () => { try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); video.remove(); qualityControl.remove(); iframe.style.display = ''; return Promise.resolve(); };
   adapter.on('error', detail => onError?.(detail?.error, detail?.position, detail?.autoplay));
   adapter.getSourceType = () => activeSource === sources.hls ? 'hls' : 'mp4';
   adapter.getVideoElement = () => video;
