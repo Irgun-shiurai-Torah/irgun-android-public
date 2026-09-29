@@ -27,7 +27,7 @@ function loadHls(apiBase) {
   return promise;
 }
 
-function makePlayerAdapter(video, hls, readyPromise, onError) {
+function makePlayerAdapter(video, getHls, readyPromise) {
   const listeners = new Map();
   const emit = (name, data) => {
     for (const callback of listeners.get(name) || []) {
@@ -68,7 +68,7 @@ function makePlayerAdapter(video, hls, readyPromise, onError) {
     play:() => video.play(),
     pause:() => { video.pause(); return Promise.resolve(); },
     destroy:() => {
-      try { hls?.destroy(); } catch (_) {}
+      try { getHls()?.destroy(); } catch (_) {}
       video.pause();
       video.removeAttribute('src');
       video.load();
@@ -76,7 +76,7 @@ function makePlayerAdapter(video, hls, readyPromise, onError) {
       return Promise.resolve();
     }
   };
-  if (onError) adapter.on('error', onError);
+  adapter.reportError = (error, position, autoplay) => emit('error', {error, position, autoplay});
   return adapter;
 }
 
@@ -208,10 +208,10 @@ export async function createAndroidHlsPlayer({ apiBase, videoId, iframe, resumeS
         if (shouldPlay) await video.play().catch(() => {});
         return;
       } catch (error) {
-        onError?.(error, position, shouldPlay);
+        adapter.reportError(error, position, shouldPlay);
       }
     } else {
-      onError?.(new Error(`HLS playback failed: ${info?.details || 'fatal error'}`), position, shouldPlay);
+      adapter.reportError(new Error(`HLS playback failed: ${info?.details || 'fatal error'}`), position, shouldPlay);
     }
   };
 
@@ -231,12 +231,10 @@ export async function createAndroidHlsPlayer({ apiBase, videoId, iframe, resumeS
       throw error;
     }
   })();
-  const adapter = makePlayerAdapter(video, hls, readyPromise, (error, position, autoplay) => onError?.(error, position, autoplay));
+  const adapter = makePlayerAdapter(video, () => hls, readyPromise);
   // Keep the adapter's reference to the HLS instance current after attachment and recovery.
-  const originalDestroy = adapter.destroy;
   adapter.destroy = () => { try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); video.remove(); return Promise.resolve(); };
   adapter.getSourceType = () => activeSource === sources.hls ? 'hls' : 'mp4';
   adapter.getVideoElement = () => video;
-  adapter.on('error', detail => onError?.(detail?.error, detail?.position, detail?.autoplay));
   return adapter;
 }
