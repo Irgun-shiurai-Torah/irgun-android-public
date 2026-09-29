@@ -8579,11 +8579,26 @@ window.addEventListener('offline', () => {
   render();
   updateReconnectTimer();
 });
+// A notification tap can reveal an existing WebView without a visibilitychange.
+// Pull Media3 state from the live JS bridge on focus as well, then repeat after
+// Android has completed Activity.onResume. The second pull reopens the native
+// event gate if onResume ran after the first one.
+let foregroundPlaybackRefreshTimer = null;
+function refreshPlaybackAfterForeground() {
+  if (!usesNativeUnifiedAudio() || document.hidden) return;
+  PlaybackController.refreshFromNative().catch(()=>{});
+  if (foregroundPlaybackRefreshTimer) clearTimeout(foregroundPlaybackRefreshTimer);
+  foregroundPlaybackRefreshTimer = setTimeout(() => {
+    foregroundPlaybackRefreshTimer = null;
+    if (!document.hidden) PlaybackController.refreshFromNative().catch(()=>{});
+  }, 450);
+}
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) PlaybackController.refreshFromNative().catch(()=>{});
+  if (!document.hidden) refreshPlaybackAfterForeground();
   if (!document.hidden && (state.error || state.offlineMode || state.usingCachedLibrary)) bootstrap({ background:true });
 });
 window.addEventListener('focus', () => {
+  refreshPlaybackAfterForeground();
   handlePendingPushOpen();
   if (state.error || state.offlineMode || state.usingCachedLibrary) bootstrap({ background:true });
 });
