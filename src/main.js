@@ -3664,7 +3664,7 @@ function syncLivePlaybackAnalytics() {
         usageAnalytics.setMedia({ isPlaying:false, mediaType:'none', playerState:'browsing', shiurId:'' });
     };
     liveAnalyticsPlayer = player;
-    liveAnalyticsHandlers = [['play',play],['playing',play],['pause',stop],['ended',stop]];
+    liveAnalyticsHandlers = [['play',play],['playing',play],['timeupdate',play],['pause',stop],['ended',stop]];
     for (const [name, handler] of liveAnalyticsHandlers) player.on(name, handler);
   } catch (error) { console.warn('Live playback analytics unavailable:', error); }
 }
