@@ -110,11 +110,11 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   video.setAttribute('webkit-playsinline', '');
   video.setAttribute('aria-label', 'Shiur video');
   stage.appendChild(video);
-  iframe.style.display = 'none';
+  iframe.style.setProperty('display', 'none', 'important');
 
   const controls = document.createElement('div');
   controls.className = 'watch-hls-controls';
-  controls.innerHTML = '<button class="watch-hls-icon-button" data-hls-play type="button" aria-label="Play">▶</button><span class="watch-hls-time" data-hls-current>0:00</span><input class="watch-hls-seek" data-hls-seek type="range" min="0" max="1000" value="0" aria-label="Seek"><span class="watch-hls-time" data-hls-duration>0:00</span><button class="watch-hls-icon-button" data-hls-mute type="button" aria-label="Mute">🔊</button><input class="watch-hls-volume" data-hls-volume type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume"><select class="watch-hls-select" data-hls-speed aria-label="Playback speed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="1.75">1.75×</option><option value="2">2×</option></select><select class="watch-hls-select" data-hls-quality aria-label="Video quality" hidden><option value="-1">Auto</option></select><button class="watch-hls-icon-button" data-hls-pip type="button" aria-label="Picture in Picture" title="Picture in Picture">PiP</button><button class="watch-hls-icon-button" data-hls-fullscreen type="button" aria-label="Fullscreen" title="Fullscreen">⛶</button>';
+  controls.innerHTML = '<button class="watch-hls-icon-button" data-hls-play type="button" aria-label="Play">▶</button><span class="watch-hls-time" data-hls-current>0:00</span><input class="watch-hls-seek" data-hls-seek type="range" min="0" max="1000" value="0" aria-label="Seek"><span class="watch-hls-time" data-hls-duration>0:00</span><button class="watch-hls-icon-button" data-hls-mute type="button" aria-label="Mute"></button><input class="watch-hls-volume" data-hls-volume type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume"><select class="watch-hls-select" data-hls-speed aria-label="Playback speed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="1.75">1.75×</option><option value="2">2×</option></select><select class="watch-hls-select" data-hls-quality aria-label="Video quality" hidden><option value="-1">Auto</option></select><button class="watch-hls-icon-button" data-hls-pip type="button" aria-label="Picture in Picture" title="Picture in Picture">PiP</button><button class="watch-hls-icon-button" data-hls-fullscreen type="button" aria-label="Fullscreen" title="Fullscreen">⛶</button>';
   stage.appendChild(controls);
   const playButton = controls.querySelector('[data-hls-play]');
   const currentLabel = controls.querySelector('[data-hls-current]');
@@ -149,9 +149,11 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     playButton.textContent = playing ? 'Ⅱ' : '▶';
     playButton.setAttribute('aria-label', playing ? 'Pause' : 'Play');
   };
+  const volumeIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 4 6 8H3v8h3l5 4V4z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M15 9a4 4 0 0 1 0 6m2-9a8 8 0 0 1 0 12"/></svg>';
+  const mutedIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 4 6 8H3v8h3l5 4V4z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m16 9 5 6m0-6-5 6"/></svg>';
   const updateVolumeIcon = () => {
     const muted = video.muted || video.volume === 0;
-    muteButton.textContent = muted ? '×' : '🔊';
+    muteButton.innerHTML = muted ? mutedIcon : volumeIcon;
     muteButton.setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
     volumeControl.value = String(video.volume);
   };
@@ -163,6 +165,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   video.addEventListener('playing', () => { loading.hidden = true; });
   video.addEventListener('canplay', () => { loading.hidden = true; });
   video.addEventListener('volumechange', updateVolumeIcon);
+  updateVolumeIcon();
   playButton.addEventListener('click', () => video.paused ? video.play().catch(() => {}) : video.pause());
   video.addEventListener('click', () => video.paused ? video.play().catch(() => {}) : video.pause());
   seekControl.addEventListener('input', () => {
@@ -317,13 +320,13 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       return true;
     } catch (error) {
       stage.remove();
-      iframe.style.display = '';
+      iframe.style.removeProperty('display');
       throw error;
     }
   })();
   const adapter = makePlayerAdapter(video, stage, () => hls, readyPromise);
   // Keep the adapter's reference to the HLS instance current after attachment and recovery.
-  adapter.destroy = () => { try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); stage.remove(); iframe.style.display = ''; return Promise.resolve(); };
+  adapter.destroy = () => { try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); stage.remove(); iframe.style.removeProperty('display'); return Promise.resolve(); };
   adapter.on('error', detail => onError?.(detail?.error, detail?.position, detail?.autoplay));
   adapter.getSourceType = () => activeSource === sources.hls ? 'hls' : 'mp4';
   adapter.getVideoElement = () => video;

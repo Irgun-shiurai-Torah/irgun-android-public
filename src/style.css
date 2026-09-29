@@ -175,6 +175,7 @@ body.irgun-system-pip #persistentVideoMount.watch-video-host .watch-hls-stage { 
 .watch-hls-controls { position:absolute; z-index:5; left:0; right:0; bottom:0; display:flex; align-items:center; gap:8px; padding:30px 13px 11px; color:#fff; background:linear-gradient(to bottom,transparent,rgba(0,0,0,.88)); }
 .watch-hls-icon-button { width:37px; height:37px; flex:0 0 auto; border:0; border-radius:50%; background:rgba(15,31,53,.78); color:#fff; font-size:13px; font-weight:800; cursor:pointer; }
 .watch-hls-icon-button:hover { background:#bd9a5e; }
+.watch-hls-icon-button svg { display:block; width:18px; height:18px; margin:auto; }
 .watch-hls-time { min-width:42px; text-align:center; color:#fff; font-size:12px; font-weight:800; font-variant-numeric:tabular-nums; }
 .watch-hls-seek { flex:1; min-width:70px; accent-color:#d0ae6a; cursor:pointer; direction:ltr; touch-action:none; }
 .watch-hls-volume { width:75px; accent-color:#d0ae6a; }
