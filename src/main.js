@@ -7653,7 +7653,6 @@ const PlaybackController = {
       const latest = await nativeMediaPlugin().getState().catch(()=>null);
       if (!latest || nativeSnapshotConflicts(latest)) return;
       const priorMode = state.watchMode;
-      const priorResume = Math.max(0, Number(state.watchResumeSeconds) || 0);
       state.nativePlayback = { ...state.nativePlayback, ...latest, connected:true };
       restoreCurrentFromNativeSnapshot(latest);
       if (String(latest.mode) === 'AUDIO' && state.watchVideo && String(latest.lectureId || '') === videoId(state.watchVideo)) {
@@ -7663,11 +7662,11 @@ const PlaybackController = {
         state.watchVideoPlaying = false;
         state.watchResumeSeconds = Math.max(0,Number(latest.currentPositionMs)||0)/1000;
         parkHostedVideoForAudio();
-        // visibilitychange and MainActivity.onResume can arrive almost together.
-        // Render only for a real presentation change so reopening background audio
-        // cannot race two full DOM rebuilds against the persistent Vimeo host.
-        const changed = priorMode !== 'audio' || Math.abs(priorResume - state.watchResumeSeconds) > 2;
-        if (changed && !document.hidden) render();
+        // A native stateChanged event can set watchMode to audio before this pull
+        // finishes. Check the visible DOM too: the minimized Video player may still
+        // be on screen even though the model already says Audio.
+        const audioSurfaceMissing = !state.playerOpen && !document.getElementById('watchAudioTime');
+        if (!document.hidden && (priorMode !== 'audio' || audioSurfaceMissing)) render();
       }
       updatePlayerUi();
     })().finally(() => { this.nativeRefreshPromise = null; });
@@ -8602,4 +8601,11 @@ window.addEventListener('focus', () => {
   handlePendingPushOpen();
   if (state.error || state.offlineMode || state.usingCachedLibrary) bootstrap({ background:true });
 });
+// Some Android notification returns fire neither focus nor visibilitychange on
+// the surviving WebView. Its foreground timer still resumes; use it to reconcile
+// the native audio clock and presentation while a watch player is open.
+setInterval(() => {
+  if (document.hidden || !usesNativeUnifiedAudio() || !state.watchVideo || state.mediaSwitchBusy) return;
+  PlaybackController.refreshFromNative().catch(()=>{});
+}, 3000);
 setTimeout(() => handlePendingPushOpen(), 1200);
