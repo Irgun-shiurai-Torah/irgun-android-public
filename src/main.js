@@ -282,10 +282,10 @@ function esc(value) {
 function shiurTitleParts(value, fallback = 'Untitled shiur') {
   const raw = String(value == null ? '' : value);
   const visible = raw.replace(/\s*#.*$/s, '').trim();
-  const match = visible.match(/^\s*((?:I\.?S\.?T\.?[- ]*)?(?:SF|SN|DL|SB)[- ]?\d{2,5})\s*(?:[-–—:|]\s*)?/i);
+  const match = visible.match(/^\s*((?:I\.?S\.?T\.?[- ]*)?(?:SF|SN|DL|SB|CH)[- ]?\d{2,5}|I\.?S\.?T\.?[- ]*LKWD(?:-[A-Z0-9]+)*)\s*(?:[-–—:|]\s*)?/i);
   if (!match) return { title: visible || fallback, code: '' };
-  const number = (match[1].match(/(\d{2,5})/i) || [])[1] || '';
-  const prefix = (match[1].match(/(SF|SN|DL|SB)/i) || [])[1] || '';
+  const number = (match[1].match(/(?:SF|SN|DL|SB|CH)[- ]?(\d{2,5})/i) || [])[1] || '';
+  const prefix = (match[1].match(/(SF|SN|DL|SB|CH)/i) || [])[1] || '';
   const code = prefix && number ? `IST-${prefix.toUpperCase()}${number}` : match[1];
   const clean = visible.slice(match[0].length).trim();
   return { title: clean || visible || fallback, code };
@@ -304,7 +304,7 @@ function shiurCatalogCode(item) {
 // V15.0.28 / iOS V1.2.33 TEST EXPERIENCE FIXES -------------------------
 function compactShiurCode(value) {
   const normalized = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const match = normalized.match(/(?:IST)?(SF|SN|DL|SB)(\d{2,5})/);
+  const match = normalized.match(/(?:IST)?(SF|SN|DL|SB|CH|LKWD)([A-Z]?\d{1,5})/);
   return match ? `IST${match[1]}${match[2]}` : '';
 }
 
@@ -314,7 +314,7 @@ function lectureCodeQuery(value) {
   const key = compactShiurCode(raw);
   if (!key) return '';
   // Only activate code-only matching when a recognized lecture-code prefix is present.
-  return /(?:IST\s*[-.]?\s*)?(?:SF|SN|DL|SB)\s*[- ]?\d{2,5}/i.test(raw) ? key : '';
+  return /(?:IST\s*[-.]?\s*)?(?:SF|SN|DL|SB|CH|LKWD)\s*[- ]?[A-Z]?\d{1,5}/i.test(raw) ? key : '';
 }
 
 function lectureCodeMatches(item, queryKey) {
@@ -2117,13 +2117,14 @@ function enrichVideo(video) {
   const id = videoId(video);
   const saved = state.metadata.lectures && state.metadata.lectures[id] || {};
   const filter = getVideoFilterMeta(video.showcase);
-  // These showcase-wide assignments also correct older per-video metadata.
-  video._location = filter.forceShowcaseLocation ? filter.location : String(video.location || filter.location || '');
-  video._locationKey = filter.forceShowcaseLocation ? filter.locationKey
-    : video.location && (!filter.location || String(video.location) !== String(filter.location))
-      ? String(video.location)
-      : (filter.locationKey || video._location);
-  video._year = String(video.year || filter.year || '');
+  // An admin-edited city or folder overrides showcase inference; inference fills blanks.
+  // If the saved city equals the inferred parent, retain its showcase folder.
+  const savedLocation = String(video.location || '').trim();
+  const useSavedLocation = savedLocation && (video.adminVideoOverride || !filter.forceShowcaseLocation);
+  video._locationKey = useSavedLocation && savedLocation !== filter.location
+    ? savedLocation : (filter.locationKey || savedLocation);
+  video._location = String(video._locationKey).split('|')[0].trim();
+  video._year = String(video.year || filter.year || '').trim();
 
   const serverSpeakerIds = explicitSpeakerIdsForItem(video);
   video._speakerIds = serverSpeakerIds.length ? serverSpeakerIds : (Array.isArray(saved.speakerIds) ? saved.speakerIds.filter(Boolean) : []);
@@ -2149,7 +2150,7 @@ function enrichVideo(video) {
   video._displayTitle = displayShiurTitle(explicitTitle, 'Untitled shiur');
   video._speakerLabel = cleanSpeakerDisplayName(explicitSpeaker) || video._speakerIds.map(speakerLabel).filter(Boolean).join(' / ');
   video._topicLabel = cleanTopicDisplayName(explicitTopic) || cleanTopicDisplayName(topicLabel(video._topicId));
-  video._language = filter.isLakewoodShowcase ? 'English' : String(video.language || getSpeechLanguage(video, 'video'));
+  video._language = video._location.toLowerCase() === 'lakewood' ? 'English' : String(video.language || getSpeechLanguage(video, 'video'));
   const speakerAliases = speakerSearchValues(video._speakerIds);
   video._catalogSearch = normalizeText([
     video._displayTitle, video.title, video.titleEn, video.titleHe,
@@ -3637,6 +3638,37 @@ function liveHtml() {
     <div class="phone-panel section"><h2>Listen Afterwards</h2><div class="phone-links"><a href="tel:7189066427"><strong>Main Line</strong><span>718-906-6427</span></a><a href="tel:7189066437"><strong>Flatbush Recordings</strong><span>718-906-6437</span></a></div></div>`;
 }
 
+let liveAnalyticsFrame = null;
+let liveAnalyticsPlayer = null;
+let liveAnalyticsHandlers = null;
+function syncLivePlaybackAnalytics() {
+  const frame = app.querySelector('.live-player-wrap iframe.live-frame');
+  if (frame === liveAnalyticsFrame) return;
+  if (liveAnalyticsPlayer && liveAnalyticsHandlers) {
+    for (const [name, handler] of liveAnalyticsHandlers) liveAnalyticsPlayer.off(name, handler);
+  }
+  if (liveAnalyticsFrame && usageAnalytics.state().shiurId.startsWith('Live: ')) {
+    usageAnalytics.setMedia({ isPlaying:false, mediaType:'none', playerState:'browsing', shiurId:'' });
+  }
+  liveAnalyticsFrame = frame;
+  liveAnalyticsPlayer = null;
+  liveAnalyticsHandlers = null;
+  if (!frame || !window.Vimeo?.Player) return;
+  const city = state.screen === 'live-boro' ? 'Boro Park' : 'Flatbush';
+  const liveId = `Live: ${city}`;
+  try {
+    const player = new window.Vimeo.Player(frame);
+    const play = () => usageAnalytics.setMedia({ isPlaying:true, mediaType:'video', playerState:'playing', shiurId:liveId });
+    const stop = () => {
+      if (usageAnalytics.state().shiurId === liveId)
+        usageAnalytics.setMedia({ isPlaying:false, mediaType:'none', playerState:'browsing', shiurId:'' });
+    };
+    liveAnalyticsPlayer = player;
+    liveAnalyticsHandlers = [['play',play],['playing',play],['timeupdate',play],['pause',stop],['ended',stop]];
+    for (const [name, handler] of liveAnalyticsHandlers) player.on(name, handler);
+  } catch (error) { console.warn('Live playback analytics unavailable:', error); }
+}
+
 function liveStreamHtml(location) {
   const boro = location === 'boro';
   const loc = boro ? 'Boro Park' : 'Flatbush';
@@ -4500,7 +4532,7 @@ function adminMediaDatalistsHtml() {
 
 function openAdminVideoEditor(id, kind='video', focusDate=false) {
   const isAudio=kind==='audio'; const media=isAudio?state.audioById.get(String(id)):state.videoById.get(String(id)); if(!media)return;
-  state.adminVideoEditor={...media,shiurCode:String(media?.shiurCode||'').trim()||shiurCatalogCode(media),_adminMediaKind:isAudio?'audio':'video',lectureDate:adminLectureDateValue(media)}; render();
+  state.adminVideoEditor={...media,location:!isAudio && !media.adminVideoOverride ? (media._locationKey || media.location || '') : media.location,shiurCode:String(media?.shiurCode||'').trim()||shiurCatalogCode(media),_adminMediaKind:isAudio?'audio':'video',lectureDate:adminLectureDateValue(media)}; render();
   if(focusDate){
     requestAnimationFrame(()=>{
       const input=document.querySelector('[data-admin-video-field="lectureDate"]');
@@ -4530,7 +4562,7 @@ async function saveAdminVideo(event) {
         console.warn('Audio edit saved; public refresh will retry on next load.',refreshError);
       }
     } else {
-      const updated=enrichVideo({...e,...(data.item||item),_adminMediaKind:undefined});
+      const updated=enrichVideo({...e,...(data.item||item),adminVideoOverride:true,_adminMediaKind:undefined});
       const vid=videoId(updated);state.videoById.set(vid,updated);state.videos=state.videos.map(v=>videoId(v)===vid?updated:v);
     }
     state.adminVideoEditor=null;setToast('Shiur updated and live.');render();
@@ -5777,12 +5809,14 @@ function render() {
   if (state.loading) {
     app.innerHTML = shell('<div class="loading">Loading the Torah library...</div>');
     bind();
+    syncLivePlaybackAnalytics();
     return;
   }
   if (state.error) {
     const headline = navigator.onLine === false ? 'You’re offline.' : 'The Torah library could not load yet.';
     app.innerHTML = shell(`<div class="offline-error-card"><strong>${headline}</strong><span>Check your internet connection. The app will retry automatically when the connection returns.</span><button type="button" data-retry-library>Try Again</button></div>`);
     bind();
+    syncLivePlaybackAnalytics();
     return;
   }
   const content = state.screen === 'home' ? homeHtml()
@@ -5799,6 +5833,7 @@ function render() {
     : accountHtml();
   app.innerHTML = shell(content + playlistPickerHtml());
   bind();
+  syncLivePlaybackAnalytics();
   updatePlayerUi();
   refreshOfflineButtonsForKey();
   if (state.watchVideo && state.watchMode === 'video') setTimeout(initWatchVimeo, 0);
