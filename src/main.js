@@ -7480,6 +7480,22 @@ function ensureNativeAudioCurrentForWatch(snapshot) {
     : { ...base, networkUrl, offline:false };
 }
 
+function reconcileNativeWatchAudio(snapshot) {
+  if (String(snapshot?.mode || '') !== 'AUDIO' || !state.watchVideo ||
+      String(snapshot.lectureId || '') !== videoId(state.watchVideo)) return;
+  const wasVideo = state.watchMode === 'video';
+  ensureNativeAudioCurrentForWatch(snapshot);
+  state.nativeBackgroundHandoff = false;
+  state.watchMode = 'audio';
+  state.watchVideoPlaying = false;
+  state.watchResumeSeconds = Math.max(0, Number(snapshot.currentPositionMs) || Number(snapshot.audioPositionMs) || 0) / 1000;
+  parkHostedVideoForAudio();
+  // Home can finish the native handoff after WebView events were suspended. On
+  // return, the first AUDIO state or position event must replace the old VIDEO
+  // controls as well as update the clock.
+  if (!document.hidden && (wasVideo || (!state.playerOpen && !document.getElementById('watchAudioTime')))) render();
+}
+
 const PlaybackController = {
   listenersInstalled: false,
   nativeRefreshPromise: null,
@@ -7493,14 +7509,7 @@ const PlaybackController = {
       if (!data || nativeSnapshotConflicts(data)) return;
       state.nativePlayback = { ...state.nativePlayback, ...data, connected:true };
       restoreCurrentFromNativeSnapshot(data);
-      if (String(data.mode || '') === 'AUDIO' && state.watchVideo && String(data.lectureId || '') === videoId(state.watchVideo)) {
-        ensureNativeAudioCurrentForWatch(data);
-        state.nativeBackgroundHandoff = false;
-        state.watchMode = 'audio';
-        state.watchVideoPlaying = false;
-        state.watchResumeSeconds = Math.max(0, Number(data.currentPositionMs) || Number(data.audioPositionMs) || 0) / 1000;
-        parkHostedVideoForAudio();
-      }
+      reconcileNativeWatchAudio(data);
       updatePlayerUi();
     };
     try {
@@ -7509,14 +7518,18 @@ const PlaybackController = {
         if (!event || nativeSnapshotConflicts(event)) return;
         state.nativePlayback = {
           ...state.nativePlayback,
+          lectureId:event.lectureId || state.nativePlayback.lectureId,
           currentPositionMs:Number(event.positionMs)||0,
           durationMs:Number(event.durationMs)||0,
+          audioPositionMs:event.mode === 'AUDIO' ? Number(event.positionMs)||0 : state.nativePlayback.audioPositionMs,
+          audioDurationMs:event.mode === 'AUDIO' ? Number(event.durationMs)||0 : state.nativePlayback.audioDurationMs,
           isPlaying:Boolean(event.isPlaying),
           audioIsPlaying:event.audioIsPlaying == null ? Boolean(event.isPlaying) : Boolean(event.audioIsPlaying),
           audioPlayWhenReady:event.audioPlayWhenReady == null ? state.nativePlayback.audioPlayWhenReady : Boolean(event.audioPlayWhenReady),
           mode:event.mode || state.nativePlayback.mode,
           connected:true
         };
+        reconcileNativeWatchAudio(state.nativePlayback);
         updatePlayerUi();
         if (state.current) {
           const seconds = nativeAudioPositionSeconds();
@@ -7694,22 +7707,9 @@ const PlaybackController = {
     this.nativeRefreshPromise = (async () => {
       const latest = await nativeMediaPlugin().getState().catch(()=>null);
       if (!latest || nativeSnapshotConflicts(latest)) return;
-      const priorMode = state.watchMode;
       state.nativePlayback = { ...state.nativePlayback, ...latest, connected:true };
       restoreCurrentFromNativeSnapshot(latest);
-      if (String(latest.mode) === 'AUDIO' && state.watchVideo && String(latest.lectureId || '') === videoId(state.watchVideo)) {
-        ensureNativeAudioCurrentForWatch(latest);
-        state.nativeBackgroundHandoff = false;
-        state.watchMode = 'audio';
-        state.watchVideoPlaying = false;
-        state.watchResumeSeconds = Math.max(0,Number(latest.currentPositionMs)||0)/1000;
-        parkHostedVideoForAudio();
-        // A native stateChanged event can set watchMode to audio before this pull
-        // finishes. Check the visible DOM too: the minimized Video player may still
-        // be on screen even though the model already says Audio.
-        const audioSurfaceMissing = !state.playerOpen && !document.getElementById('watchAudioTime');
-        if (!document.hidden && (priorMode !== 'audio' || audioSurfaceMissing)) render();
-      }
+      reconcileNativeWatchAudio(latest);
       updatePlayerUi();
     })().finally(() => { this.nativeRefreshPromise = null; });
     return this.nativeRefreshPromise;
@@ -8627,12 +8627,17 @@ window.addEventListener('offline', () => {
 let foregroundPlaybackRefreshTimer = null;
 function refreshPlaybackAfterForeground() {
   if (!usesNativeUnifiedAudio() || document.hidden) return;
-  PlaybackController.refreshFromNative().catch(()=>{});
   if (foregroundPlaybackRefreshTimer) clearTimeout(foregroundPlaybackRefreshTimer);
-  foregroundPlaybackRefreshTimer = setTimeout(() => {
-    foregroundPlaybackRefreshTimer = null;
-    if (!document.hidden) PlaybackController.refreshFromNative().catch(()=>{});
-  }, 450);
+  // Schedule the second pull after the first bridge call finishes. If onResume
+  // closes the native event gate during a slow first pull, a concurrent 450ms
+  // request would only share its promise and never reopen the ticker.
+  PlaybackController.refreshFromNative().catch(()=>{}).finally(() => {
+    if (foregroundPlaybackRefreshTimer) clearTimeout(foregroundPlaybackRefreshTimer);
+    foregroundPlaybackRefreshTimer = setTimeout(() => {
+      foregroundPlaybackRefreshTimer = null;
+      if (!document.hidden) PlaybackController.refreshFromNative().catch(()=>{});
+    }, 450);
+  });
 }
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) refreshPlaybackAfterForeground();
