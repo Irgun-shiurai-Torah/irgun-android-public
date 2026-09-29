@@ -8140,8 +8140,8 @@ async function initWatchVimeo(userInitiated = false) {
   if (!video || !frame || !window.Vimeo || !window.Vimeo.Player || state.watchMode !== 'video') return;
   const generation = state.watchVimeoGeneration;
   const videoKey = videoId(video);
+  let player = null;
   try {
-    let player = null;
     if (state.watchVideoForceVimeoId !== videoKey) {
       try {
         player = await createAndroidHlsPlayer({
@@ -8356,6 +8356,16 @@ async function initWatchVimeo(userInitiated = false) {
   } catch (error) {
     if (generation === state.watchVimeoGeneration) {
       state.watchVimeoReady = false;
+      if (player?.isIrgunHlsPlayer && state.watchVideoForceVimeoId !== videoKey && Capacitor.getPlatform() === 'android') {
+        console.warn('[Playback] HLS/MP4 could not start; retrying with Vimeo:', error);
+        state.watchVideoForceVimeoId = videoKey;
+        state.watchVimeo = null;
+        try { await player.destroy?.(); } catch (_) {}
+        frame.style.display = '';
+        frame.src = watchVimeoEmbedSrc(video, Math.max(0, Number(state.watchResumeSeconds) || 0));
+        await initWatchVimeo(userInitiated);
+        return;
+      }
       console.warn('Vimeo player init failed', error);
       // If Audio -> Video failed, leave the audio playing instead of producing a
       // dead/silent player. The user can retry Video without losing their place.
