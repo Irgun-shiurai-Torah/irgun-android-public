@@ -1970,23 +1970,28 @@ async function loadMetadata() {
 
 function getVideoFilterMeta(showcase) {
   const normalized = String(showcase || '').toLowerCase().replace(/&/g, 'and').replace(/\s+/g, ' ').trim();
+  const isRubinShowcase = /el[ou]zer nissen rubin/.test(normalized);
+  const isRubin5785 = normalized.includes('5785') && isRubinShowcase && !normalized.includes('parsha');
+  const isLakewoodShowcase = normalized.includes('lakewood');
   let location = '';
   let locationSub = '';
   let year = '';
   if (normalized.includes('summer flatbush')) location = 'Flatbush';
-  else if (normalized.includes('lakewood chol hamoed')) location = 'Lakewood';
-  else if (normalized.includes('parsha') && normalized.includes('elozer nissen rubin')) { location = 'Boro Park'; locationSub = 'Parsha'; }
+  else if (isLakewoodShowcase) location = 'Lakewood';
+  else if (normalized.includes('parsha') && isRubinShowcase) { location = 'Boro Park'; locationSub = 'Parsha'; }
+  else if (isRubin5785) { location = 'Boro Park'; locationSub = 'Other'; }
   else if (normalized.includes('zev smith')) { location = 'Boro Park'; locationSub = 'Sunday Shiurim'; }
   else if (normalized.includes('daily and chol hamoed') || normalized.includes('daily yiddish') || normalized.includes('boro park')) { location = 'Boro Park'; locationSub = 'Daily Shiurim'; }
 
-  if (normalized.includes('parsha') && normalized.includes('elozer nissen rubin')) year = 'Mixed';
+  if (normalized.includes('parsha') && isRubinShowcase) year = 'Mixed';
   else if (normalized.includes('lakewood chol hamoed')) year = 'Mixed';
   else if (/5784\s+and\s+older/.test(normalized)) year = '5784 & Older';
   else {
     const match = normalized.match(/\b(578[0-9])\b/);
     if (match) year = match[1];
   }
-  return { location, locationKey: locationSub ? `${location}|${locationSub}` : location, year };
+  return { location, locationKey: locationSub ? `${location}|${locationSub}` : location, year,
+    forceShowcaseLocation: isLakewoodShowcase || isRubin5785, isLakewoodShowcase };
 }
 
 function extractSpeakerFromTitle(title) {
@@ -2112,10 +2117,12 @@ function enrichVideo(video) {
   const id = videoId(video);
   const saved = state.metadata.lectures && state.metadata.lectures[id] || {};
   const filter = getVideoFilterMeta(video.showcase);
-  video._location = String(video.location || filter.location || '');
-  video._locationKey = video.location && (!filter.location || String(video.location) !== String(filter.location))
-    ? String(video.location)
-    : (filter.locationKey || video._location);
+  // These showcase-wide assignments also correct older per-video metadata.
+  video._location = filter.forceShowcaseLocation ? filter.location : String(video.location || filter.location || '');
+  video._locationKey = filter.forceShowcaseLocation ? filter.locationKey
+    : video.location && (!filter.location || String(video.location) !== String(filter.location))
+      ? String(video.location)
+      : (filter.locationKey || video._location);
   video._year = String(video.year || filter.year || '');
 
   const serverSpeakerIds = explicitSpeakerIdsForItem(video);
@@ -2142,7 +2149,7 @@ function enrichVideo(video) {
   video._displayTitle = displayShiurTitle(explicitTitle, 'Untitled shiur');
   video._speakerLabel = cleanSpeakerDisplayName(explicitSpeaker) || video._speakerIds.map(speakerLabel).filter(Boolean).join(' / ');
   video._topicLabel = cleanTopicDisplayName(explicitTopic) || cleanTopicDisplayName(topicLabel(video._topicId));
-  video._language = String(video.language || getSpeechLanguage(video, 'video'));
+  video._language = filter.isLakewoodShowcase ? 'English' : String(video.language || getSpeechLanguage(video, 'video'));
   const speakerAliases = speakerSearchValues(video._speakerIds);
   video._catalogSearch = normalizeText([
     video._displayTitle, video.title, video.titleEn, video.titleHe,
@@ -3315,7 +3322,7 @@ function locationFilterOptionsHtml(values) {
       const entry = entries[0];
       return `<label class="filter-option location-parent"><input type="checkbox" data-filter-option="${esc(entry.value)}" ${state.filterDraft.has(entry.value) ? 'checked' : ''}><span>${esc(parent)}</span></label>`;
     }
-    const childOrder = { 'Daily Shiurim': 1, 'Sunday Shiurim': 2, 'Parsha': 3 };
+    const childOrder = { 'Daily Shiurim': 1, 'Sunday Shiurim': 2, 'Parsha': 3, 'Other': 4 };
     childEntries.sort((a, b) => (childOrder[a.child] || 50) - (childOrder[b.child] || 50) || a.child.localeCompare(b.child));
     const ids = entries.map(entry => entry.value);
     const checked = ids.length > 0 && ids.every(id => state.filterDraft.has(id));
