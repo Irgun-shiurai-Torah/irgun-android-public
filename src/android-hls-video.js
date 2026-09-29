@@ -65,7 +65,7 @@ function makePlayerAdapter(video, getHls, readyPromise) {
     setPlaybackRate:rate => { video.playbackRate = Number(rate) || 1; return Promise.resolve(video.playbackRate); },
     setMuted:muted => { video.muted = Boolean(muted); return Promise.resolve(video.muted); },
     setVolume:volume => { video.volume = Math.max(0, Math.min(1, Number(volume) || 0)); return Promise.resolve(video.volume); },
-    play:() => video.play(),
+    play:() => readyPromise.then(() => video.play()),
     pause:() => { video.pause(); return Promise.resolve(); },
     destroy:() => {
       try { getHls()?.destroy(); } catch (_) {}
