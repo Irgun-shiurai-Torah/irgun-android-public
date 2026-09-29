@@ -81,12 +81,11 @@ function makePlayerAdapter(video, getHls, readyPromise) {
 }
 
 async function getAndroidHlsSource(apiBase, videoId) {
-  const sourceResponse = await fetch(`${apiBase}/media/${encodeURIComponent(videoId)}/source.json`, {cache:'no-store', credentials:'omit'});
-  if (!sourceResponse.ok) return null;
-  const source = await sourceResponse.json();
-  const video = source?.video || {};
-  if (!video.hls && !video.mp4) return null;
-  return video;
+  // This is the Worker’s public HLS endpoint. There is no /source.json route.
+  return {
+    hls: `${apiBase}/media/${encodeURIComponent(videoId)}/master.m3u8`,
+    mp4: null
+  };
 }
 
 export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, resumeSeconds = 0, onError } = {}) {
