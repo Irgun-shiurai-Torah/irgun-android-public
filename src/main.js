@@ -5,6 +5,7 @@ import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileTransfer } from '@capacitor/file-transfer';
 import { Share } from '@capacitor/share';
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { createAndroidHlsPlayer } from './android-hls-video.js';
 import { AppleSignIn, SignInScope } from '@capawesome/capacitor-apple-sign-in';
 
 const API = 'https://api.irgunshiuraitorah.com';
@@ -216,6 +217,7 @@ const state = {
   watchHostedExternally: false,
   watchVimeo: null,
   watchVimeoReady: false,
+  watchVideoForceVimeoId: '',
   watchVideoPlaying: false,
   systemPipActive: false,
   systemPipWasPlaying: false,
@@ -5190,7 +5192,7 @@ function watchHtml() {
       <div class="watch-player-card">
         <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">Video</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">Audio</button>` : ''}</div>
         ${state.watchMode === 'video'
-          ? `<iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`
+          ? `<iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${Capacitor.getPlatform() === 'android' ? 'about:blank' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`
           : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${playbackDurationSeconds()}" value="${playbackPositionSeconds()}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${playbackIsPaused() ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(playbackPositionSeconds())} / ${fmtDurationOrUnknown(playbackDurationSeconds())}</div></div>`}
       </div>
       <section class="watch-details">
@@ -7921,6 +7923,7 @@ async function openWatch(id, requestedTime = null, options = {}) {
   if (!fromAudioWasPlaying && currentAudioIsAuthoritative() && !playbackIsPaused()) await PlaybackController.pause().catch(()=>{});
   setPlaybackAuthorityFence('VIDEO', id, 5000);
   state.watchVideo = video;
+  state.watchVideoForceVimeoId = '';
   state.pendingWatchMode = '';
   state.watchMode = 'video';
   state.watchAudioToVideoHandoff = Boolean(fromAudioWasPlaying);
@@ -7992,6 +7995,7 @@ async function closeWatch(save = true) {
   setNativeVideoFullscreen(false);
   clearPersistentVideoMount();
   state.watchVideo = null;
+  state.watchVideoForceVimeoId = '';
   if (!state.current) usageAnalytics.setMedia({isPlaying:false,mediaType:'none',playerState:'browsing',shiurId:''});
   state.pendingWatchMode = '';
   state.watchAudioToVideoHandoff = false;
@@ -8137,7 +8141,42 @@ async function initWatchVimeo(userInitiated = false) {
   const generation = state.watchVimeoGeneration;
   const videoKey = videoId(video);
   try {
-    const player = new window.Vimeo.Player(frame);
+    let player = null;
+    if (state.watchVideoForceVimeoId !== videoKey) {
+      try {
+        player = await createAndroidHlsPlayer({
+          apiBase: API,
+          videoId: videoKey,
+          iframe: frame,
+          resumeSeconds: Math.max(0, Number(state.watchResumeSeconds) || 0),
+          onError: async (error, position, autoplay) => {
+            if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video' || videoId(state.watchVideo) !== videoKey) return;
+            console.warn('[Playback] HLS and MP4 failed; switching to Vimeo:', error);
+            state.watchVideoForceVimeoId = videoKey;
+            state.watchVimeo = null;
+            state.watchVimeoReady = false;
+            state.watchResumeSeconds = Math.max(0, Number(position) || state.watchResumeSeconds || 0);
+            try { await player?.destroy?.(); } catch (_) {}
+            frame.style.display = '';
+            frame.src = watchVimeoEmbedSrc(video, state.watchResumeSeconds);
+            await initWatchVimeo(Boolean(autoplay));
+          }
+        });
+      } catch (error) {
+        console.warn('[Playback] Direct HLS unavailable; using Vimeo:', error);
+      }
+    }
+    if (!player) {
+      if (!frame.src || frame.src === 'about:blank' || !frame.src.includes('player.vimeo.com')) {
+        frame.src = watchVimeoEmbedSrc(video, Math.max(0, Number(state.watchResumeSeconds) || 0));
+      }
+      player = new window.Vimeo.Player(frame);
+    }
+    if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video' || !state.watchVideo || videoId(state.watchVideo) !== videoKey) {
+      try { await player.destroy?.(); } catch (_) {}
+      return;
+    }
+    state.watchVimeo = player;
     state.watchVimeo = player;
     state.watchVimeoReady = false;
     const requestedResume = Math.max(0, Number(state.watchResumeSeconds) || 0);
