@@ -81,11 +81,6 @@ function makePlayerAdapter(video, getHls, readyPromise) {
 }
 
 async function getAndroidHlsSource(apiBase, videoId) {
-  const routingResponse = await fetch(`${apiBase}/playback-routing`, {cache:'no-store', credentials:'omit'});
-  if (!routingResponse.ok) throw new Error(`Playback routing returned ${routingResponse.status}`);
-  const routing = await routingResponse.json();
-  if (String(routing?.videoMode || '').toLowerCase() === 'vimeo') return null;
-
   const sourceResponse = await fetch(`${apiBase}/media/${encodeURIComponent(videoId)}/source.json`, {cache:'no-store', credentials:'omit'});
   if (!sourceResponse.ok) return null;
   const source = await sourceResponse.json();
