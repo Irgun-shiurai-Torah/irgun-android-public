@@ -8146,6 +8146,7 @@ async function initWatchVimeo(userInitiated = false) {
       try {
         player = await createAndroidHlsPlayer({
           apiBase: API,
+          platform: Capacitor.getPlatform(),
           videoId: videoKey,
           iframe: frame,
           resumeSeconds: Math.max(0, Number(state.watchResumeSeconds) || 0),
