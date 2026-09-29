@@ -94,8 +94,8 @@ async function getAndroidHlsSource(apiBase, videoId) {
   return video;
 }
 
-export async function createAndroidHlsPlayer({ apiBase, videoId, iframe, resumeSeconds = 0, onError } = {}) {
-  if (!apiBase || !videoId || !iframe || !window.Capacitor?.getPlatform || window.Capacitor.getPlatform() !== 'android') return null;
+export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, resumeSeconds = 0, onError } = {}) {
+  if (!apiBase || !videoId || !iframe || platform !== 'android') return null;
   const sources = await getAndroidHlsSource(String(apiBase).replace(/\/$/, ''), videoId);
   if (!sources) return null;
 
