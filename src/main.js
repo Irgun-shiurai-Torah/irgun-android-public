@@ -8178,7 +8178,6 @@ async function initWatchVimeo(userInitiated = false) {
       return;
     }
     state.watchVimeo = player;
-    state.watchVimeo = player;
     state.watchVimeoReady = false;
     const requestedResume = Math.max(0, Number(state.watchResumeSeconds) || 0);
     const frameStart = Math.max(0, Number(frame.dataset.startSeconds) || 0);
