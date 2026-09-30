@@ -100,10 +100,19 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   if (!container) return null;
   const stage = document.createElement('div');
   stage.className = 'watch-hls-stage';
-  container.insertBefore(stage, iframe.nextSibling);
-  // The legacy Vimeo iframe must not reserve a second 16:9 panel above HLS.
-  // A parent class survives later watch-host layout resets that rewrite iframe styles.
+  // Keep the iframe available for Vimeo fallback and watch-host queries, but put
+  // it inside the HLS stage. It can no longer reserve a second 16:9 row even if
+  // Android WebView reapplies a display:block rule during a layout reset.
+  container.insertBefore(stage, iframe);
+  stage.appendChild(iframe);
   container.classList.add('watch-hls-active');
+  iframe.style.setProperty('visibility', 'hidden', 'important');
+  const restoreIframe = () => {
+    if (stage.parentElement) stage.replaceWith(iframe);
+    container.classList.remove('watch-hls-active');
+    iframe.style.removeProperty('display');
+    iframe.style.removeProperty('visibility');
+  };
   const video = document.createElement('video');
   video.id = 'watchDirectHlsVideo';
   video.className = 'watch-frame watch-direct-hls-video';
@@ -325,15 +334,13 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       } else await attachSource(sources.mp4, false);
       return true;
     } catch (error) {
-      stage.remove();
-      container.classList.remove('watch-hls-active');
-      iframe.style.removeProperty('display');
+      restoreIframe();
       throw error;
     }
   })();
   const adapter = makePlayerAdapter(video, stage, () => hls, readyPromise);
   // Keep the adapter's reference to the HLS instance current after attachment and recovery.
-  adapter.destroy = () => { try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); stage.remove(); container.classList.remove('watch-hls-active'); iframe.style.removeProperty('display'); return Promise.resolve(); };
+  adapter.destroy = () => { try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
   adapter.on('error', detail => onError?.(detail?.error, detail?.position, detail?.autoplay));
   adapter.getSourceType = () => activeSource === sources.hls ? 'hls' : 'mp4';
   adapter.getVideoElement = () => video;
