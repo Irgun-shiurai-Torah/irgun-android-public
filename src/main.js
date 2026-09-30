@@ -2264,7 +2264,7 @@ async function bootstrap(options = {}) {
   try {
     await loadMetadata();
     const [videos, audios, week, month, all, counter, likeCounts] = await Promise.all([
-      bootstrapJson('/video-map'),
+      bootstrapJson('/video-map?driveLibrary=1'),
       bootstrapJsonOr('/audio-map', { items:[] }),
       bootstrapJsonOr('/trending?period=week&limit=2500', { items:[] }),
       bootstrapJsonOr('/trending?period=month&limit=2500', { items:[] }),
@@ -3302,6 +3302,12 @@ function filterButton(key, label) {
   return `<button class="filter-pill ${selected.length ? 'active' : ''}" data-open-filter="${key}"><span>${esc(label)}</span><strong>${esc(caption)}</strong><b>⌄</b></button>`;
 }
 
+function locationFilterName(city) {
+  if (currentLanguage() !== 'he') return city;
+  const item = state.videos.find(video => video.location === city && video.locationHe);
+  return item?.locationHe || tr(city);
+}
+
 function locationFilterOptionsHtml(values) {
   const ordered = [...values.map(String)].sort((a, b) => {
     const ap = a.split('|')[0];
@@ -3321,14 +3327,14 @@ function locationFilterOptionsHtml(values) {
     const hasChildren = childEntries.length > 0;
     if (!hasChildren) {
       const entry = entries[0];
-      return `<label class="filter-option location-parent"><input type="checkbox" data-filter-option="${esc(entry.value)}" ${state.filterDraft.has(entry.value) ? 'checked' : ''}><span>${esc(parent)}</span></label>`;
+      return `<label class="filter-option location-parent"><input type="checkbox" data-filter-option="${esc(entry.value)}" ${state.filterDraft.has(entry.value) ? 'checked' : ''}><span>${esc(locationFilterName(parent))}</span></label>`;
     }
     const childOrder = { 'Daily Shiurim': 1, 'Sunday Shiurim': 2, 'Parsha': 3, 'Other': 4 };
     childEntries.sort((a, b) => (childOrder[a.child] || 50) - (childOrder[b.child] || 50) || a.child.localeCompare(b.child));
     const ids = entries.map(entry => entry.value);
     const checked = ids.length > 0 && ids.every(id => state.filterDraft.has(id));
     const children = childEntries.map(entry => `<label class="filter-option location-child"><input type="checkbox" data-filter-option="${esc(entry.value)}" ${state.filterDraft.has(entry.value) ? 'checked' : ''}><span>${esc(entry.child)}</span></label>`).join('');
-    return `<div class="location-filter-branch"><label class="filter-option location-parent"><input type="checkbox" data-location-parent="${esc(parent)}" ${checked ? 'checked' : ''}><span>${esc(parent)}</span></label><div class="location-filter-children">${children}</div></div>`;
+    return `<div class="location-filter-branch"><label class="filter-option location-parent"><input type="checkbox" data-location-parent="${esc(parent)}" ${checked ? 'checked' : ''}><span>${esc(locationFilterName(parent))}</span></label><div class="location-filter-children">${children}</div></div>`;
   }).join('');
 }
 
@@ -5265,7 +5271,7 @@ function miniVideoHtml(includeFrame = true) {
   const v = state.watchVideo;
   if (!v || state.watchMode !== 'video') return '';
   const speaker = v._speakerLabel || v.speaker || 'Irgun Shiurai Torah';
-  const frameHtml = includeFrame ? `<iframe id="watchVimeoFrame" class="mini-video-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>` : '';
+  const frameHtml = includeFrame ? `<iframe id="watchVimeoFrame" class="mini-video-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${v.sourceType === 'drive-library' ? 'about:blank' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>` : '';
   return `<div class="mini-video-player">
     <div class="mini-video-frame-wrap" data-expand-watch="1" role="button" aria-label="Open video">${frameHtml}</div>
     <div class="mini-video-copy" data-expand-watch="1" role="button" tabindex="0"><strong>${esc(displayShiurTitle(v.title, 'Shiur'))}</strong><span>${esc(speaker)}</span></div>
@@ -8178,7 +8184,9 @@ async function initWatchVimeo(userInitiated = false) {
   if (state.watchVimeo) return;
   const video = state.watchVideo;
   const frame = document.getElementById('watchVimeoFrame');
-  if (!video || !frame || !window.Vimeo || !window.Vimeo.Player || state.watchMode !== 'video') return;
+  if (!video || !frame || state.watchMode !== 'video') return;
+  const directOnly = video.sourceType === 'drive-library';
+  if (!directOnly && (!window.Vimeo || !window.Vimeo.Player)) return;
   const generation = state.watchVimeoGeneration;
   const videoKey = videoId(video);
   let player = null;
@@ -8193,6 +8201,7 @@ async function initWatchVimeo(userInitiated = false) {
           resumeSeconds: Math.max(0, Number(state.watchResumeSeconds) || 0),
           onError: async (error, position, autoplay) => {
             if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video' || videoId(state.watchVideo) !== videoKey) return;
+            if (directOnly) { console.error('[Playback] Drive video HLS and MP4 failed:', error); return; }
             console.warn('[Playback] HLS and MP4 failed; switching to Vimeo:', error);
             state.watchVideoForceVimeoId = videoKey;
             state.watchVimeo = null;
@@ -8205,10 +8214,12 @@ async function initWatchVimeo(userInitiated = false) {
           }
         });
       } catch (error) {
+        if (directOnly) { console.error('[Playback] Drive video unavailable:', error); frame.style.display='none'; frame.parentElement?.insertAdjacentHTML('beforeend', '<p class="watch-video-error">Video is processing or temporarily unavailable. Please try again later.</p>'); return; }
         console.warn('[Playback] Direct HLS unavailable; using Vimeo:', error);
       }
     }
     if (!player) {
+      if (directOnly) return;
       if (!frame.src || frame.src === 'about:blank' || !frame.src.includes('player.vimeo.com')) {
         frame.src = watchVimeoEmbedSrc(video, Math.max(0, Number(state.watchResumeSeconds) || 0));
       }
@@ -8397,7 +8408,7 @@ async function initWatchVimeo(userInitiated = false) {
   } catch (error) {
     if (generation === state.watchVimeoGeneration) {
       state.watchVimeoReady = false;
-      if (player?.isIrgunHlsPlayer && state.watchVideoForceVimeoId !== videoKey && Capacitor.getPlatform() === 'android') {
+      if (!directOnly && player?.isIrgunHlsPlayer && state.watchVideoForceVimeoId !== videoKey && Capacitor.getPlatform() === 'android') {
         console.warn('[Playback] HLS/MP4 could not start; retrying with Vimeo:', error);
         state.watchVideoForceVimeoId = videoKey;
         state.watchVimeo = null;
