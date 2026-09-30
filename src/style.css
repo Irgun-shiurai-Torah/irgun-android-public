@@ -2535,3 +2535,13 @@ body { min-width:0; }
 .icon-action.playlist-saved .ui-icon,
 .watch-action.playlist-saved .ui-icon,
 .player-action-grid button.playlist-saved .ui-icon { fill: currentColor; }
+
+/* Keep the inactive Vimeo iframe out of layout while Android HLS owns video. */
+.watch-player-card.watch-hls-active > iframe#watchVimeoFrame,
+#persistentVideoMount .watch-player-card.watch-hls-active > iframe#watchVimeoFrame {
+  display:none !important;
+  width:0 !important;
+  height:0 !important;
+  min-height:0 !important;
+  aspect-ratio:auto !important;
+}
