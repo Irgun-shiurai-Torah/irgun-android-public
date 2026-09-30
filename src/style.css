@@ -2545,3 +2545,25 @@ body { min-width:0; }
   min-height:0 !important;
   aspect-ratio:auto !important;
 }
+
+/* The iframe lives inside the HLS stage until fallback. A WebView layout reset
+   cannot turn it into a second row or paint it over the active video. */
+.watch-hls-stage > iframe#watchVimeoFrame,
+#persistentVideoMount .watch-hls-stage > iframe#watchVimeoFrame {
+  position:absolute !important;
+  inset:0 !important;
+  width:0 !important;
+  height:0 !important;
+  visibility:hidden !important;
+  pointer-events:none !important;
+}
+.watch-hls-stage > video.watch-direct-hls-video,
+#persistentVideoMount.watch-full-host .watch-hls-stage > video.watch-direct-hls-video {
+  position:absolute !important;
+  inset:0 !important;
+  width:100% !important;
+  height:100% !important;
+  max-height:none !important;
+  aspect-ratio:auto !important;
+  object-fit:contain !important;
+}

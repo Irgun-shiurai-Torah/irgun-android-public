@@ -7499,7 +7499,10 @@ function reconcileNativeWatchAudio(snapshot) {
   // Home can finish the native handoff after WebView events were suspended. On
   // return, the first AUDIO state or position event must replace the old VIDEO
   // controls as well as update the clock.
-  if (!document.hidden && (wasVideo || (!state.playerOpen && !document.getElementById('watchAudioTime')))) render();
+  // The handoff may arrive while the WebView is hidden. Build the Audio view
+  // from the native snapshot then, so Home -> notification return cannot expose
+  // the old Video controls with a frozen 0:00 clock.
+  if (wasVideo || (!state.playerOpen && !document.getElementById('watchAudioTime'))) render();
 }
 
 const PlaybackController = {
@@ -7711,7 +7714,12 @@ const PlaybackController = {
     if (!usesNativeUnifiedAudio()) return;
     if (this.nativeRefreshPromise) return this.nativeRefreshPromise;
     this.nativeRefreshPromise = (async () => {
-      const latest = await nativeMediaPlugin().getState().catch(()=>null);
+      // A bridge call started just before Home can stall through a WebView
+      // suspend. Release this lock so the next foreground poll reaches Media3.
+      const latest = await Promise.race([
+        nativeMediaPlugin().getState().catch(()=>null),
+        new Promise(resolve => setTimeout(() => resolve(null), 2500))
+      ]);
       if (!latest || nativeSnapshotConflicts(latest)) return;
       state.nativePlayback = { ...state.nativePlayback, ...latest, connected:true };
       restoreCurrentFromNativeSnapshot(latest);

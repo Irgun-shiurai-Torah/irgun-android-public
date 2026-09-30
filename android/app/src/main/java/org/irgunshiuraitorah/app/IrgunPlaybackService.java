@@ -921,12 +921,13 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     private void beginBackgroundVideoHandoffInternal() {
         if (pendingBackgroundHandoff) return;
-        if (playbackMode != PlaybackMode.VIDEO || !externalVideoPlaying || player == null || audioUrl.isEmpty()) return;
+        if (playbackMode != PlaybackMode.VIDEO || player == null || audioUrl.isEmpty()
+                || (!externalVideoPlaying && !player.getPlayWhenReady())) return;
         pendingBackgroundHandoff = true;
         backgroundPauseRequested = false;
         backgroundHandoffId += 1L;
         pendingBackgroundPositionMs = Math.max(0L, externalVideoPositionMs);
-        pendingBackgroundWasPlaying = externalVideoPlaying;
+        pendingBackgroundWasPlaying = externalVideoPlaying || player.getPlayWhenReady();
         Log.d(TAG, "[Playback] Home VIDEO -> AUDIO requested at " + pendingBackgroundPositionMs + "ms");
 
         // Normally the shadow player is already READY, muted and advancing at Vimeo's

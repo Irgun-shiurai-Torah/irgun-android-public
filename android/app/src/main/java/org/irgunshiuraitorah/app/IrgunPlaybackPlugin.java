@@ -525,7 +525,10 @@ public class IrgunPlaybackPlugin extends Plugin {
     public static void handleAppBackgrounded() {
         if (!serviceRequested && !IrgunPlaybackService.isActive()) return;
         IrgunPlaybackService.Snapshot snapshot = IrgunPlaybackService.getSnapshot();
-        if ("VIDEO".equals(snapshot.mode) && snapshot.isPlaying) {
+        // The WebView can report its final pause before this lifecycle callback,
+        // while the pre-warmed Media3 shadow still has play intent. In that case
+        // it is still a playing lecture that must become audible after Home.
+        if ("VIDEO".equals(snapshot.mode) && (snapshot.isPlaying || snapshot.audioPlayWhenReady)) {
             IrgunPlaybackService.beginBackgroundVideoHandoff();
         }
         // AUDIO needs no lifecycle action: the same ExoPlayer already owns playback.
