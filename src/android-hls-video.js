@@ -101,6 +101,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   if (!apiBase || !videoId || !iframe || platform !== 'android') return null;
   const sources = await getAndroidHlsSource(String(apiBase).replace(/\/$/, ''), videoId);
   if (!sources) return null;
+  if (!sources.hls && !String(videoId).startsWith('drivev-')) return null;
 
   const container = iframe.parentElement;
   if (!container) return null;
@@ -161,7 +162,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     const count = Number(quality?.totalVideoFrames ?? video.webkitDecodedFrameCount);
     return Number.isFinite(count) ? count : null;
   };
-  const waitForVideoFrame = (timeout = 4500) => new Promise(resolve => {
+  const waitForVideoFrame = (timeout = 12000) => new Promise(resolve => {
     const initialFrames = decodedFrames();
     if (typeof video.requestVideoFrameCallback !== 'function') {
       let finished = false;
@@ -275,35 +276,22 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let activeSource = '';
   let failed = false;
   const initialPosition = Math.max(0, Number(resumeSeconds) || 0);
+  const hasVimeoFallback = !String(videoId).startsWith('drivev-');
   const checkVisualPlayback = async () => {
     let check = ++visualCheck;
     hasVisibleFrame = false;
     loading.hidden = false;
     let visible = await waitForVideoFrame();
     if (destroyed || check !== visualCheck || video.paused || document.hidden) return;
-    if (!visible && video.videoWidth > 0) {
-      // Android WebView can start the soundtrack while its video surface stays
-      // latched to the first frame. Reattach the existing element once, keeping
-      // the same HLS source and current clock before trying another source.
-      recoveryInProgress = true;
-      try {
-        const position = Math.max(0, Number(video.currentTime) || initialPosition);
-        video.pause();
-        stage.appendChild(video);
-        await new Promise(resolve => requestAnimationFrame(resolve));
-        if (destroyed || check !== visualCheck || document.hidden) return;
-        if (position > 0 && video.readyState >= 1) video.currentTime = position;
-        await video.play();
-        visible = await waitForVideoFrame(3500);
-      } catch (error) { console.warn('[Playback] Android video surface recovery failed', error); }
-      finally { recoveryInProgress = false; }
+    if (!visible && video.videoWidth > 0 &&
+        typeof video.requestVideoFrameCallback !== 'function' && decodedFrames() === null && video.readyState >= 2) {
+      // Older WebViews expose neither frame callback nor decoded-frame count.
+      // They cannot prove that a picture advanced; avoid falsely rejecting HLS.
+      visible = true;
     }
-    // The surface recovery may leave the video paused if WebView rejects
-    // play(). Continue to the alternate source in that case.
-    if (destroyed || check !== visualCheck || document.hidden) return;
-    if (!visible && activeSource === sources.hls && sources.mp4) {
+    if (!visible && !hasVimeoFallback && activeSource === sources.hls && sources.mp4) {
       const position = Math.max(0, Number(video.currentTime) || initialPosition);
-      console.warn('[Playback] HLS audio started without a video frame; trying MP4');
+      console.warn('[Playback] Drive HLS did not produce moving video frames; trying MP4');
       recoveryInProgress = true;
       try {
         await attachSource(sources.mp4, false);
@@ -331,7 +319,9 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
         Math.max(0, Number(video.currentTime) || initialPosition), true);
     }
   };
-  video.addEventListener('play', () => { if (!hasVisibleFrame && !recoveryInProgress) void checkVisualPlayback(); });
+  // A play event can fire before a remote HLS segment has arrived. Start the
+  // visual deadline only once the browser reports actual playback.
+  video.addEventListener('playing', () => { if (!hasVisibleFrame && !recoveryInProgress) void checkVisualPlayback(); });
   const onVisibilityChange = () => {
     if (!document.hidden && !video.paused && !hasVisibleFrame && !recoveryInProgress && !destroyed) void checkVisualPlayback();
   };
@@ -410,6 +400,10 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     failed = true;
     const position = Math.max(0, Number(video.currentTime) || initialPosition);
     const shouldPlay = !video.paused;
+    if (hasVimeoFallback) {
+      adapter.reportError(new Error(`HLS playback failed: ${info?.details || 'fatal error'}`), position, shouldPlay);
+      return;
+    }
     if (sources.mp4) {
       try {
         if (hls) { hls.destroy(); hls = null; }
@@ -442,7 +436,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       if (sources.hls) {
         try { await attachSource(sources.hls, true); }
         catch (hlsError) {
-          if (!sources.mp4) throw hlsError;
+          if (!sources.mp4 || hasVimeoFallback) throw hlsError;
           await attachSource(sources.mp4, false);
         }
       } else await attachSource(sources.mp4, false);
@@ -463,7 +457,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       loading.innerHTML = '<img class="watch-hls-loading-logo" src="/logo.png" alt="Irgun Shiurai Torah"><span>Video picture is unavailable. Please try again later.</span>';
       loading.hidden = false;
     }
-    onError?.(detail?.error, detail?.position, detail?.autoplay);
+    onError?.(detail?.error, detail?.position, detail?.autoplay, adapter);
   });
   adapter.getSourceType = () => activeSource === sources.hls ? 'hls' : 'mp4';
   adapter.getVideoElement = () => video;
