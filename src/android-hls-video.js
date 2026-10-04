@@ -14,7 +14,11 @@ function loadHls(apiBase) {
     }, 12000);
     script.onload = () => {
       clearTimeout(timer);
-      window.Hls ? resolve(window.Hls) : reject(new Error('HLS player library unavailable'));
+      if (window.Hls) resolve(window.Hls);
+      else {
+        hlsLibraryPromises.delete(apiBase);
+        reject(new Error('HLS player library unavailable'));
+      }
     };
     script.onerror = () => {
       clearTimeout(timer);
@@ -84,24 +88,35 @@ function makePlayerAdapter(video, stage, getHls, readyPromise) {
 }
 
 async function getAndroidHlsSource(apiBase, videoId) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10000);
-  try {
-    const response = await fetch(`${apiBase}/media/${encodeURIComponent(videoId)}/source.json`, {cache:'no-store', signal:controller.signal});
-    if (!response.ok) throw new Error(`Video sources unavailable (${response.status})`);
-    const data = await response.json();
-    if (!data?.video?.hls && !data?.video?.mp4) throw new Error('No HLS or MP4 source is ready');
-    return {hls:data.video.hls || null, mp4:data.video.mp4 || null};
-  } finally {
-    clearTimeout(timer);
+  const lookup = async retry => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      const suffix = retry ? `?retry=${Date.now()}` : '';
+      const response = await fetch(`${apiBase}/media/${encodeURIComponent(videoId)}/source.json${suffix}`, {cache:'no-store', signal:controller.signal});
+      if (!response.ok) throw new Error(`Video sources unavailable (${response.status})`);
+      const data = await response.json();
+      if (!data?.video?.hls && !data?.video?.mp4) throw new Error('No HLS or MP4 source is ready');
+      return {hls:data.video.hls || null, mp4:data.video.mp4 || null};
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  let sources = await lookup(false);
+  if (!sources.hls && !String(videoId).startsWith('drivev-')) {
+    // A cold Worker can temporarily miss the Drive HLS map. Check once more
+    // before concluding that a Vimeo-backed lecture lacks an HLS copy.
+    await new Promise(resolve => setTimeout(resolve, 700));
+    sources = await lookup(true);
   }
+  return sources;
 }
 
 export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, poster = '', resumeSeconds = 0, onError } = {}) {
   if (!apiBase || !videoId || !iframe || platform !== 'android') return null;
   const sources = await getAndroidHlsSource(String(apiBase).replace(/\/$/, ''), videoId);
   if (!sources) return null;
-  if (!sources.hls && !String(videoId).startsWith('drivev-')) return null;
+  if (!sources.hls && !String(videoId).startsWith('drivev-')) throw new Error('HLS source was not listed for this lecture');
 
   const container = iframe.parentElement;
   if (!container) return null;
@@ -340,9 +355,15 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       video.src = url;
       video.load();
     } else {
-      const Hls = await loadHls(String(apiBase).replace(/\/$/, ''));
-      if (!Hls.isSupported?.()) {
-        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      const nativeHls = Boolean(video.canPlayType('application/vnd.apple.mpegurl'));
+      let Hls = null;
+      try { Hls = await loadHls(String(apiBase).replace(/\/$/, '')); }
+      catch (libraryError) {
+        if (!nativeHls) throw libraryError;
+        console.warn('[Playback] HLS.js unavailable; using native HLS', libraryError);
+      }
+      if (!Hls?.isSupported?.()) {
+        if (nativeHls) {
           video.src = url;
           video.load();
         } else throw new Error('HLS playback is unsupported on this device');
