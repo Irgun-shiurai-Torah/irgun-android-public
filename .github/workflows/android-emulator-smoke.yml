@@ -1,0 +1,71 @@
+name: Android emulator startup check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/android-emulator-smoke.yml'
+      - 'scripts/android-emulator-*'
+      - 'src/**'
+      - 'android/**'
+      - 'index.html'
+      - 'package*.json'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/android-emulator-smoke.yml'
+      - 'scripts/android-emulator-*'
+      - 'src/**'
+      - 'android/**'
+      - 'index.html'
+      - 'package*.json'
+
+permissions:
+  contents: read
+
+jobs:
+  startup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Install Android SDK 36
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - run: npm ci
+      - run: npm run build
+      - run: npx cap sync android
+      - run: chmod +x android/gradlew
+      - run: ./gradlew --no-daemon assembleDebug
+        working-directory: android
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Launch on Android 11 and inspect WebView
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          script: bash scripts/android-emulator-smoke.sh
+      - name: Save screenshot and crash report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-emulator-startup-${{ github.run_id }}
+          path: emulator-report/
+          if-no-files-found: warn
+          retention-days: 14
