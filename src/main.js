@@ -8266,6 +8266,11 @@ async function initWatchVimeoOnce(userInitiated = false) {
           videoId: videoKey,
           iframe: frame,
           resumeSeconds: Math.max(0, Number(state.watchResumeSeconds) || 0),
+          onMinimize: () => {
+            if (generation === state.watchVimeoGeneration && state.watchMode === 'video' && !state.systemPipActive && !state.watchMinimized && videoId(state.watchVideo) === videoKey) {
+              void minimizeWatchToPersistent();
+            }
+          },
           onError: async (error, position, autoplay, failedPlayer) => {
             if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video' || videoId(state.watchVideo) !== videoKey) return;
             if (directOnly) { console.error('[Playback] Drive video HLS and MP4 failed:', error); return; }
