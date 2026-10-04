@@ -1,0 +1,35 @@
+name: Android HLS source smoke
+on:
+  pull_request:
+    paths:
+      - .github/workflows/android-hls-smoke.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check source, playlist, and first media range from Android origin
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://api.irgunshiuraitorah.com/media/1232214252"
+          origin="https://localhost"
+          for path in source.json master.m3u8 360p.m3u8; do
+            echo "Checking $path"
+            curl -fsSL --max-time 50 --retry 2 -H "Origin: $origin" -D headers.txt -o body.txt "$base/$path"
+            grep -i '^access-control-allow-origin: https://localhost' headers.txt
+            head -c 400 body.txt
+            echo
+            if [ "$path" = source.json ]; then
+              jq -e '.video.hls != null' body.txt
+            else
+              grep -q '^#EXTM3U' body.txt
+            fi
+          done
+          echo "Checking first 360p segment range"
+          curl -fsSL --max-time 60 --retry 2 -H "Origin: $origin" -H 'Range: bytes=0-65535' -D headers.txt -o segment.bin "$base/360p.ts"
+          grep -i '^access-control-allow-origin: https://localhost' headers.txt
+          grep -i '^HTTP/.* 206' headers.txt
+          test "$(wc -c < segment.bin)" -eq 65536
