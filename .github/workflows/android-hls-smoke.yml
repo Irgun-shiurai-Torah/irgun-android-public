@@ -28,6 +28,11 @@ jobs:
               grep -q '^#EXTM3U' body.txt
             fi
           done
+          echo "Checking proxied HLS player script"
+          curl -fsSL --max-time 50 --retry 2 -H "Origin: $origin" -D headers.txt -o hls.js "https://api.irgunshiuraitorah.com/media-player/hls.js"
+          grep -i '^access-control-allow-origin: https://localhost' headers.txt
+          test "$(wc -c < hls.js)" -gt 100000
+          grep -q 'Hls' hls.js
           echo "Checking first 360p segment range"
           curl -fsSL --max-time 60 --retry 2 -H "Origin: $origin" -H 'Range: bytes=0-65535' -D headers.txt -o segment.bin "$base/360p.ts"
           grep -i '^access-control-allow-origin: https://localhost' headers.txt
