@@ -91,7 +91,7 @@ async function getAndroidHlsSource(apiBase, videoId) {
   return {hls:data.video.hls || null, mp4:data.video.mp4 || null};
 }
 
-export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, resumeSeconds = 0, onError } = {}) {
+export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, poster = '', resumeSeconds = 0, onError } = {}) {
   if (!apiBase || !videoId || !iframe || platform !== 'android') return null;
   const sources = await getAndroidHlsSource(String(apiBase).replace(/\/$/, ''), videoId);
   if (!sources) return null;
@@ -124,6 +124,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   video.setAttribute('playsinline', '');
   video.setAttribute('webkit-playsinline', '');
   video.setAttribute('aria-label', 'Shiur video');
+  video.poster = String(poster || '/logo.png');
   stage.appendChild(video);
   iframe.style.setProperty('display', 'none', 'important');
 
@@ -143,8 +144,40 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   const fullscreenButton = controls.querySelector('[data-hls-fullscreen]');
   const loading = document.createElement('div');
   loading.className = 'watch-hls-loading';
-  loading.innerHTML = '<span class="watch-hls-spinner"></span><span>Loading video…</span>';
+  loading.innerHTML = '<img class="watch-hls-loading-logo" src="/logo.png" alt="Irgun Shiurai Torah"><span class="watch-hls-loading-caption"><span class="watch-hls-spinner"></span><span>Preparing video…</span></span>';
   stage.appendChild(loading);
+  let visualCheck = 0;
+  let hasVisibleFrame = false;
+  let destroyed = false;
+  let recoveryInProgress = false;
+  const decodedFrames = () => {
+    const quality = video.getVideoPlaybackQuality?.();
+    const count = Number(quality?.totalVideoFrames ?? video.webkitDecodedFrameCount);
+    return Number.isFinite(count) ? count : null;
+  };
+  const waitForVideoFrame = (timeout = 4500) => new Promise(resolve => {
+    const initialFrames = decodedFrames();
+    if (typeof video.requestVideoFrameCallback !== 'function') {
+      const start = decodedFrames();
+      let finished = false;
+      const finish = visible => { if (finished) return; finished = true; clearInterval(poll); clearTimeout(timer); resolve(visible); };
+      const poll = setInterval(() => {
+        const now = decodedFrames();
+        if (video.videoWidth > 0 && ((start !== null && now !== null && now > start) ||
+            (start === null && video.readyState >= 2))) finish(true);
+      }, 180);
+      const timer = setTimeout(() => finish(false), timeout);
+      return;
+    }
+    let finished = false;
+    const finish = visible => { if (finished) return; finished = true; clearTimeout(timer); resolve(visible); };
+    const timer = setTimeout(() => {
+      const finalFrames = decodedFrames();
+      finish(video.videoWidth > 0 && initialFrames !== null && finalFrames !== null && finalFrames > initialFrames);
+    }, timeout);
+    try { video.requestVideoFrameCallback(() => finish(video.videoWidth > 0)); }
+    catch (_) { finish(false); }
+  });
   const formatTime = value => {
     const seconds = Math.max(0, Math.floor(Number(value) || 0));
     const hours = Math.floor(seconds / 3600);
@@ -174,11 +207,11 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   };
   video.addEventListener('timeupdate', updateTimeline);
   video.addEventListener('durationchange', updateTimeline);
-  video.addEventListener('play', () => { updatePlayIcon(); loading.hidden = true; });
+  video.addEventListener('play', () => { updatePlayIcon(); if (!hasVisibleFrame) loading.hidden = false; });
   video.addEventListener('pause', updatePlayIcon);
   video.addEventListener('waiting', () => { if (!video.paused) loading.hidden = false; });
-  video.addEventListener('playing', () => { loading.hidden = true; });
-  video.addEventListener('canplay', () => { loading.hidden = true; });
+  video.addEventListener('playing', () => { if (hasVisibleFrame) loading.hidden = true; });
+  video.addEventListener('canplay', () => { if (hasVisibleFrame) loading.hidden = true; });
   video.addEventListener('volumechange', updateVolumeIcon);
   updateVolumeIcon();
   playButton.addEventListener('click', () => video.paused ? video.play().catch(() => {}) : video.pause());
@@ -225,9 +258,49 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let activeSource = '';
   let failed = false;
   const initialPosition = Math.max(0, Number(resumeSeconds) || 0);
+  const checkVisualPlayback = async () => {
+    let check = ++visualCheck;
+    hasVisibleFrame = false;
+    loading.hidden = false;
+    let visible = await waitForVideoFrame();
+    if (destroyed || check !== visualCheck || video.paused || document.hidden) return;
+    if (!visible && activeSource === sources.hls && sources.mp4) {
+      const position = Math.max(0, Number(video.currentTime) || initialPosition);
+      console.warn('[Playback] HLS audio started without a video frame; trying MP4');
+      recoveryInProgress = true;
+      try {
+        await attachSource(sources.mp4, false);
+        if (destroyed) return;
+        check = visualCheck;
+        if (position > 0) {
+          const duration = Number(video.duration) || 0;
+          video.currentTime = duration ? Math.min(position, Math.max(0, duration - .25)) : position;
+        }
+        await video.play();
+        visible = await waitForVideoFrame();
+      } catch (error) {
+        console.warn('[Playback] MP4 visual recovery failed', error);
+        if (!destroyed) adapter.reportError(error, position, true);
+        return;
+      }
+      finally { recoveryInProgress = false; }
+    }
+    if (destroyed || check !== visualCheck || video.paused || document.hidden) return;
+    if (visible) {
+      hasVisibleFrame = true;
+      loading.hidden = true;
+    } else {
+      adapter.reportError(new Error('Audio is playing but video frames are unavailable'),
+        Math.max(0, Number(video.currentTime) || initialPosition), true);
+    }
+  };
+  video.addEventListener('play', () => { if (!hasVisibleFrame && !recoveryInProgress) void checkVisualPlayback(); });
   const attachSource = async (url, useHls) => {
     if (!url) throw new Error('No direct video source');
     if (hls) { try { hls.destroy(); } catch (_) {} hls = null; }
+    ++visualCheck;
+    hasVisibleFrame = false;
+    loading.hidden = false;
     video.pause();
     video.removeAttribute('src');
     video.load();
@@ -340,8 +413,17 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   })();
   const adapter = makePlayerAdapter(video, stage, () => hls, readyPromise);
   // Keep the adapter's reference to the HLS instance current after attachment and recovery.
-  adapter.destroy = () => { try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
-  adapter.on('error', detail => onError?.(detail?.error, detail?.position, detail?.autoplay));
+  adapter.destroy = () => { destroyed = true; ++visualCheck; try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
+  adapter.on('error', detail => {
+    // A Drive video has no Vimeo source to fall back to. Stop its soundtrack
+    // rather than leave the user listening to a black, unresponsive player.
+    if (String(videoId).startsWith('drivev-')) {
+      video.pause();
+      loading.innerHTML = '<img class="watch-hls-loading-logo" src="/logo.png" alt="Irgun Shiurai Torah"><span>Video picture is unavailable. Please try again later.</span>';
+      loading.hidden = false;
+    }
+    onError?.(detail?.error, detail?.position, detail?.autoplay);
+  });
   adapter.getSourceType = () => activeSource === sources.hls ? 'hls' : 'mp4';
   adapter.getVideoElement = () => video;
   return adapter;
