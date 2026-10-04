@@ -84,11 +84,17 @@ function makePlayerAdapter(video, stage, getHls, readyPromise) {
 }
 
 async function getAndroidHlsSource(apiBase, videoId) {
-  const response = await fetch(`${apiBase}/media/${encodeURIComponent(videoId)}/source.json`, {cache:'no-store'});
-  if (!response.ok) throw new Error(`Video sources unavailable (${response.status})`);
-  const data = await response.json();
-  if (!data?.video?.hls && !data?.video?.mp4) throw new Error('No HLS or MP4 source is ready');
-  return {hls:data.video.hls || null, mp4:data.video.mp4 || null};
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(`${apiBase}/media/${encodeURIComponent(videoId)}/source.json`, {cache:'no-store', signal:controller.signal});
+    if (!response.ok) throw new Error(`Video sources unavailable (${response.status})`);
+    const data = await response.json();
+    if (!data?.video?.hls && !data?.video?.mp4) throw new Error('No HLS or MP4 source is ready');
+    return {hls:data.video.hls || null, mp4:data.video.mp4 || null};
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, poster = '', resumeSeconds = 0, onError } = {}) {
