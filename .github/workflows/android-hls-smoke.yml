@@ -33,6 +33,11 @@ jobs:
           grep -i '^access-control-allow-origin: https://localhost' headers.txt
           test "$(wc -c < hls.js)" -gt 100000
           grep -q 'Hls' hls.js
+          echo "Checking catalog ID for CH379"
+          curl -fsSL --max-time 50 --retry 2 -o catalog.json "https://api.irgunshiuraitorah.com/video-map?driveLibrary=1"
+          jq -c '[.[] | select((.title // "") | contains("CH379")) | {id, vimeoId, sourceType, title}]' catalog.json
+          echo "Recent Android main push builds"
+          curl -fsSL --max-time 20 -H 'Accept: application/vnd.github+json' 'https://api.github.com/repos/Irgun-shiurai-Torah/irgun-android-public/actions/runs?event=push&branch=main&per_page=5' | jq -c '[.workflow_runs[] | {head_sha,status,conclusion,id,created_at}]'
           echo "Checking first 360p segment range"
           curl -fsSL --max-time 60 --retry 2 -H "Origin: $origin" -H 'Range: bytes=0-65535' -D headers.txt -o segment.bin "$base/360p.ts"
           grep -i '^access-control-allow-origin: https://localhost' headers.txt
