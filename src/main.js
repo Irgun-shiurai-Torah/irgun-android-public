@@ -8226,7 +8226,27 @@ function showWatchHlsFallback(frame, error) {
   note.textContent = `HLS could not start (${reason}). Playing Vimeo.`;
 }
 
-async function initWatchVimeo(userInitiated = false) {
+// render() schedules an initialization, and openWatch() starts one immediately.
+// Coalesce them before the asynchronous source lookup can move the same iframe
+// into two different HLS stages. A fallback increments the generation, so it
+// starts a fresh initialization after the failed player has been destroyed.
+let watchVimeoInitFlight = null;
+function initWatchVimeo(userInitiated = false) {
+  if (state.watchVimeo) return Promise.resolve();
+  const generation = state.watchVimeoGeneration;
+  const key = videoId(state.watchVideo);
+  if (watchVimeoInitFlight?.generation === generation && watchVimeoInitFlight?.key === key) {
+    return watchVimeoInitFlight.promise;
+  }
+  const flight = { generation, key, promise:null };
+  flight.promise = initWatchVimeoOnce(userInitiated);
+  watchVimeoInitFlight = flight;
+  const clear = () => { if (watchVimeoInitFlight === flight) watchVimeoInitFlight = null; };
+  flight.promise.then(clear, clear);
+  return flight.promise;
+}
+
+async function initWatchVimeoOnce(userInitiated = false) {
   if (state.watchVimeo) return;
   const video = state.watchVideo;
   const frame = document.getElementById('watchVimeoFrame');
