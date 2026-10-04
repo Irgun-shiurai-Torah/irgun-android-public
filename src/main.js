@@ -5237,7 +5237,7 @@ function watchHtml() {
       <div class="watch-player-card">
         <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">Video</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">Audio</button>` : ''}</div>
         ${state.watchMode === 'video'
-          ? `<iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${Capacitor.getPlatform() === 'android' ? 'about:blank' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`
+          ? `<iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${Capacitor.getPlatform() === 'android' && v.sourceType === 'drive-library' ? 'about:blank' : Capacitor.getPlatform() === 'android' ? watchVimeoEmbedSrc(v, state.watchResumeSeconds).replace('autoplay=1', 'autoplay=0') : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`
           : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${playbackDurationSeconds()}" value="${playbackPositionSeconds()}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${playbackIsPaused() ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(playbackPositionSeconds())} / ${fmtDurationOrUnknown(playbackDurationSeconds())}</div></div>`}
       </div>
       <section class="watch-details">
@@ -8188,13 +8188,38 @@ async function switchWatchMode(mode) {
   }
 }
 
+let watchVimeoSdkLoad = null;
+function loadWatchVimeoSdk() {
+  if (window.Vimeo?.Player) return Promise.resolve(true);
+  if (watchVimeoSdkLoad) return watchVimeoSdkLoad;
+  watchVimeoSdkLoad = new Promise(resolve => {
+    const script = document.createElement('script');
+    script.src = 'https://player.vimeo.com/api/player.js';
+    script.async = true;
+    const finish = () => {
+      clearTimeout(timer);
+      script.onload = null;
+      script.onerror = null;
+      const loaded = Boolean(window.Vimeo?.Player);
+      if (!loaded) watchVimeoSdkLoad = null;
+      resolve(loaded);
+    };
+    const timer = setTimeout(finish, 8000);
+    script.onload = finish;
+    script.onerror = finish;
+    document.head.appendChild(script);
+  });
+  return watchVimeoSdkLoad;
+}
+
 async function initWatchVimeo(userInitiated = false) {
   if (state.watchVimeo) return;
   const video = state.watchVideo;
   const frame = document.getElementById('watchVimeoFrame');
   if (!video || !frame || state.watchMode !== 'video') return;
   const directOnly = video.sourceType === 'drive-library';
-  if (!directOnly && (!window.Vimeo || !window.Vimeo.Player)) return;
+  // Android HLS must start even if the optional Vimeo SDK is blocked or late.
+  if (!directOnly && Capacitor.getPlatform() !== 'android' && !window.Vimeo?.Player) return;
   const generation = state.watchVimeoGeneration;
   const videoKey = videoId(video);
   let player = null;
@@ -8228,9 +8253,11 @@ async function initWatchVimeo(userInitiated = false) {
     }
     if (!player) {
       if (directOnly) return;
-      if (!frame.src || frame.src === 'about:blank' || !frame.src.includes('player.vimeo.com')) {
+      if (!frame.src || frame.src === 'about:blank' || !frame.src.includes('player.vimeo.com') || frame.src.includes('autoplay=0')) {
         frame.src = watchVimeoEmbedSrc(video, Math.max(0, Number(state.watchResumeSeconds) || 0));
       }
+      if (!window.Vimeo?.Player) await loadWatchVimeoSdk();
+      if (!window.Vimeo?.Player) throw new Error('Vimeo player script did not load');
       player = new window.Vimeo.Player(frame);
     }
     if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video' || !state.watchVideo || videoId(state.watchVideo) !== videoKey) {
