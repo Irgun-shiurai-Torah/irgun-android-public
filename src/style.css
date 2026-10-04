@@ -170,7 +170,8 @@ a { color: inherit; text-decoration: none; }
 #persistentVideoMount.watch-mini-host .watch-hls-stage,
 body.irgun-system-pip #persistentVideoMount.watch-video-host .watch-hls-stage { position:absolute; inset:0; width:100%; height:100%; aspect-ratio:auto; }
 #persistentVideoMount.watch-mini-host .watch-hls-controls,
-#persistentVideoMount.watch-mini-host .watch-hls-loading { display:none!important; }
+#persistentVideoMount.watch-mini-host .watch-hls-loading,
+#persistentVideoMount.watch-mini-host .watch-hls-seek-hint { display:none!important; }
 body.irgun-system-pip #persistentVideoMount.watch-video-host .watch-hls-controls,
 body.irgun-system-pip #persistentVideoMount.watch-video-host .watch-hls-loading,
 body.irgun-system-pip #persistentVideoMount.watch-video-host .watch-hls-seek-hint { display:none!important; }
