@@ -158,13 +158,13 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   const waitForVideoFrame = (timeout = 4500) => new Promise(resolve => {
     const initialFrames = decodedFrames();
     if (typeof video.requestVideoFrameCallback !== 'function') {
-      const start = decodedFrames();
       let finished = false;
       const finish = visible => { if (finished) return; finished = true; clearInterval(poll); clearTimeout(timer); resolve(visible); };
       const poll = setInterval(() => {
         const now = decodedFrames();
-        if (video.videoWidth > 0 && ((start !== null && now !== null && now > start) ||
-            (start === null && video.readyState >= 2))) finish(true);
+        // Audio time can advance with a frozen picture. Require two decoded
+        // frames instead of accepting metadata or the first still image.
+        if (video.videoWidth > 0 && initialFrames !== null && now !== null && now >= initialFrames + 2) finish(true);
       }, 180);
       const timer = setTimeout(() => finish(false), timeout);
       return;
@@ -173,9 +173,20 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     const finish = visible => { if (finished) return; finished = true; clearTimeout(timer); resolve(visible); };
     const timer = setTimeout(() => {
       const finalFrames = decodedFrames();
-      finish(video.videoWidth > 0 && initialFrames !== null && finalFrames !== null && finalFrames > initialFrames);
+      finish(video.videoWidth > 0 && initialFrames !== null && finalFrames !== null && finalFrames >= initialFrames + 2);
     }, timeout);
-    try { video.requestVideoFrameCallback(() => finish(video.videoWidth > 0)); }
+    let firstFrame = null;
+    const onFrame = (_now, metadata) => {
+      if (finished) return;
+      const frameTime = Number(metadata?.mediaTime);
+      if (firstFrame !== null && Number.isFinite(frameTime) && frameTime > firstFrame + .03) {
+        finish(video.videoWidth > 0);
+        return;
+      }
+      if (firstFrame === null && Number.isFinite(frameTime)) firstFrame = frameTime;
+      try { video.requestVideoFrameCallback(onFrame); } catch (_) { finish(false); }
+    };
+    try { video.requestVideoFrameCallback(onFrame); }
     catch (_) { finish(false); }
   });
   const formatTime = value => {
@@ -264,6 +275,26 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     loading.hidden = false;
     let visible = await waitForVideoFrame();
     if (destroyed || check !== visualCheck || video.paused || document.hidden) return;
+    if (!visible && video.videoWidth > 0) {
+      // Android WebView can start the soundtrack while its video surface stays
+      // latched to the first frame. Reattach the existing element once, keeping
+      // the same HLS source and current clock before trying another source.
+      recoveryInProgress = true;
+      try {
+        const position = Math.max(0, Number(video.currentTime) || initialPosition);
+        video.pause();
+        stage.appendChild(video);
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        if (destroyed || check !== visualCheck || document.hidden) return;
+        if (position > 0 && video.readyState >= 1) video.currentTime = position;
+        await video.play();
+        visible = await waitForVideoFrame(3500);
+      } catch (error) { console.warn('[Playback] Android video surface recovery failed', error); }
+      finally { recoveryInProgress = false; }
+    }
+    // The surface recovery may leave the video paused if WebView rejects
+    // play(). Continue to the alternate source in that case.
+    if (destroyed || check !== visualCheck || document.hidden) return;
     if (!visible && activeSource === sources.hls && sources.mp4) {
       const position = Math.max(0, Number(video.currentTime) || initialPosition);
       console.warn('[Playback] HLS audio started without a video frame; trying MP4');
@@ -285,7 +316,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       }
       finally { recoveryInProgress = false; }
     }
-    if (destroyed || check !== visualCheck || video.paused || document.hidden) return;
+    if (destroyed || check !== visualCheck || document.hidden) return;
     if (visible) {
       hasVisibleFrame = true;
       loading.hidden = true;
@@ -295,6 +326,10 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     }
   };
   video.addEventListener('play', () => { if (!hasVisibleFrame && !recoveryInProgress) void checkVisualPlayback(); });
+  const onVisibilityChange = () => {
+    if (!document.hidden && !video.paused && !hasVisibleFrame && !recoveryInProgress && !destroyed) void checkVisualPlayback();
+  };
+  document.addEventListener('visibilitychange', onVisibilityChange);
   const attachSource = async (url, useHls) => {
     if (!url) throw new Error('No direct video source');
     if (hls) { try { hls.destroy(); } catch (_) {} hls = null; }
@@ -413,7 +448,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   })();
   const adapter = makePlayerAdapter(video, stage, () => hls, readyPromise);
   // Keep the adapter's reference to the HLS instance current after attachment and recovery.
-  adapter.destroy = () => { destroyed = true; ++visualCheck; try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
+  adapter.destroy = () => { destroyed = true; ++visualCheck; document.removeEventListener('visibilitychange', onVisibilityChange); try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
   adapter.on('error', detail => {
     // A Drive video has no Vimeo source to fall back to. Stop its soundtrack
     // rather than leave the user listening to a black, unresponsive player.
