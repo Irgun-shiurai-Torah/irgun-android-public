@@ -8212,6 +8212,20 @@ function loadWatchVimeoSdk() {
   return watchVimeoSdkLoad;
 }
 
+function showWatchHlsFallback(frame, error) {
+  const card = frame?.closest('.watch-player-card');
+  if (!card) return;
+  let note = card.querySelector('.watch-hls-fallback-note');
+  if (!note) {
+    note = document.createElement('div');
+    note.className = 'watch-hls-fallback-note';
+    note.setAttribute('role', 'status');
+    card.appendChild(note);
+  }
+  const reason = String(error?.message || 'video source unavailable').slice(0, 100);
+  note.textContent = `HLS could not start (${reason}). Playing Vimeo.`;
+}
+
 async function initWatchVimeo(userInitiated = false) {
   if (state.watchVimeo) return;
   const video = state.watchVideo;
@@ -8232,15 +8246,19 @@ async function initWatchVimeo(userInitiated = false) {
           videoId: videoKey,
           iframe: frame,
           resumeSeconds: Math.max(0, Number(state.watchResumeSeconds) || 0),
-          onError: async (error, position, autoplay) => {
+          onError: async (error, position, autoplay, failedPlayer) => {
             if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video' || videoId(state.watchVideo) !== videoKey) return;
             if (directOnly) { console.error('[Playback] Drive video HLS and MP4 failed:', error); return; }
             console.warn('[Playback] HLS and MP4 failed; switching to Vimeo:', error);
+            showWatchHlsFallback(frame, error);
             state.watchVideoForceVimeoId = videoKey;
+            state.watchVimeoGeneration += 1;
+            const fallbackGeneration = state.watchVimeoGeneration;
             state.watchVimeo = null;
             state.watchVimeoReady = false;
             state.watchResumeSeconds = Math.max(0, Number(position) || state.watchResumeSeconds || 0);
-            try { await player?.destroy?.(); } catch (_) {}
+            try { await (failedPlayer || player)?.destroy?.(); } catch (_) {}
+            if (fallbackGeneration !== state.watchVimeoGeneration || state.watchMode !== 'video' || videoId(state.watchVideo) !== videoKey) return;
             frame.style.display = '';
             frame.src = watchVimeoEmbedSrc(video, state.watchResumeSeconds);
             await initWatchVimeo(Boolean(autoplay));
@@ -8249,6 +8267,7 @@ async function initWatchVimeo(userInitiated = false) {
       } catch (error) {
         if (directOnly) { console.error('[Playback] Drive video unavailable:', error); frame.style.display='none'; frame.parentElement?.insertAdjacentHTML('beforeend', '<p class="watch-video-error">Video is processing or temporarily unavailable. Please try again later.</p>'); return; }
         console.warn('[Playback] Direct HLS unavailable; using Vimeo:', error);
+        showWatchHlsFallback(frame, error);
       }
     }
     if (!player) {
@@ -8445,9 +8464,13 @@ async function initWatchVimeo(userInitiated = false) {
       state.watchVimeoReady = false;
       if (!directOnly && player?.isIrgunHlsPlayer && state.watchVideoForceVimeoId !== videoKey && Capacitor.getPlatform() === 'android') {
         console.warn('[Playback] HLS/MP4 could not start; retrying with Vimeo:', error);
+        showWatchHlsFallback(frame, error);
         state.watchVideoForceVimeoId = videoKey;
+        state.watchVimeoGeneration += 1;
+        const fallbackGeneration = state.watchVimeoGeneration;
         state.watchVimeo = null;
         try { await player.destroy?.(); } catch (_) {}
+        if (fallbackGeneration !== state.watchVimeoGeneration || state.watchMode !== 'video' || videoId(state.watchVideo) !== videoKey) return;
         frame.style.display = '';
         frame.src = watchVimeoEmbedSrc(video, Math.max(0, Number(state.watchResumeSeconds) || 0));
         await initWatchVimeo(userInitiated);
