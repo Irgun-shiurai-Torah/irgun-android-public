@@ -112,7 +112,7 @@ async function getAndroidHlsSource(apiBase, videoId) {
   return sources;
 }
 
-export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, poster = '', resumeSeconds = 0, onError } = {}) {
+export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, poster = '', resumeSeconds = 0, onError, onMinimize } = {}) {
   if (!apiBase || !videoId || !iframe || platform !== 'android') return null;
   const sources = await getAndroidHlsSource(String(apiBase).replace(/\/$/, ''), videoId);
   if (!sources) return null;
@@ -166,8 +166,17 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   const fullscreenButton = controls.querySelector('[data-hls-fullscreen]');
   const loading = document.createElement('div');
   loading.className = 'watch-hls-loading';
-  loading.innerHTML = '<img class="watch-hls-loading-logo" src="/logo.png" alt="Irgun Shiurai Torah"><span class="watch-hls-loading-caption"><span class="watch-hls-spinner"></span><span>Preparing video…</span></span>';
+  loading.innerHTML = '<span class="watch-hls-loading-caption"><span class="watch-hls-spinner"></span><span>Preparing video…</span></span>';
   stage.appendChild(loading);
+  const seekHint = document.createElement('div');
+  seekHint.className = 'watch-hls-seek-hint';
+  seekHint.setAttribute('aria-live', 'polite');
+  stage.appendChild(seekHint);
+  let seekHintTimer = 0;
+  let singleTapTimer = 0;
+  let lastSideTap = null;
+  let pointerStart = null;
+  let ignoreClickUntil = 0;
   let visualCheck = 0;
   let hasVisibleFrame = false;
   let destroyed = false;
@@ -247,8 +256,54 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   video.addEventListener('canplay', () => { if (hasVisibleFrame) loading.hidden = true; });
   video.addEventListener('volumechange', updateVolumeIcon);
   updateVolumeIcon();
-  playButton.addEventListener('click', () => video.paused ? video.play().catch(() => {}) : video.pause());
-  video.addEventListener('click', () => video.paused ? video.play().catch(() => {}) : video.pause());
+  const togglePlayback = () => video.paused ? video.play().catch(() => {}) : video.pause();
+  playButton.addEventListener('click', togglePlayback);
+  video.addEventListener('pointerdown', event => {
+    if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
+    pointerStart = { id:event.pointerId, x:event.clientX, y:event.clientY };
+  });
+  video.addEventListener('pointercancel', () => { pointerStart = null; });
+  video.addEventListener('pointerup', event => {
+    if (!pointerStart || pointerStart.id !== event.pointerId) return;
+    const { x, y } = pointerStart;
+    pointerStart = null;
+    const dx = event.clientX - x;
+    const dy = event.clientY - y;
+    const now = Date.now();
+    ignoreClickUntil = now + 450; // The browser also emits a click after touch.
+    if (dy > 75 && dy > Math.abs(dx) * 1.4 && !document.fullscreenElement && !document.body.classList.contains('irgun-system-pip')) {
+      clearTimeout(singleTapTimer);
+      lastSideTap = null;
+      onMinimize?.();
+      return;
+    }
+    if (Math.abs(dx) > 24 || Math.abs(dy) > 24) return;
+    const bounds = video.getBoundingClientRect();
+    const fraction = (x - bounds.left) / Math.max(1, bounds.width);
+    const side = fraction < .38 ? 'left' : fraction > .62 ? 'right' : '';
+    if (!side) { clearTimeout(singleTapTimer); lastSideTap = null; togglePlayback(); return; }
+    if (lastSideTap?.side === side && now - lastSideTap.time < 330 && Math.abs(x - lastSideTap.x) < 80) {
+      clearTimeout(singleTapTimer);
+      lastSideTap = null;
+      const change = side === 'left' ? -15 : 15;
+      const duration = Number(video.duration) || 0;
+      const target = Math.max(0, (Number(video.currentTime) || 0) + change);
+      try { video.currentTime = duration ? Math.min(target, Math.max(0, duration - .25)) : target; } catch (_) {}
+      seekHint.textContent = change < 0 ? '↶ 15 seconds' : '15 seconds ↷';
+      seekHint.classList.toggle('right', side === 'right');
+      seekHint.classList.add('visible');
+      clearTimeout(seekHintTimer);
+      seekHintTimer = setTimeout(() => seekHint.classList.remove('visible'), 700);
+      return;
+    }
+    clearTimeout(singleTapTimer);
+    lastSideTap = { side, x, time:now };
+    singleTapTimer = setTimeout(() => { lastSideTap = null; if (!destroyed) togglePlayback(); }, 330);
+  });
+  video.addEventListener('click', event => {
+    if (Date.now() < ignoreClickUntil) { event.preventDefault(); return; }
+    togglePlayback();
+  });
   seekControl.addEventListener('input', () => {
     const duration = Number(video.duration) || 0;
     currentLabel.textContent = formatTime(duration * Number(seekControl.value) / 1000);
@@ -469,7 +524,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   })();
   const adapter = makePlayerAdapter(video, stage, () => hls, readyPromise);
   // Keep the adapter's reference to the HLS instance current after attachment and recovery.
-  adapter.destroy = () => { destroyed = true; ++visualCheck; document.removeEventListener('visibilitychange', onVisibilityChange); try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
+  adapter.destroy = () => { destroyed = true; ++visualCheck; clearTimeout(singleTapTimer); clearTimeout(seekHintTimer); document.removeEventListener('visibilitychange', onVisibilityChange); try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
   adapter.on('error', detail => {
     // A Drive video has no Vimeo source to fall back to. Stop its soundtrack
     // rather than leave the user listening to a black, unresponsive player.
