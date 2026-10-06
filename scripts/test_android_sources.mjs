@@ -98,15 +98,16 @@ test('old Android WebView clears the persistent host on close',()=>{
   assert.equal(f.mount.children.length,0);assert.equal(f.overlay.parentElement,null);assert.equal(f.state.watchHostedExternally,false);
 });
 
-function handoffFixture({movingClock=true,movingFrames=true,paused=false}={}) {
+function handoffFixture({movingClock=true,movingFrames=true,paused=false,focusStopped=false}={}) {
   let now=0, position=600, frames=100;
   const state={watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',watchMode:'video',
-    watchAudioToVideoTargetSeconds:600,watchVideo:{id:'lecture'}};
+    watchAudioToVideoTargetSeconds:600,watchVideo:{id:'lecture'},
+    nativePlayback:{mode:'AUDIO',audioIsPlaying:!focusStopped,audioPlayWhenReady:!focusStopped}};
   const element={paused,seeking:false,readyState:4,videoWidth:1920,getVideoPlaybackQuality:()=>({totalVideoFrames:frames})};
   const player={getCurrentTime:async()=>position,getPaused:async()=>element.paused,getVideoElement:()=>element,
     setCurrentTime:async n=>{position=n;return n;}};
   const context={state,console:{warn(){}},Date:{now:()=>now},usesNativeUnifiedAudio:()=>true,
-    playbackPositionSeconds:()=>600+now/1000,
+    playbackPositionSeconds:()=>600+(focusStopped?0:now/1000),
     setTimeout:callback=>{now+=350;if(movingClock&&!paused)position+=.35;if(movingFrames&&!paused)frames+=10;callback();}};
   const start=mainSource.indexOf('async function waitForVimeoHandoffReady(');
   runInNewContext(mainSource.slice(start,mainSource.indexOf('function videoAudioPlaybackItem(',start))+'\nthis.wait=waitForVimeoHandoffReady;',context);
@@ -136,6 +137,17 @@ test('MP4 handoff near the end does not require buffer beyond the lecture',async
   element.buffered={length:1,start:()=>590,end:()=>605};f.player.getSourceType=()=> 'mp4';
   assert.ok(await f.wait(f.player,'lecture',800)>600);
 });
+test('MP4 buffers without rewinding to an Audio clock stopped by WebView focus',async()=>{
+  const f=handoffFixture({focusStopped:true});const element=f.player.getVideoElement();element.duration=3663;
+  element.buffered={length:1,start:()=>590,end:()=>element.framesReady?620:601};
+  f.player.getSourceType=()=> 'mp4';
+  const originalRead=f.player.getCurrentTime;let reads=0,seeks=0;
+  f.player.getCurrentTime=async()=>{if(++reads>12)element.framesReady=true;return originalRead();};
+  const originalSeek=f.player.setCurrentTime;
+  f.player.setCurrentTime=async n=>{seeks++;return originalSeek(n);};
+  assert.ok(await f.wait(f.player,'lecture',8000)>601);
+  assert.equal(seeks,0,'Do not restart byte-range downloads by rewinding the advancing picture');
+});
 test('cancelled native handoff cannot masquerade as a completed transfer',async()=>{
   const f=handoffFixture();f.state.watchAudioToVideoHandoff=false;
   assert.equal(await f.wait(f.player,'lecture',800),null);
@@ -150,7 +162,7 @@ test('live Audio callbacks keep the destination visible while handoff buffers',(
   assert.equal(context.conflicts(snapshot),false);context.reconcile(snapshot);assert.equal(state.watchMode,'video');
 });
 
-function resumeFixture({ready=600.35,commitFails=false}={}) {
+function resumeFixture({ready=600.35,commitFails=false,focusStopped=false}={}) {
   const item={id:'lecture'};
   const state={current:item,watchResumeSeconds:600,nativePlayback:{mode:'AUDIO'},playbackSpeed:1};
   const events=[];
@@ -160,7 +172,7 @@ function resumeFixture({ready=600.35,commitFails=false}={}) {
     playbackPositionSeconds:()=>600,setVimeoHandoffMuted:async(_,muted)=>events.push(muted?'mute':'unmute'),
     waitForVimeoHandoffReady:async()=>{events.push('verify');return ready;},
     finishAudioToVideoHandoff:async()=>{events.push('commit');state.current=null;state.nativePlayback.mode='VIDEO';if(commitFails)throw Error('native error');return true;},
-    nativeMediaPlugin:()=>({getState:async()=>({...state.nativePlayback,audioPositionMs:603000})}),
+    nativeMediaPlugin:()=>({getState:async()=>({...state.nativePlayback,audioPositionMs:603000,audioPlayWhenReady:!focusStopped})}),
     setPlaybackAuthorityFence:mode=>events.push(mode),
     PlaybackController:{startAudioAt:async(position,playing,options)=>{events.push({position,playing,volume:options.volume});state.nativePlayback.mode='AUDIO';}},
     refreshPersistentMiniVideoChrome(){},videoAudioPlaybackItem:()=>item};
@@ -181,4 +193,9 @@ test('partial native commit rolls back to audible Audio at its advancing shadow 
   assert.equal(f.state.current,f.item);assert.equal(f.state.nativePlayback.mode,'AUDIO');
   assert.deepEqual(f.events.find(e=>typeof e==='object'),{position:603,playing:true,volume:1});
   assert.ok(f.events.lastIndexOf('mute')<f.events.indexOf('AUDIO'));
+});
+test('failed preparation restarts Audio if muted WebView playback took its focus',async()=>{
+  const f=resumeFixture({ready:null,focusStopped:true});assert.equal(await f.resume(),false);
+  assert.equal(f.state.current,f.item);assert.ok(!f.events.includes('commit'));
+  assert.deepEqual(f.events.find(e=>typeof e==='object'),{position:603,playing:true,volume:1});
 });
