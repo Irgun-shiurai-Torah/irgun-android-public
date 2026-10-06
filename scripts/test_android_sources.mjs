@@ -45,3 +45,23 @@ test('HLS remains the preferred source when both sources exist',async()=>{
 test('no direct source still rejects so the existing Vimeo fallback can run',async()=>{
   await assert.rejects(fixture({video:{hls:null,mp4:null}}),/No HLS or MP4 source is ready/);
 });
+
+const {vimeoEmbedSource} = await import('../src/vimeoEmbed.js');
+test('actual unlisted Vimeo ID preserves its privacy hash separately',()=>{
+  const url = new URL(vimeoEmbedSource('1233236785:585d5d53db'));
+  assert.equal(url.pathname,'/video/1233236785');
+  assert.equal(url.searchParams.get('h'),'585d5d53db');
+  assert.ok(url.search.startsWith('?h=585d5d53db&'));
+});
+test('public Vimeo embeds keep their existing options',()=>{
+  assert.equal(vimeoEmbedSource('1182395717'),'https://player.vimeo.com/video/1182395717?playsinline=1&autoplay=1&title=0&byline=0&portrait=0');
+});
+test('unlisted embeds retain resume position and audio handoff mute',()=>{
+  const url = new URL(vimeoEmbedSource('1233236785:585d5d53db',{resumeSeconds:42.9,muted:true}));
+  assert.equal(url.searchParams.get('h'),'585d5d53db');
+  assert.equal(url.searchParams.get('muted'),'1');assert.equal(url.hash,'#t=42s');
+});
+test('invalid Vimeo IDs never turn into a different numeric video',()=>{
+  assert.equal(vimeoEmbedSource('drivev-123'),'about:blank');
+  assert.equal(vimeoEmbedSource('123:bad/hash'),'about:blank');
+});

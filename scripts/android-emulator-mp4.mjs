@@ -52,14 +52,10 @@ try {
   report.sources = source.video;
   assert.ok(source.video?.mp4,'Reported shiur must have its direct MP4');
 
-  // Open the actual app via its existing notification intent, then use native
-  // taps only. CDP observes the DOM/media; it does not create or play a player.
-  adb('shell','input','keyevent','KEYCODE_HOME');
-  adb('shell','am','start','-n','org.irgunshiuraitorah.app/.MainActivity',
-    '-a','IRGUN_NOTIFICATION_CLICK','--es','url',`https://irgunshiuraitorah.com/watch.html?v=${target.id}`);
   const read = async () => JSON.parse(await evaluate(`JSON.stringify((()=>{
     const v=document.querySelector('#watchDirectHlsVideo');
     return {title:document.querySelector('.watch-overlay')?.innerText?.slice(0,900),
+      iframeSrc:document.querySelector('#watchVimeoFrame')?.getAttribute('src'),
       video:v?{src:v.currentSrc||v.src,time:v.currentTime,paused:v.paused,ready:v.readyState,width:v.videoWidth,
         frames:v.getVideoPlaybackQuality?.().totalVideoFrames??v.webkitDecodedFrameCount,error:v.error?.code}:null,
       diagnostic:!!document.querySelector('.watch-hls-fallback-note'),
@@ -70,13 +66,50 @@ try {
     for(let i=0;i<120;i++) {state=await read();if(predicate(state))return state;await delay(500);}
     throw new Error(`Video did not settle: ${JSON.stringify(state)}`);
   };
-  await wait(s=>s.video?.ready>=2 && s.video.width>0);
   adb('shell','uiautomator','dump','/sdcard/irgun-mp4.xml');
   const xml=adb('shell','cat','/sdcard/irgun-mp4.xml');
   const bounds=xml.match(/<node\b[^>]*class="android\.webkit\.WebView"[^>]*>/)?.[0]
     .match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
   assert.ok(bounds,'Native WebView bounds required');
   const [left,top,right,bottom]=bounds.slice(1).map(Number);
+  const nativePoint=p=>[Math.round(left+p.x*(right-left)/p.width),Math.round(top+p.y*(bottom-top)/p.height)];
+  const visiblePoint=async selector=>JSON.parse(await evaluate(`JSON.stringify((()=>{
+    const b=document.querySelector(${JSON.stringify(selector)}),r=b?.getBoundingClientRect();
+    if(!r)return null;const x=r.left+r.width/2,y=r.top+r.height/2;
+    const hit=document.elementFromPoint(x,y);
+    return y>70 && y<innerHeight-75 && (hit===b || b.contains(hit))?{x,y,width:innerWidth,height:innerHeight}:null;
+  })())`));
+  const tapVisible=async selector=>{
+    const p=await visiblePoint(selector);assert.ok(p,`Visible native tap target required: ${selector}`);
+    const xy=nativePoint(p);adb('shell','input','tap',...xy.map(String));report.gestures.push({selector,point:xy});
+  };
+  // Navigate through the real Home search with native taps, typing and scrolling.
+  // CDP only reads hit-tested coordinates and media state.
+  let search;
+  for(let i=0;i<8;i++) {
+    search=await visiblePoint('#homeLibrarySearch');if(search)break;
+    adb('shell','input','swipe',String(right-40),String(bottom-130),String(right-40),String(top+190),'450');
+    await delay(400);
+  }
+  assert.ok(search,'Home search must be visible');
+  await tapVisible('#homeLibrarySearch');
+  const code=String(target.shiurCode||target.title.match(/IST-[A-Z]+\d+/)?.[0]||'');
+  assert.ok(/^IST-[A-Z]+\d+$/.test(code),'Reported shiur search code required');
+  adb('shell','input','text',code);adb('shell','input','keyevent','KEYCODE_ENTER');await delay(800);
+  // Dismiss the keyboard only if still present, without navigating back.
+  if(/mInputShown=true/.test(adb('shell','dumpsys','input_method')))adb('shell','input','keyevent','KEYCODE_BACK');
+  const selector=`[data-watch="${target.id}"]`;
+  for(let i=0;i<12 && !(await visiblePoint(selector));i++) {
+    adb('shell','input','swipe',String(right-40),String(bottom-130),String(right-40),String(top+190),'450');
+    await delay(400);
+  }
+  await tapVisible(selector);
+  await wait(s=>s.video?.ready>=2 && s.video.width>0);
+  const embed=new URL((await read()).iframeSrc);
+  const [vimeoNumber,privacyHash]=String(target.vimeoId||target.id).split(':');
+  assert.equal(embed.pathname,`/video/${vimeoNumber}`,'App must keep the numeric Vimeo ID separate');
+  if(privacyHash)assert.equal(embed.searchParams.get('h'),privacyHash,'App must preserve the unlisted embed code');
+  report.checks.push({label:'Actual app Vimeo embed preserves video number and unlisted code',url:embed.href});
   const tapPlayPause=async()=>{
     const p=JSON.parse(await evaluate(`JSON.stringify((()=>{
       const b=document.querySelector('[data-hls-play]'),r=b?.getBoundingClientRect();

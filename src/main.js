@@ -8,6 +8,7 @@ import { FileTransfer } from '@capacitor/file-transfer';
 import { Share } from '@capacitor/share';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { createAndroidHlsPlayer } from './android-hls-video.js';
+import { vimeoEmbedSource } from './vimeoEmbed.js';
 import { AppleSignIn, SignInScope } from '@capawesome/capacitor-apple-sign-in';
 
 const API = 'https://api.irgunshiuraitorah.com';
@@ -4699,11 +4700,9 @@ function commentsHtml() {
 }
 
 function watchVimeoEmbedSrc(video, resumeSeconds = 0) {
-  const id = encodeURIComponent(String(video?.vimeoId || video?.id || '').replace(/\D/g, ''));
-  const seconds = Math.max(0, Math.floor(Number(resumeSeconds) || 0));
-  const hash = seconds > 1 ? `#t=${seconds}s` : '';
-  const muted = state.watchAudioToVideoHandoff ? '&muted=1' : '';
-  return `https://player.vimeo.com/video/${id}?playsinline=1&autoplay=1&title=0&byline=0&portrait=0${muted}${hash}`;
+  return vimeoEmbedSource(video?.vimeoId || video?.id, {
+    resumeSeconds, muted:state.watchAudioToVideoHandoff
+  });
 }
 
 async function setVimeoHandoffMuted(player, muted) {
