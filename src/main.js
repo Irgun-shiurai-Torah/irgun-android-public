@@ -8,6 +8,7 @@ import { FileTransfer } from '@capacitor/file-transfer';
 import { Share } from '@capacitor/share';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { createAndroidHlsPlayer } from './android-hls-video.js';
+import { vimeoEmbedSource } from './vimeoEmbed.js';
 import { AppleSignIn, SignInScope } from '@capawesome/capacitor-apple-sign-in';
 
 const API = 'https://api.irgunshiuraitorah.com';
@@ -3445,7 +3446,7 @@ function shell(content) {
 
 function clearPersistentVideoMount() {
   if (!persistentVideoMount) return;
-  persistentVideoMount.replaceChildren();
+  persistentVideoMount.textContent = '';
   persistentVideoMount.className = '';
   state.watchHostedExternally = false;
   document.body.classList.remove('irgun-watch-mini-hosted');
@@ -3514,7 +3515,7 @@ function hostCurrentWatchOverlay(mode = 'full') {
   if (!overlay) {
     overlay = document.querySelector('#app .watch-overlay');
     if (!overlay) return false;
-    persistentVideoMount.replaceChildren();
+    persistentVideoMount.textContent = '';
     // This happens BEFORE initWatchVimeo() on first open, so the iframe reaches
     // its permanent host before playback starts. After that it is never moved.
     persistentVideoMount.appendChild(overlay);
@@ -4699,11 +4700,9 @@ function commentsHtml() {
 }
 
 function watchVimeoEmbedSrc(video, resumeSeconds = 0) {
-  const id = encodeURIComponent(String(video?.vimeoId || video?.id || '').replace(/\D/g, ''));
-  const seconds = Math.max(0, Math.floor(Number(resumeSeconds) || 0));
-  const hash = seconds > 1 ? `#t=${seconds}s` : '';
-  const muted = state.watchAudioToVideoHandoff ? '&muted=1' : '';
-  return `https://player.vimeo.com/video/${id}?playsinline=1&autoplay=1&title=0&byline=0&portrait=0${muted}${hash}`;
+  return vimeoEmbedSource(video?.vimeoId || video?.id, {
+    resumeSeconds, muted:state.watchAudioToVideoHandoff
+  });
 }
 
 async function setVimeoHandoffMuted(player, muted) {
@@ -8214,20 +8213,6 @@ function loadWatchVimeoSdk() {
   return watchVimeoSdkLoad;
 }
 
-function showWatchHlsFallback(frame, error) {
-  const card = frame?.closest('.watch-player-card');
-  if (!card) return;
-  let note = card.querySelector('.watch-hls-fallback-note');
-  if (!note) {
-    note = document.createElement('div');
-    note.className = 'watch-hls-fallback-note';
-    note.setAttribute('role', 'status');
-    card.appendChild(note);
-  }
-  const reason = String(error?.message || 'video source unavailable').slice(0, 100);
-  note.textContent = `HLS could not start (${reason}). Playing Vimeo.`;
-}
-
 // render() schedules an initialization, and openWatch() starts one immediately.
 // Coalesce them before the asynchronous source lookup can move the same iframe
 // into two different HLS stages. A fallback increments the generation, so it
@@ -8277,7 +8262,6 @@ async function initWatchVimeoOnce(userInitiated = false) {
             if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video' || videoId(state.watchVideo) !== videoKey) return;
             if (directOnly) { console.error('[Playback] Drive video HLS and MP4 failed:', error); return; }
             console.warn('[Playback] HLS and MP4 failed; switching to Vimeo:', error);
-            showWatchHlsFallback(frame, error);
             state.watchVideoForceVimeoId = videoKey;
             state.watchVimeoGeneration += 1;
             const fallbackGeneration = state.watchVimeoGeneration;
@@ -8294,7 +8278,6 @@ async function initWatchVimeoOnce(userInitiated = false) {
       } catch (error) {
         if (directOnly) { console.error('[Playback] Drive video unavailable:', error); frame.style.display='none'; frame.parentElement?.insertAdjacentHTML('beforeend', '<p class="watch-video-error">Video is processing or temporarily unavailable. Please try again later.</p>'); return; }
         console.warn('[Playback] Direct HLS unavailable; using Vimeo:', error);
-        showWatchHlsFallback(frame, error);
       }
     }
     if (!player) {
@@ -8491,7 +8474,6 @@ async function initWatchVimeoOnce(userInitiated = false) {
       state.watchVimeoReady = false;
       if (!directOnly && player?.isIrgunHlsPlayer && state.watchVideoForceVimeoId !== videoKey && Capacitor.getPlatform() === 'android') {
         console.warn('[Playback] HLS/MP4 could not start; retrying with Vimeo:', error);
-        showWatchHlsFallback(frame, error);
         state.watchVideoForceVimeoId = videoKey;
         state.watchVimeoGeneration += 1;
         const fallbackGeneration = state.watchVimeoGeneration;

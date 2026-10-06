@@ -166,6 +166,14 @@ a { color: inherit; text-decoration: none; }
 .watch-scroll { height: calc(100vh - 56px - env(safe-area-inset-top)); overflow: auto; padding-bottom: 30px; }
 .watch-player-card { background: #07111f; }
 .watch-hls-stage { position:relative; display:block; width:100%; aspect-ratio:16/9; overflow:hidden; background:#0a1728; }
+/* Android 11 can still use WebView 83, before CSS aspect-ratio. Every stage
+   child is absolute, so reserve its height instead of collapsing the video. */
+@supports not (aspect-ratio:16/9) {
+  .watch-hls-stage::before { content:""; display:block; padding-top:56.25%; }
+  .watch-hls-stage:fullscreen::before,
+  #persistentVideoMount.watch-mini-host .watch-hls-stage::before,
+  body.irgun-system-pip #persistentVideoMount.watch-video-host .watch-hls-stage::before { display:none; }
+}
 .watch-hls-stage:fullscreen { width:100vw; height:100vh; aspect-ratio:auto; }
 #persistentVideoMount.watch-mini-host .watch-hls-stage,
 body.irgun-system-pip #persistentVideoMount.watch-video-host .watch-hls-stage { position:absolute; inset:0; width:100%; height:100%; aspect-ratio:auto; }
@@ -188,7 +196,6 @@ body.irgun-system-pip #persistentVideoMount.watch-video-host .watch-hls-seek-hin
 .watch-hls-select option { color:#122035; }
 .watch-hls-loading { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; background:linear-gradient(155deg,rgba(7,17,31,.93),rgba(13,38,62,.88)); color:#fff; font-size:13px; font-weight:800; pointer-events:none; }
 .watch-hls-loading[hidden] { display:none!important; }
-.watch-hls-fallback-note { padding:7px 12px; background:#142b43; color:#f1d28d; font-size:12px; line-height:1.35; }
 .watch-hls-loading-logo { width:min(47%,235px); max-height:48%; object-fit:contain; filter:drop-shadow(0 4px 18px rgba(0,0,0,.28)); }
 .watch-hls-loading-caption { display:flex; align-items:center; gap:10px; }
 .watch-hls-seek-hint { position:absolute; z-index:6; left:16%; top:50%; transform:translate(-50%,-50%); padding:9px 12px; border-radius:18px; background:rgba(8,24,43,.8); color:#fff; font-size:13px; font-weight:800; pointer-events:none; opacity:0; transition:opacity .15s; }
@@ -2571,9 +2578,15 @@ body { min-width:0; }
 #persistentVideoMount.watch-full-host .watch-hls-stage > video.watch-direct-hls-video {
   position:absolute !important;
   inset:0 !important;
+  top:0 !important;
+  right:0 !important;
+  bottom:0 !important;
+  left:0 !important;
   width:100% !important;
   height:100% !important;
   max-height:none !important;
   aspect-ratio:auto !important;
   object-fit:contain !important;
 }
+/* Explicit edges also work before the inset shorthand was implemented. */
+.watch-hls-loading { top:0; right:0; bottom:0; left:0; }
