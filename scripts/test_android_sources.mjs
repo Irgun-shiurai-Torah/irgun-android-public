@@ -97,3 +97,75 @@ test('old Android WebView clears the persistent host on close',()=>{
   const f=hostFixture();f.host('full');f.clear();
   assert.equal(f.mount.children.length,0);assert.equal(f.overlay.parentElement,null);assert.equal(f.state.watchHostedExternally,false);
 });
+
+function handoffFixture({movingClock=true,movingFrames=true,paused=false}={}) {
+  let now=0, position=600, frames=100;
+  const state={watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',watchMode:'video',
+    watchAudioToVideoTargetSeconds:600,watchVideo:{id:'lecture'}};
+  const element={paused,seeking:false,readyState:4,videoWidth:1920,getVideoPlaybackQuality:()=>({totalVideoFrames:frames})};
+  const player={getCurrentTime:async()=>position,getPaused:async()=>element.paused,getVideoElement:()=>element,
+    setCurrentTime:async n=>{position=n;return n;}};
+  const context={state,console:{warn(){}},Date:{now:()=>now},usesNativeUnifiedAudio:()=>true,
+    playbackPositionSeconds:()=>600+now/1000,
+    setTimeout:callback=>{now+=350;if(movingClock&&!paused)position+=.35;if(movingFrames&&!paused)frames+=10;callback();}};
+  const start=mainSource.indexOf('async function waitForVimeoHandoffReady(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function videoAudioPlaybackItem(',start))+'\nthis.wait=waitForVimeoHandoffReady;',context);
+  return {state,player,wait:context.wait};
+}
+test('Audio handoff rejects an advancing clock with frozen decoded frames',async()=>{
+  const f=handoffFixture({movingFrames:false});assert.equal(await f.wait(f.player,'lecture',800),null);
+});
+test('Audio handoff rejects a stationary destination and preserves explicit Pause',async()=>{
+  for(const options of [{movingClock:false,movingFrames:false},{paused:true}]){
+    const f=handoffFixture(options);assert.equal(await f.wait(f.player,'lecture',800),null);
+  }
+});
+test('Audio handoff accepts a synchronized destination only after clocks and frames advance',async()=>{
+  const f=handoffFixture();assert.ok(await f.wait(f.player,'lecture',800)>600);
+});
+test('cancelled native handoff cannot masquerade as a completed transfer',async()=>{
+  const f=handoffFixture();f.state.watchAudioToVideoHandoff=false;
+  assert.equal(await f.wait(f.player,'lecture',800),null);
+});
+test('live Audio callbacks keep the destination visible while handoff buffers',()=>{
+  const state={watchVideo:{id:'lecture'},watchMode:'video',watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',
+    playbackAuthorityFence:{mode:'VIDEO',lectureId:'lecture',expiresAt:Date.now()+5000}};
+  const context={state,Date,videoId:v=>v.id,ensureNativeAudioCurrentForWatch(){throw Error('unexpected reconciliation');}};
+  const extract=(name,next)=>mainSource.slice(mainSource.indexOf(`function ${name}(`),mainSource.indexOf(next,mainSource.indexOf(`function ${name}(`)));
+  runInNewContext(extract('reconcileNativeWatchAudio','const PlaybackController =')+extract('nativeSnapshotConflicts','function nativeAudioPositionSeconds')+'\nthis.reconcile=reconcileNativeWatchAudio;this.conflicts=nativeSnapshotConflicts;',context);
+  const snapshot={mode:'AUDIO',lectureId:'lecture',currentPositionMs:601000};
+  assert.equal(context.conflicts(snapshot),false);context.reconcile(snapshot);assert.equal(state.watchMode,'video');
+});
+
+function resumeFixture({ready=600.35,commitFails=false}={}) {
+  const item={id:'lecture'};
+  const state={current:item,watchResumeSeconds:600,nativePlayback:{mode:'AUDIO'},playbackSpeed:1};
+  const events=[];
+  const player={getCurrentTime:async()=>600,setPlaybackRate:async()=>{},play:()=>new Promise(()=>{}),pause:async()=>events.push('pause')};
+  state.watchVimeo=player;
+  const context={state,console:{debug(){},warn(){}},setTimeout(){},usesNativeUnifiedAudio:()=>true,
+    playbackPositionSeconds:()=>600,setVimeoHandoffMuted:async(_,muted)=>events.push(muted?'mute':'unmute'),
+    waitForVimeoHandoffReady:async()=>{events.push('verify');return ready;},
+    finishAudioToVideoHandoff:async()=>{events.push('commit');state.current=null;state.nativePlayback.mode='VIDEO';if(commitFails)throw Error('native error');return true;},
+    nativeMediaPlugin:()=>({getState:async()=>({...state.nativePlayback,audioPositionMs:603000})}),
+    setPlaybackAuthorityFence:mode=>events.push(mode),
+    PlaybackController:{startAudioAt:async(position,playing,options)=>{events.push({position,playing,volume:options.volume});state.nativePlayback.mode='AUDIO';}},
+    refreshPersistentMiniVideoChrome(){},videoAudioPlaybackItem:()=>item};
+  const start=mainSource.indexOf('async function resumeParkedVideoFromAudio(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function watchHtml(',start))+'\nthis.resume=resumeParkedVideoFromAudio;',context);
+  return {state,item,events,resume:()=>context.resume({duration:3663},'lecture',true)};
+}
+test('pending WebView play promise does not abort a destination with moving frames',async()=>{
+  const f=resumeFixture();assert.equal(await f.resume(),true);
+  assert.ok(f.events.indexOf('verify')<f.events.indexOf('commit'));
+});
+test('failed readiness keeps the current Audio item and never commits VIDEO',async()=>{
+  const f=resumeFixture({ready:null});assert.equal(await f.resume(),false);
+  assert.equal(f.state.current,f.item);assert.equal(f.state.nativePlayback.mode,'AUDIO');assert.ok(!f.events.includes('commit'));
+});
+test('partial native commit rolls back to audible Audio at its advancing shadow position',async()=>{
+  const f=resumeFixture({commitFails:true});assert.equal(await f.resume(),false);
+  assert.equal(f.state.current,f.item);assert.equal(f.state.nativePlayback.mode,'AUDIO');
+  assert.deepEqual(f.events.find(e=>typeof e==='object'),{position:603,playing:true,volume:1});
+  assert.ok(f.events.lastIndexOf('mute')<f.events.indexOf('AUDIO'));
+});
