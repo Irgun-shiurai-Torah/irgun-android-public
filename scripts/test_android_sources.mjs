@@ -17,10 +17,14 @@ class Element extends EventTarget {
   querySelector(selector){if(!this.nodes.has(selector)) this.nodes.set(selector, new Element('button')); return this.nodes.get(selector);}
   replaceWith(child){child.parentElement = this.parentElement;}
 }
-async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0) {
+async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {nativeHls = true} = {}) {
   const original = { document:globalThis.document, window:globalThis.window, fetch:globalThis.fetch };
   const calls = [];
-  const doc = new EventTarget(); doc.createElement = tag => new Element(tag); doc.body = new Element('body');
+  const doc = new EventTarget(); doc.createElement = tag => {
+    const element = new Element(tag);
+    if (tag === 'video') element.canPlayType = () => nativeHls ? 'maybe' : '';
+    return element;
+  }; doc.body = new Element('body');
   globalThis.document = doc;
   globalThis.window = {Hls:{isSupported:()=>false}};
   globalThis.fetch = async url => {calls.push(url);return {ok:true,json:async()=>descriptor};};
@@ -41,6 +45,10 @@ for (const id of ['1182395717','drivev-example']) test(`MP4-only shiur ${id} sta
 test('HLS remains the preferred source when both sources exist',async()=>{
   const r = await fixture({video:{hls:'https://media.example.test/master.m3u8',mp4:'https://media.example.test/video.mp4'}});
   assert.equal(r.source,'hls');assert.equal(r.url,'https://media.example.test/master.m3u8');
+});
+test('unplayable HLS uses the direct MP4 before Vimeo fallback',async()=>{
+  const r = await fixture({video:{hls:'https://media.example.test/master.m3u8',mp4:'https://media.example.test/video.mp4'}},'1233236785:585d5d53db',0,{nativeHls:false});
+  assert.equal(r.source,'mp4');assert.equal(r.url,'https://media.example.test/video.mp4');
 });
 test('no direct source still rejects so the existing Vimeo fallback can run',async()=>{
   await assert.rejects(fixture({video:{hls:null,mp4:null}}),/No HLS or MP4 source is ready/);
