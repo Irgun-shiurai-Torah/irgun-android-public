@@ -354,7 +354,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       // They cannot prove that a picture advanced; avoid falsely rejecting HLS.
       visible = true;
     }
-    if (!visible && !hasVimeoFallback && activeSource === sources.hls && sources.mp4) {
+    if (!visible && activeSource === sources.hls && sources.mp4) {
       const position = Math.max(0, Number(video.currentTime) || initialPosition);
       console.warn('[Playback] Drive HLS did not produce moving video frames; trying MP4');
       recoveryInProgress = true;
@@ -471,10 +471,6 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     failed = true;
     const position = Math.max(0, Number(video.currentTime) || initialPosition);
     const shouldPlay = !video.paused;
-    if (hasVimeoFallback) {
-      adapter.reportError(new Error(`HLS playback failed: ${info?.details || 'fatal error'}`), position, shouldPlay);
-      return;
-    }
     if (sources.mp4) {
       try {
         if (hls) { hls.destroy(); hls = null; }
@@ -507,7 +503,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       if (sources.hls) {
         try { await attachSource(sources.hls, true); }
         catch (hlsError) {
-          if (!sources.mp4 || hasVimeoFallback) throw hlsError;
+          if (!sources.mp4) throw hlsError;
           await attachSource(sources.mp4, false);
         }
       } else await attachSource(sources.mp4, false);

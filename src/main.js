@@ -4784,7 +4784,20 @@ async function finishAudioToVideoHandoff(videoKey, player = state.watchVimeo) {
 }
 
 async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
-  const deadline = Date.now() + Math.max(800, Number(timeoutMs) || 4000);
+  const startedAt = Date.now();
+  const deadline = startedAt + Math.max(800, Number(timeoutMs) || 4000);
+  const audioFocusStopped = () => usesNativeUnifiedAudio() && player?.getSourceType?.() === 'mp4' &&
+    state.nativePlayback?.mode === 'AUDIO' && state.nativePlayback.audioIsPlaying === false &&
+    state.nativePlayback.audioPlayWhenReady === false;
+  const synchronized = (position, source, tolerance) => {
+    // WebView can take audio focus even for muted video, stopping Media3. A
+    // moving destination must not be repeatedly rewound to that parked clock.
+    // Bound its lead by real elapsed playback time; wrong/old positions still fail.
+    const lead = audioFocusStopped()
+      ? Math.max(0, Date.now() - startedAt) / 1000 * (Number(state.playbackSpeed) || 1) + tolerance
+      : tolerance;
+    return position >= source - tolerance && position <= source + lead;
+  };
   let lastPosition = null;
   while (Date.now() < deadline) {
     if (!state.watchAudioToVideoHandoff || String(state.watchAudioToVideoHandoffId || '') !== String(videoKey || '')) {
@@ -4800,14 +4813,14 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
       Promise.resolve(player?.getCurrentTime?.()).catch(()=>null)
     ]);
     let videoNow = Number(current);
-    if (Number.isFinite(videoNow) && Math.abs(videoNow - sourceNow) > 0.75) {
+    if (Number.isFinite(videoNow) && !synchronized(videoNow, sourceNow, 0.75)) {
       const corrected = await Promise.race([
         Promise.resolve(player.setCurrentTime(sourceNow)).catch(()=>null),
         new Promise(resolve=>setTimeout(()=>resolve(null),900))
       ]);
       if (corrected != null && Number.isFinite(Number(corrected))) videoNow = Number(corrected);
     }
-    if (!paused && Number.isFinite(videoNow) && Math.abs(videoNow - sourceNow) <= 0.75) {
+    if (!paused && Number.isFinite(videoNow) && synchronized(videoNow, sourceNow, 0.75)) {
       // Confirm the destination clock is live, not merely a resolved play() call.
       const element = player?.getVideoElement?.();
       const frameCount = () => {
@@ -4821,7 +4834,17 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
       const framesAfter = frameCount();
       const movingPicture = !element || (!element.paused && !element.seeking && element.readyState >= 2 && element.videoWidth > 0 &&
         (framesBefore == null || (framesAfter != null && framesAfter > framesBefore)));
-      if (Number.isFinite(again) && again > videoNow + 0.05 && Math.abs(again - stillSource) <= 0.85 && movingPicture) {
+      // A long MP4 seek can present its first frames before the following byte
+      // range arrives. Keep Audio audible until the destination has a runway,
+      // rather than committing over a picture that immediately buffers again.
+      let bufferedAhead = player?.getSourceType?.() !== 'mp4';
+      if (!bufferedAhead && element) {
+        const required = Math.min(12, Math.max(0, Number(element.duration) - again - 0.25));
+        for (let i = 0; i < (element.buffered?.length || 0); i++) {
+          if (element.buffered.start(i) <= again && element.buffered.end(i) >= again + required) bufferedAhead = true;
+        }
+      }
+      if (Number.isFinite(again) && again > videoNow + 0.05 && synchronized(again, stillSource, 0.85) && movingPicture && bufferedAhead) {
         return again;
       }
       lastPosition = again;
@@ -5114,6 +5137,8 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
       state.watchAudioToVideoTargetSeconds = shouldPlay ? target : 0;
       console.debug(`[Playback] AUDIO -> VIDEO requested at ${target.toFixed(2)}s`);
       await setVimeoHandoffMuted(player, true);
+      const destination = player?.getVideoElement?.();
+      if (destination) destination.preload = 'auto';
       if (typeof player.setPlaybackRate === 'function') await player.setPlaybackRate(Number(state.playbackSpeed)||1).catch(()=>{});
 
       let current = await Promise.race([
@@ -5134,7 +5159,7 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
         // A WebView play promise may stay pending during a long-distance seek.
         // Keep Audio authoritative while actual clocks/frames establish readiness.
         Promise.resolve(player.play()).catch(error => console.debug('[Playback] destination play pending/failed', error));
-        const readyPosition = await waitForVimeoHandoffReady(player, id, 8000);
+        const readyPosition = await waitForVimeoHandoffReady(player, id, player?.getSourceType?.() === 'mp4' ? 15000 : 8000);
         if (readyPosition == null || !Number.isFinite(Number(readyPosition))) throw new Error('Vimeo did not become ready at the synchronized position');
         current = Number(readyPosition);
         const finished = await finishAudioToVideoHandoff(id, player);
@@ -5166,7 +5191,7 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
       state.current = audioItem || videoAudioPlaybackItem(video, id);
       setPlaybackAuthorityFence('AUDIO', id, 5000);
       const snapshot = await Promise.resolve(nativeMediaPlugin().getState()).catch(()=>state.nativePlayback);
-      if (String(snapshot?.mode || '') === 'VIDEO') {
+      if (String(snapshot?.mode || '') === 'VIDEO' || (String(snapshot?.mode || '') === 'AUDIO' && shouldPlay && !snapshot?.audioPlayWhenReady)) {
         const livePosition = Math.max(0, Number(snapshot.audioPositionMs) || Number(snapshot.currentPositionMs) || 0) / 1000;
         await PlaybackController.startAudioAt(livePosition, shouldPlay, { volume:1, commit:true }).catch(error => console.warn('[Playback] Audio rollback failed', error));
       }
