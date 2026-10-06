@@ -102,21 +102,15 @@ async function getAndroidHlsSource(apiBase, videoId) {
       clearTimeout(timer);
     }
   };
-  let sources = await lookup(false);
-  if (!sources.hls && !String(videoId).startsWith('drivev-')) {
-    // A cold Worker can temporarily miss the Drive HLS map. Check once more
-    // before concluding that a Vimeo-backed lecture lacks an HLS copy.
-    await new Promise(resolve => setTimeout(resolve, 700));
-    sources = await lookup(true);
-  }
-  return sources;
+  // New shiurim may have an MP4 before their HLS backup is ready. Either direct
+  // source is playable; a missing HLS copy must not discard a valid MP4.
+  return lookup(false);
 }
 
 export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, poster = '', resumeSeconds = 0, onError, onMinimize } = {}) {
   if (!apiBase || !videoId || !iframe || platform !== 'android') return null;
   const sources = await getAndroidHlsSource(String(apiBase).replace(/\/$/, ''), videoId);
   if (!sources) return null;
-  if (!sources.hls && !String(videoId).startsWith('drivev-')) throw new Error('HLS source was not listed for this lecture');
 
   const container = iframe.parentElement;
   if (!container) return null;

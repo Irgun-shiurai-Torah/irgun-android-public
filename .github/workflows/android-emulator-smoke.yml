@@ -47,7 +47,7 @@ jobs:
           "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
       - run: npm ci
       - name: Check tab gesture regressions
-        run: node --test scripts/test_tab_swipes.cjs
+        run: node --test scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs
       - run: npm run build
       - run: npx cap sync android
       - run: chmod +x android/gradlew
