@@ -18,3 +18,4 @@ adb shell am start -n org.irgunshiuraitorah.app/.SplashActivity
 sleep 4
 adb exec-out screencap -p > emulator-report/after-splash.png || true
 node scripts/android-emulator-inspect.mjs | tee emulator-report/webview.json
+node scripts/android-emulator-tabs.mjs | tee emulator-report/tab-swipes.log

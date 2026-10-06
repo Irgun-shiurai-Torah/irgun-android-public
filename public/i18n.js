@@ -669,7 +669,7 @@
     "Could not reset password. Please request a new reset link.": "לא ניתן לאפס את הסיסמה. בקשו קישור איפוס חדש.",
     "Sort": "מיון",
     "Purchase": "רכישה",
-    "Shiurim watched & listened to": "שיעורים שנצפו והושמעו",
+    "Shiurim played": "שיעורים שהושמעו",
     "Torah lectures worldwide": "שיעורי תורה ברחבי העולם",
     "No upcoming shiur is posted yet.": "עדיין לא פורסם שיעור קרוב.",
     "Open the schedule for the current flyers.": "פתחו את לוח הזמנים של המודעות הנוכחיות.",
