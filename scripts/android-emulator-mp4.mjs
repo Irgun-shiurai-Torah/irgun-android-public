@@ -54,10 +54,14 @@ try {
 
   const read = async () => JSON.parse(await evaluate(`JSON.stringify((()=>{
     const v=document.querySelector('#watchDirectHlsVideo');
+    const r=v?.getBoundingClientRect(),stage=v?.closest('.watch-hls-stage')?.getBoundingClientRect();
     return {title:document.querySelector('.watch-overlay')?.innerText?.slice(0,900),
       iframeSrc:document.querySelector('#watchVimeoFrame')?.getAttribute('src'),
       video:v?{src:v.currentSrc||v.src,time:v.currentTime,paused:v.paused,ready:v.readyState,width:v.videoWidth,
-        frames:v.getVideoPlaybackQuality?.().totalVideoFrames??v.webkitDecodedFrameCount,error:v.error?.code}:null,
+        frames:v.getVideoPlaybackQuality?.().totalVideoFrames??v.webkitDecodedFrameCount,error:v.error?.code,
+        rect:r?{x:r.x,y:r.y,width:r.width,height:r.height}:null,
+        stage:stage?{x:stage.x,y:stage.y,width:stage.width,height:stage.height}:null}:null,
+      runtime:{userAgent:navigator.userAgent,aspectRatio:CSS.supports('aspect-ratio','16/9')},
       diagnostic:!!document.querySelector('.watch-hls-fallback-note'),
       text:document.querySelector('#app')?.innerText?.slice(0,300)};
   })())`));
@@ -110,6 +114,9 @@ try {
   }
   await tapVisible(selector);
   await wait(s=>s.video?.ready>=2 && s.video.width>0);
+  const loaded=await read();report.loaded=loaded;
+  assert.ok(loaded.video.rect.width>100 && loaded.video.rect.height>50,'Direct video must occupy a visible surface');
+  assert.ok(loaded.video.rect.y>=0 && loaded.video.rect.y+loaded.video.rect.height<=bottom-top,'Direct video must fit the native viewport');
   const embed=new URL((await read()).iframeSrc);
   const [vimeoNumber,privacyHash]=String(target.vimeoId||target.id).split(':');
   assert.equal(embed.pathname,`/video/${vimeoNumber}`,'App must keep the numeric Vimeo ID separate');
@@ -128,10 +135,10 @@ try {
   await wait(s=>s.video&&!s.video.paused&&s.video.time>0);
   const moving=async label=>{
     const before=await read();await delay(3500);const after=await read();
+    report.checks.push({label,before,after});
     assert.ok(after.video.time>before.video.time+1,`${label}: media clock must advance`);
     assert.ok(after.video.width>0 && after.video.frames>=before.video.frames+2,`${label}: decoded video frames must advance`);
     assert.equal(after.video.error,undefined);assert.equal(after.diagnostic,false,'Internal fallback banner must be absent');
-    report.checks.push({label,before:before.video,after:after.video});
   };
   await moving('Reported shiur starts with moving direct video');
   const actual=(await read()).video.src;
