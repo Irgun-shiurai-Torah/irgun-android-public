@@ -8214,20 +8214,6 @@ function loadWatchVimeoSdk() {
   return watchVimeoSdkLoad;
 }
 
-function showWatchHlsFallback(frame, error) {
-  const card = frame?.closest('.watch-player-card');
-  if (!card) return;
-  let note = card.querySelector('.watch-hls-fallback-note');
-  if (!note) {
-    note = document.createElement('div');
-    note.className = 'watch-hls-fallback-note';
-    note.setAttribute('role', 'status');
-    card.appendChild(note);
-  }
-  const reason = String(error?.message || 'video source unavailable').slice(0, 100);
-  note.textContent = `HLS could not start (${reason}). Playing Vimeo.`;
-}
-
 // render() schedules an initialization, and openWatch() starts one immediately.
 // Coalesce them before the asynchronous source lookup can move the same iframe
 // into two different HLS stages. A fallback increments the generation, so it
@@ -8277,7 +8263,6 @@ async function initWatchVimeoOnce(userInitiated = false) {
             if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video' || videoId(state.watchVideo) !== videoKey) return;
             if (directOnly) { console.error('[Playback] Drive video HLS and MP4 failed:', error); return; }
             console.warn('[Playback] HLS and MP4 failed; switching to Vimeo:', error);
-            showWatchHlsFallback(frame, error);
             state.watchVideoForceVimeoId = videoKey;
             state.watchVimeoGeneration += 1;
             const fallbackGeneration = state.watchVimeoGeneration;
@@ -8294,7 +8279,6 @@ async function initWatchVimeoOnce(userInitiated = false) {
       } catch (error) {
         if (directOnly) { console.error('[Playback] Drive video unavailable:', error); frame.style.display='none'; frame.parentElement?.insertAdjacentHTML('beforeend', '<p class="watch-video-error">Video is processing or temporarily unavailable. Please try again later.</p>'); return; }
         console.warn('[Playback] Direct HLS unavailable; using Vimeo:', error);
-        showWatchHlsFallback(frame, error);
       }
     }
     if (!player) {
@@ -8491,7 +8475,6 @@ async function initWatchVimeoOnce(userInitiated = false) {
       state.watchVimeoReady = false;
       if (!directOnly && player?.isIrgunHlsPlayer && state.watchVideoForceVimeoId !== videoKey && Capacitor.getPlatform() === 'android') {
         console.warn('[Playback] HLS/MP4 could not start; retrying with Vimeo:', error);
-        showWatchHlsFallback(frame, error);
         state.watchVideoForceVimeoId = videoKey;
         state.watchVimeoGeneration += 1;
         const fallbackGeneration = state.watchVimeoGeneration;

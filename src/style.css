@@ -188,7 +188,6 @@ body.irgun-system-pip #persistentVideoMount.watch-video-host .watch-hls-seek-hin
 .watch-hls-select option { color:#122035; }
 .watch-hls-loading { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; background:linear-gradient(155deg,rgba(7,17,31,.93),rgba(13,38,62,.88)); color:#fff; font-size:13px; font-weight:800; pointer-events:none; }
 .watch-hls-loading[hidden] { display:none!important; }
-.watch-hls-fallback-note { padding:7px 12px; background:#142b43; color:#f1d28d; font-size:12px; line-height:1.35; }
 .watch-hls-loading-logo { width:min(47%,235px); max-height:48%; object-fit:contain; filter:drop-shadow(0 4px 18px rgba(0,0,0,.28)); }
 .watch-hls-loading-caption { display:flex; align-items:center; gap:10px; }
 .watch-hls-seek-hint { position:absolute; z-index:6; left:16%; top:50%; transform:translate(-50%,-50%); padding:9px 12px; border-radius:18px; background:rgba(8,24,43,.8); color:#fff; font-size:13px; font-weight:800; pointer-events:none; opacity:0; transition:opacity .15s; }
