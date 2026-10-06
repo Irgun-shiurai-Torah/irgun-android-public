@@ -3446,7 +3446,7 @@ function shell(content) {
 
 function clearPersistentVideoMount() {
   if (!persistentVideoMount) return;
-  persistentVideoMount.replaceChildren();
+  persistentVideoMount.textContent = '';
   persistentVideoMount.className = '';
   state.watchHostedExternally = false;
   document.body.classList.remove('irgun-watch-mini-hosted');
@@ -3515,7 +3515,7 @@ function hostCurrentWatchOverlay(mode = 'full') {
   if (!overlay) {
     overlay = document.querySelector('#app .watch-overlay');
     if (!overlay) return false;
-    persistentVideoMount.replaceChildren();
+    persistentVideoMount.textContent = '';
     // This happens BEFORE initWatchVimeo() on first open, so the iframe reaches
     // its permanent host before playback starts. After that it is never moved.
     persistentVideoMount.appendChild(overlay);

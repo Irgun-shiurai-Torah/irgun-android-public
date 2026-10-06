@@ -328,7 +328,8 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   });
   const updateQualityOptions = () => {
     if (!hls) return;
-    qualitySelect.replaceChildren(new Option('Auto', '-1'));
+    qualitySelect.textContent = '';
+    qualitySelect.add(new Option('Auto', '-1'));
     for (const [index, level] of hls.levels.entries()) {
       qualitySelect.add(new Option(level.height ? `${level.height}p` : `Quality ${index + 1}`, String(index)));
     }

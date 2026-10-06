@@ -65,3 +65,35 @@ test('invalid Vimeo IDs never turn into a different numeric video',()=>{
   assert.equal(vimeoEmbedSource('drivev-123'),'about:blank');
   assert.equal(vimeoEmbedSource('123:bad/hash'),'about:blank');
 });
+
+// Exercise the production host lifecycle with an old-WebView DOM surface that
+// deliberately has no replaceChildren, while keeping the same iframe identity.
+const {readFileSync} = await import('node:fs');
+const {runInNewContext} = await import('node:vm');
+const mainSource = readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
+function hostFixture() {
+  class Node {
+    constructor(){this.children=[];this.classList={remove(){},toggle(){}};}
+    set textContent(value){assert.equal(value,'');for(const child of this.children)child.parentElement=null;this.children=[];}
+    appendChild(child){if(child.parentElement)child.parentElement.children=child.parentElement.children.filter(c=>c!==child);child.parentElement=this;this.children.push(child);}
+    querySelector(selector){return selector==='.watch-overlay'?this.children.find(c=>c===overlay)||null:selector==='#watchVimeoFrame'?this.children.includes(overlay)?iframe:null:null;}
+  }
+  const mount=new Node(),app=new Node(),overlay=new Node(),iframe={};app.appendChild(overlay);
+  const state={watchVideo:{id:'1233236785:585d5d53db'},watchMode:'video'};
+  const presentations=[];
+  const context={persistentVideoMount:mount,state,document:{body:new Node(),querySelector:()=>app.children.includes(overlay)?overlay:null},bindPersistentVideoChrome(){},PlaybackController:{setPresentation:async mode=>presentations.push(mode)}};
+  const extract=(name,next)=>mainSource.slice(mainSource.indexOf(`function ${name}(`),mainSource.indexOf(next,mainSource.indexOf(`function ${name}(`)));
+  runInNewContext(extract('clearPersistentVideoMount','function refreshPersistentMiniVideoChrome')+extract('hostCurrentWatchOverlay','async function resetWatchVimeoPlayer')+'\nthis.host=hostCurrentWatchOverlay;this.clear=clearPersistentVideoMount;',context);
+  return {mount,overlay,state,iframe,presentations,host:context.host,clear:context.clear};
+}
+test('old Android WebView hosts full/mini video without rebuilding its iframe',()=>{
+  const f=hostFixture();assert.equal(f.mount.replaceChildren,undefined);
+  assert.equal(f.host('full'),true);assert.equal(f.mount.children[0],f.overlay);
+  assert.equal(f.host('mini'),true);assert.equal(f.mount.children[0],f.overlay);
+  assert.equal(f.mount.querySelector('#watchVimeoFrame'),f.iframe);
+  assert.equal(f.state.watchMinimized,true);assert.deepEqual(f.presentations,['FULL','MINI']);
+});
+test('old Android WebView clears the persistent host on close',()=>{
+  const f=hostFixture();f.host('full');f.clear();
+  assert.equal(f.mount.children.length,0);assert.equal(f.overlay.parentElement,null);assert.equal(f.state.watchHostedExternally,false);
+});
