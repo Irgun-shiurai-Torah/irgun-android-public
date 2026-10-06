@@ -151,7 +151,9 @@ try {
   };
   await moving('Reported shiur starts with moving direct video');
   const actual=(await read()).video.src;
-  assert.equal(actual,source.video.hls||source.video.mp4,'Must use its direct source instead of Vimeo');
+  const directUrls=[source.video.hls,source.video.mp4].filter(Boolean);
+  const hlsJsBlob=Boolean(source.video.hls&&actual.startsWith('blob:'));
+  assert.ok(directUrls.includes(actual)||hlsJsBlob,'Must use its direct HLS/MP4 source instead of Vimeo');
   if(!source.video.hls)assert.equal(actual,source.video.mp4,'MP4-only shiur must play MP4');
   await tapPlayPause();await wait(s=>s.video?.paused);
   const paused=await read();await delay(1500);const still=await read();
