@@ -123,6 +123,19 @@ test('Audio handoff rejects a stationary destination and preserves explicit Paus
 test('Audio handoff accepts a synchronized destination only after clocks and frames advance',async()=>{
   const f=handoffFixture();assert.ok(await f.wait(f.player,'lecture',800)>600);
 });
+test('MP4 handoff waits for the following byte range before transferring sound',async()=>{
+  for(const [ahead,expected] of [[1,false],[15,true]]) {
+    const f=handoffFixture();const element=f.player.getVideoElement();element.duration=3663;
+    element.buffered={length:1,start:()=>590,end:()=>600+ahead};f.player.getSourceType=()=> 'mp4';
+    const position=await f.wait(f.player,'lecture',800);
+    assert.equal(position!=null,expected);
+  }
+});
+test('MP4 handoff near the end does not require buffer beyond the lecture',async()=>{
+  const f=handoffFixture();const element=f.player.getVideoElement();element.duration=605;
+  element.buffered={length:1,start:()=>590,end:()=>605};f.player.getSourceType=()=> 'mp4';
+  assert.ok(await f.wait(f.player,'lecture',800)>600);
+});
 test('cancelled native handoff cannot masquerade as a completed transfer',async()=>{
   const f=handoffFixture();f.state.watchAudioToVideoHandoff=false;
   assert.equal(await f.wait(f.player,'lecture',800),null);

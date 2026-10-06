@@ -4821,7 +4821,17 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
       const framesAfter = frameCount();
       const movingPicture = !element || (!element.paused && !element.seeking && element.readyState >= 2 && element.videoWidth > 0 &&
         (framesBefore == null || (framesAfter != null && framesAfter > framesBefore)));
-      if (Number.isFinite(again) && again > videoNow + 0.05 && Math.abs(again - stillSource) <= 0.85 && movingPicture) {
+      // A long MP4 seek can present its first frames before the following byte
+      // range arrives. Keep Audio audible until the destination has a runway,
+      // rather than committing over a picture that immediately buffers again.
+      let bufferedAhead = player?.getSourceType?.() !== 'mp4';
+      if (!bufferedAhead && element) {
+        const required = Math.min(12, Math.max(0, Number(element.duration) - again - 0.25));
+        for (let i = 0; i < (element.buffered?.length || 0); i++) {
+          if (element.buffered.start(i) <= again && element.buffered.end(i) >= again + required) bufferedAhead = true;
+        }
+      }
+      if (Number.isFinite(again) && again > videoNow + 0.05 && Math.abs(again - stillSource) <= 0.85 && movingPicture && bufferedAhead) {
         return again;
       }
       lastPosition = again;
@@ -5114,6 +5124,8 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
       state.watchAudioToVideoTargetSeconds = shouldPlay ? target : 0;
       console.debug(`[Playback] AUDIO -> VIDEO requested at ${target.toFixed(2)}s`);
       await setVimeoHandoffMuted(player, true);
+      const destination = player?.getVideoElement?.();
+      if (destination) destination.preload = 'auto';
       if (typeof player.setPlaybackRate === 'function') await player.setPlaybackRate(Number(state.playbackSpeed)||1).catch(()=>{});
 
       let current = await Promise.race([
@@ -5134,7 +5146,7 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
         // A WebView play promise may stay pending during a long-distance seek.
         // Keep Audio authoritative while actual clocks/frames establish readiness.
         Promise.resolve(player.play()).catch(error => console.debug('[Playback] destination play pending/failed', error));
-        const readyPosition = await waitForVimeoHandoffReady(player, id, 8000);
+        const readyPosition = await waitForVimeoHandoffReady(player, id, player?.getSourceType?.() === 'mp4' ? 15000 : 8000);
         if (readyPosition == null || !Number.isFinite(Number(readyPosition))) throw new Error('Vimeo did not become ready at the synchronized position');
         current = Number(readyPosition);
         const finished = await finishAudioToVideoHandoff(id, player);

@@ -2590,3 +2590,9 @@ body { min-width:0; }
 }
 /* Explicit edges also work before the inset shorthand was implemented. */
 .watch-hls-loading { top:0; right:0; bottom:0; left:0; }
+
+/* Keep phone headers compact while retaining the system safe area. */
+@media (max-width: 600px) {
+  .topbar { padding-top:calc(6px + env(safe-area-inset-top)); padding-bottom:6px; }
+  .app-shell.has-sponsor-ribbon .topbar { padding-top:6px; }
+}

@@ -59,6 +59,7 @@ try {
       iframeSrc:document.querySelector('#watchVimeoFrame')?.getAttribute('src'),
       video:v?{src:v.currentSrc||v.src,time:v.currentTime,paused:v.paused,ready:v.readyState,width:v.videoWidth,muted:v.muted,volume:v.volume,
         frames:v.getVideoPlaybackQuality?.().totalVideoFrames??v.webkitDecodedFrameCount,error:v.error?.code,
+        seeking:v.seeking,rate:v.playbackRate,buffered:Array.from({length:v.buffered.length},(_,i)=>[v.buffered.start(i),v.buffered.end(i)]),
         rect:r?{x:r.x,y:r.y,width:r.width,height:r.height}:null,
         stage:stage?{x:stage.x,y:stage.y,width:stage.width,height:stage.height}:null}:null,
       runtime:{userAgent:navigator.userAgent,aspectRatio:CSS.supports('aspect-ratio','16/9')},
@@ -221,12 +222,18 @@ try {
   await tapVisible('[data-watch-mode="video"]');
   await wait(videoPlaying);
   const videoAtSwitch=await read();oneAudible(videoAtSwitch,'video');
+  report.videoHandoff={before:audioBeforeVideo,start:videoAtSwitch,samples:[]};
   const elapsed=(Date.now()-switchStarted)/1000;
   assert.ok(videoAtSwitch.video.time>=audioBeforeVideo.native.audioPositionMs/1000-2,'Video must not jump back after the audio seek');
   assert.ok(videoAtSwitch.video.time<=audioBeforeVideo.native.audioPositionMs/1000+elapsed+4,'Video must preserve the live audio position');
   screenshot('video-after-ten-minute-audio-seek');
   // Exactly the requested 10-second observation before pressing Audio again.
-  await delay(10000);const videoAfterTenSeconds=await read();oneAudible(videoAfterTenSeconds,'video');
+  const observationStarted=Date.now();
+  for(let i=1;i<=10;i++) {
+    await delay(Math.max(0,observationStarted+i*1000-Date.now()));
+    report.videoHandoff.samples.push({elapsedMs:Date.now()-observationStarted,state:await read()});
+  }
+  const videoAfterTenSeconds=await read();report.videoHandoff.after=videoAfterTenSeconds;oneAudible(videoAfterTenSeconds,'video');
   assert.ok(videoAfterTenSeconds.video.time>videoAtSwitch.video.time+7,'Video clock must advance for 10 seconds');
   assert.ok(videoAfterTenSeconds.video.frames>videoAtSwitch.video.frames+10,'Video must show moving decoded frames after the seek');
   report.checks.push({label:'Audio at 10 minutes to Video, then 10 seconds of moving audible video',before:audioBeforeVideo,start:videoAtSwitch,after:videoAfterTenSeconds});
