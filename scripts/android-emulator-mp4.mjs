@@ -190,24 +190,26 @@ try {
   assert.ok(Math.abs(b.native.audioPositionMs-(a.native.audioPositionMs-15000))<4000,'Backward audio skip must be 15 seconds');
   report.checks.push({label:'Backward 15 seconds while Audio is playing',before:a,after:b});
 
-  // Tap the range around 10:00. Account for the physical thumb inset and RTL.
-  // Native arrow keys refine the position; CDP only observes the range value.
-  const seek=JSON.parse(await evaluate(`JSON.stringify((()=>{
-    const e=document.querySelector('#watchAudioSeek'),r=e?.getBoundingClientRect();if(!r)return null;
-    const fraction=600/Number(e.max),rtl=getComputedStyle(e).direction==='rtl';
-    const x=r.left+8+(r.width-16)*(rtl?1-fraction:fraction),y=r.top+r.height/2;
-    return document.elementFromPoint(x,y)===e?{x,y,width:innerWidth,height:innerHeight,rtl}:null;
-  })())`));
-  assert.ok(seek,'Visible hit-tested audio seek bar required');
-  const seekXY=nativePoint(seek);adb('shell','input','tap',...seekXY.map(String));
-  report.gestures.push({label:'Seek Audio to 10 minutes',point:seekXY,rtl:seek.rtl});
-  await delay(300);
-  for(let i=0;i<5;i++) {
-    const position=(await read()).native.audioPositionMs/1000;
-    if(Math.abs(position-600)<3)break;
-    const delta=Math.round(600-position),towardRight=seek.rtl?delta<0:delta>0;
-    const keys=Array(Math.min(20,Math.abs(delta))).fill(towardRight?'KEYCODE_DPAD_RIGHT':'KEYCODE_DPAD_LEFT');
-    adb('shell','input','keyevent',...keys);report.gestures.push({label:'Refine physical seek',keys});await delay(200);
+  // Seek with genuine range-bar touches. Android 11 does not focus the range
+  // after a tap: DPAD keys navigate nearby controls instead of changing time.
+  // Use the observed range value to refine fresh physical touch coordinates.
+  let seekOffset=0;
+  for(let i=0;i<8;i++) {
+    const seek=JSON.parse(await evaluate(`JSON.stringify((()=>{
+      const e=document.querySelector('#watchAudioSeek'),r=e?.getBoundingClientRect();if(!r)return null;
+      const max=Number(e.max),usable=r.width-16,rtl=getComputedStyle(e).direction==='rtl';
+      const x=r.left+8+usable*(rtl?1-600/max:600/max)+${seekOffset},y=r.top+r.height/2;
+      return document.elementFromPoint(x,y)===e?{x,y,width:innerWidth,height:innerHeight,rtl,usable,max}:null;
+    })())`));
+    assert.ok(seek,'Visible hit-tested audio seek bar required');
+    const xy=nativePoint(seek);adb('shell','input','tap',...xy.map(String));await delay(350);
+    const observed=await read();
+    report.gestures.push({label:i?'Refine native seek-bar touch':'Seek Audio to 10 minutes',point:xy,
+      rtl:seek.rtl,rangeValue:observed.seek?.value,audioPositionMs:observed.native.audioPositionMs});
+    if(audioPlaying(observed)&&Math.abs(observed.native.audioPositionMs/1000-600)<6)break;
+    const value=Number(observed.seek?.value);
+    assert.ok(Number.isFinite(value),'Audio range value must be observable');
+    seekOffset+=(600-value)*seek.usable/seek.max*(seek.rtl?-1:1);
   }
   await wait(s=>audioPlaying(s)&&Math.abs(s.native.audioPositionMs/1000-600)<8);
   a=await read();oneAudible(a,'audio');screenshot('audio-at-ten-minutes');
