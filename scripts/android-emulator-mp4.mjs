@@ -74,10 +74,15 @@ try {
   const [left,top,right,bottom]=bounds.slice(1).map(Number);
   const nativePoint=p=>[Math.round(left+p.x*(right-left)/p.width),Math.round(top+p.y*(bottom-top)/p.height)];
   const visiblePoint=async selector=>JSON.parse(await evaluate(`JSON.stringify((()=>{
-    const b=document.querySelector(${JSON.stringify(selector)}),r=b?.getBoundingClientRect();
-    if(!r)return null;const x=r.left+r.width/2,y=r.top+r.height/2;
-    const hit=document.elementFromPoint(x,y);
-    return y>70 && y<innerHeight-75 && (hit===b || b.contains(hit))?{x,y,width:innerWidth,height:innerHeight}:null;
+    // A card has several Watch targets. Its cover center can be obscured by
+    // sibling Watch/Listen buttons; choose a genuinely visible target instead.
+    for(const b of document.querySelectorAll(${JSON.stringify(selector)})) {
+      const r=b.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
+      const hit=document.elementFromPoint(x,y);
+      if(y>70 && y<innerHeight-75 && (hit===b || b.contains(hit)))
+        return {x,y,width:innerWidth,height:innerHeight};
+    }
+    return null;
   })())`));
   const tapVisible=async selector=>{
     const p=await visiblePoint(selector);assert.ok(p,`Visible native tap target required: ${selector}`);
