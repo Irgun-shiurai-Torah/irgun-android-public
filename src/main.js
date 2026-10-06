@@ -4783,11 +4783,12 @@ async function finishAudioToVideoHandoff(videoKey, player = state.watchVimeo) {
   return commitPromise;
 }
 
-async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 4000) {
+async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
   const deadline = Date.now() + Math.max(800, Number(timeoutMs) || 4000);
   let lastPosition = null;
   while (Date.now() < deadline) {
     if (!state.watchAudioToVideoHandoff || String(state.watchAudioToVideoHandoffId || '') !== String(videoKey || '')) {
+      if (usesNativeUnifiedAudio()) return null;
       // The Vimeo 'play' event may have completed the transaction while this
       // waiter was sleeping. Treat that as success, not a handoff failure.
       const committedPosition = Number(await Promise.resolve(player?.getCurrentTime?.()).catch(()=>state.watchResumeSeconds||0));
@@ -4804,14 +4805,23 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 4000) {
         Promise.resolve(player.setCurrentTime(sourceNow)).catch(()=>null),
         new Promise(resolve=>setTimeout(()=>resolve(null),900))
       ]);
-      if (Number.isFinite(Number(corrected))) videoNow = Number(corrected);
+      if (corrected != null && Number.isFinite(Number(corrected))) videoNow = Number(corrected);
     }
     if (!paused && Number.isFinite(videoNow) && Math.abs(videoNow - sourceNow) <= 0.75) {
       // Confirm the destination clock is live, not merely a resolved play() call.
-      await new Promise(resolve=>setTimeout(resolve,120));
+      const element = player?.getVideoElement?.();
+      const frameCount = () => {
+        const count = element?.getVideoPlaybackQuality?.()?.totalVideoFrames ?? element?.webkitDecodedFrameCount;
+        return Number.isFinite(Number(count)) ? Number(count) : null;
+      };
+      const framesBefore = frameCount();
+      await new Promise(resolve=>setTimeout(resolve,350));
       const again = Number(await Promise.resolve(player.getCurrentTime()).catch(()=>videoNow));
       const stillSource = Math.max(0, playbackPositionSeconds() || sourceNow);
-      if (Number.isFinite(again) && again >= videoNow - 0.10 && Math.abs(again - stillSource) <= 0.85) {
+      const framesAfter = frameCount();
+      const movingPicture = !element || (!element.paused && !element.seeking && element.readyState >= 2 && element.videoWidth > 0 &&
+        (framesBefore == null || (framesAfter != null && framesAfter > framesBefore)));
+      if (Number.isFinite(again) && again > videoNow + 0.05 && Math.abs(again - stillSource) <= 0.85 && movingPicture) {
         return again;
       }
       lastPosition = again;
@@ -5095,6 +5105,7 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
   const player = state.watchVimeo;
   if (!player) return false;
   if (usesNativeUnifiedAudio()) {
+    const audioItem = state.current;
     try {
       let target = playbackPositionSeconds() || Number(state.watchResumeSeconds) || 0;
       state.watchResumeSeconds = target;
@@ -5120,13 +5131,11 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
         // Native audio remains audible while Vimeo seeks and starts muted. A
         // resolved Vimeo play() promise is not enough; confirm the destination
         // clock is actually running and within the drift allowance first.
-        const played = await Promise.race([
-          Promise.resolve(player.play()).then(()=>true).catch(()=>false),
-          new Promise(resolve=>setTimeout(()=>resolve(false),2200))
-        ]);
-        if (!played) throw new Error('Vimeo did not accept play');
-        const readyPosition = await waitForVimeoHandoffReady(player, id, 4200);
-        if (!Number.isFinite(Number(readyPosition))) throw new Error('Vimeo did not become ready at the synchronized position');
+        // A WebView play promise may stay pending during a long-distance seek.
+        // Keep Audio authoritative while actual clocks/frames establish readiness.
+        Promise.resolve(player.play()).catch(error => console.debug('[Playback] destination play pending/failed', error));
+        const readyPosition = await waitForVimeoHandoffReady(player, id, 8000);
+        if (readyPosition == null || !Number.isFinite(Number(readyPosition))) throw new Error('Vimeo did not become ready at the synchronized position');
         current = Number(readyPosition);
         const finished = await finishAudioToVideoHandoff(id, player);
         if (!finished && state.watchAudioToVideoHandoff) throw new Error('Video handoff did not commit');
@@ -5149,8 +5158,18 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
       state.watchAudioToVideoHandoff = false;
       state.watchAudioToVideoHandoffId = '';
       state.watchAudioToVideoTargetSeconds = 0;
-      // Keep Vimeo muted/paused on failure; native audio was never stopped.
+      await setVimeoHandoffMuted(player, true);
       try { await player.pause(); } catch (_) {}
+      // Native authority may have changed before a commit error. Restore the
+      // audible source and its live shadow clock, rather than rendering Audio
+      // over a silent VIDEO owner with a cleared current item.
+      state.current = audioItem || videoAudioPlaybackItem(video, id);
+      setPlaybackAuthorityFence('AUDIO', id, 5000);
+      const snapshot = await Promise.resolve(nativeMediaPlugin().getState()).catch(()=>state.nativePlayback);
+      if (String(snapshot?.mode || '') === 'VIDEO') {
+        const livePosition = Math.max(0, Number(snapshot.audioPositionMs) || Number(snapshot.currentPositionMs) || 0) / 1000;
+        await PlaybackController.startAudioAt(livePosition, shouldPlay, { volume:1, commit:true }).catch(error => console.warn('[Playback] Audio rollback failed', error));
+      }
       return false;
     }
   }
@@ -7378,6 +7397,8 @@ function setPlaybackAuthorityFence(mode, lectureId = '', ttlMs = 3500) {
 }
 
 function nativeSnapshotConflicts(snapshot) {
+  if (state.watchAudioToVideoHandoff && String(snapshot?.mode || '') === 'AUDIO' &&
+      String(snapshot.lectureId || '') === String(state.watchAudioToVideoHandoffId || '')) return false;
   const fence = state.playbackAuthorityFence;
   if (!fence) return false;
   if (Date.now() > Number(fence.expiresAt || 0)) {
@@ -7490,6 +7511,9 @@ function ensureNativeAudioCurrentForWatch(snapshot) {
 function reconcileNativeWatchAudio(snapshot) {
   if (String(snapshot?.mode || '') !== 'AUDIO' || !state.watchVideo ||
       String(snapshot.lectureId || '') !== videoId(state.watchVideo)) return;
+  // AUDIO remains the owner while the foreground destination seeks/buffers.
+  // Its position callbacks must not park that destination or replace its view.
+  if (state.watchAudioToVideoHandoff && String(state.watchAudioToVideoHandoffId || '') === String(snapshot.lectureId || '')) return;
   const wasVideo = state.watchMode === 'video';
   ensureNativeAudioCurrentForWatch(snapshot);
   state.nativeBackgroundHandoff = false;
@@ -8338,7 +8362,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
       const d = await player.getDuration().catch(()=>Number(video.duration)||0);
       // Rescue a handoff if Vimeo's first play attempt was delayed. Never stop the
       // audio until this already-ready player has caught up to the live audio clock.
-      if (state.watchVimeoReady && state.watchAudioToVideoHandoff && state.watchAudioToVideoHandoffId === videoKey && !playbackIsPaused()) {
+      if (!usesNativeUnifiedAudio() && state.watchVimeoReady && state.watchAudioToVideoHandoff && state.watchAudioToVideoHandoffId === videoKey && !playbackIsPaused()) {
         const live = Math.max(0, playbackPositionSeconds() || Number(state.watchAudioToVideoTargetSeconds) || 0);
         if (Math.abs((Number(t) || 0) - live) > 0.75) {
           const actual = await Promise.race([
@@ -8445,7 +8469,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
       ]);
       if (played) {
         const readyPosition = await waitForVimeoHandoffReady(player, videoKey, 4200);
-        if (Number.isFinite(Number(readyPosition))) {
+        if (readyPosition != null && Number.isFinite(Number(readyPosition))) {
           state.watchVideoPlaying = true;
           state.watchResumeSeconds = Math.max(0, Number(readyPosition));
           await finishAudioToVideoHandoff(videoKey, player);
