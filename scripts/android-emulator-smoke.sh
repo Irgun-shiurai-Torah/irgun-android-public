@@ -22,9 +22,15 @@ adb exec-out screencap -p > emulator-report/after-splash.png || true
 # for circle/squircle clipping on a real Android 11 emulator.
 adb shell input keyevent KEYCODE_HOME
 sleep 2
+# Open the app drawer so the Irgun launcher icon is actually visible.
+adb shell input swipe 160 610 160 120 500
+sleep 2
+adb shell uiautomator dump /sdcard/irgun-launcher.xml >/dev/null 2>&1 || true
+adb pull /sdcard/irgun-launcher.xml emulator-report/launcher.xml >/dev/null 2>&1 || true
+grep -q "Irgun Shiurai Torah" emulator-report/launcher.xml || { echo "Irgun launcher icon label was not visible in the app drawer"; exit 1; }
 adb exec-out screencap -p > emulator-report/launcher-icon.png || true
 adb shell am start -n org.irgunshiuraitorah.app/.SplashActivity
-sleep 2
+sleep 3
 
 node scripts/android-emulator-inspect.mjs | tee emulator-report/webview.json
 node scripts/android-emulator-tabs.mjs | tee emulator-report/tab-swipes.log
