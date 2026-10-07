@@ -14,7 +14,7 @@ async function connect(){
  await new Promise((r,j)=>{ws.addEventListener('open',r,{once:true});ws.addEventListener('error',j,{once:true});});
  let id=0;const pending=new Map();
  ws.addEventListener('message',e=>{const m=JSON.parse(e.data),p=pending.get(m.id);if(!p)return;pending.delete(m.id);clearTimeout(p.timer);m.error||m.result.exceptionDetails?p.reject(new Error('Observation failed')):p.resolve(m.result.result.value);});
- return ()=>new Promise((resolve,reject)=>{const n=++id;const timer=setTimeout(()=>reject(new Error('Observation timeout')),10000);pending.set(n,{resolve,reject,timer});ws.send(JSON.stringify({id:n,method:'Runtime.evaluate',params:{expression:'JSON.stringify(window.ISTAccountTest.snapshot())',returnByValue:true}}));}).then(JSON.parse);
+ return ()=>new Promise((resolve,reject)=>{const n=++id;const timer=setTimeout(()=>reject(new Error('Observation timeout')),10000);pending.set(n,{resolve,reject,timer});ws.send(JSON.stringify({id:n,method:'Runtime.evaluate',params:{expression:'JSON.stringify(window.ISTAccountTest ? window.ISTAccountTest.snapshot() : {ready:false,observerReady:false})',returnByValue:true}}));}).then(JSON.parse);
 }
 let read;
 async function wait(test,message){let s;for(let i=0;i<100;i++){s=await read();if(test(s))return s;await delay(300);}throw new Error(message);}
