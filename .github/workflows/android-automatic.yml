@@ -101,11 +101,21 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
+      - name: Prepare selected launcher icon
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+          npm install --no-save @capacitor/assets@3.0.5
+          bash scripts/prepare_android_icons.sh
+
       - name: Build web app
         run: npm run build
 
       - name: Sync Capacitor Android project
         run: npx cap sync android
+
+      - name: Generate Android launcher resources
+        run: npx @capacitor/assets generate --android
 
       - name: Make Gradle wrapper executable
         run: chmod +x android/gradlew
