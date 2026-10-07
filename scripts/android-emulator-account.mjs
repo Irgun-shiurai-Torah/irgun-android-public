@@ -53,7 +53,7 @@ try{
  read=await connect();await wait(s=>s.ready,'Library unavailable');
  bounds=await readNativeBounds();
  report.nativeLoginStartedAt=new Date().toISOString();await tap('account');await type('email',email);await type('password',password);await tap('login');
- await wait(s=>s.loggedIn&&s.profileVisible,'Native login failed');assert.equal((await read()).isAdmin,false,'Use a non-admin dedicated account');assert.match((await read()).name,/^Irgun QA /,'Refuse to mutate a personal account');report.checks.push('Native email/password login and profile');
+ await wait(s=>s.loggedIn&&s.profileVisible,'Native login failed');assert.equal((await read()).isAdmin,false,'Use a non-admin dedicated account');assert.equal(String((await read()).accountEmail||'').trim().toLowerCase(),email.trim().toLowerCase(),'Refuse to mutate an account other than the dedicated approved account');report.checks.push('Native email/password login and profile');
  await tap('settings');await wait(s=>s.settingsVisible,'Settings missing');report.checks.push('Account settings displayed');
  await tap('shiurim');await tap('open');await wait(s=>!!s.watchId,'Lecture did not open');const id=(await read()).watchId;
  report.accountMutationsStartedAt=new Date().toISOString();const before=await read();await tap('like');await wait(s=>s.likes.includes(id)!==before.likes.includes(id),'Like toggle failed');

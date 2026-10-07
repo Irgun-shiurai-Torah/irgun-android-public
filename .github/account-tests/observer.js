@@ -27,7 +27,7 @@ window.ISTAccountTest = { snapshot() {
   }
   return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
-    name:state.user?.name||'',screen:state.screen,likes:[...state.myLikes],later:[...state.watchLater],
+    name:state.user?.name||'',accountEmail:state.user?.email||'',screen:state.screen,likes:[...state.myLikes],later:[...state.watchLater],
     follows:[...state.follows.keys()],history:state.history.map(x=>String(x.id||x.vimeoId||'')),
     playlists:state.playlists.map(x=>({id:x.id,name:x.name,items:x.items.length})),
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
