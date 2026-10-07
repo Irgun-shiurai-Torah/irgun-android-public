@@ -5,7 +5,7 @@ const email=process.env.IRGUN_TEST_EMAIL,password=process.env.IRGUN_TEST_PASSWOR
 assert.ok(email&&password,'Configure dedicated verified account secrets IRGUN_TEST_EMAIL and IRGUN_TEST_PASSWORD');
 const adb=(...a)=>execFileSync('adb',a,{encoding:'utf8'}).trim();
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
-const report={checks:[],credentialsRecorded:false};let ws;
+const report={checks:[],credentialsRecorded:false,startedAt:new Date().toISOString()};let ws;
 async function connect(){
  const pid=adb('shell','pidof','org.irgunshiuraitorah.app').split(/\s+/)[0];
  adb('forward','tcp:9222',`localabstract:webview_devtools_remote_${pid}`);
@@ -18,23 +18,49 @@ async function connect(){
 }
 let read;
 async function wait(test,message){let s;for(let i=0;i<100;i++){s=await read();if(test(s))return s;await delay(300);}throw new Error(message);}
+
+async function readNativeBounds() {
+ for(let attempt=1;attempt<=4;attempt++){
+  // Do not reuse an older hierarchy if this capture fails during startup.
+  adb('shell','rm','-f','/sdcard/account-bounds.xml');
+  try {
+   adb('shell','uiautomator','dump','--compressed','/sdcard/account-bounds.xml');
+   const xml=adb('shell','cat','/sdcard/account-bounds.xml');
+   const node=xml.match(/<node\b[^>]*class="android\.webkit\.WebView"[^>]*>/)?.[0];
+   const match=node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+   if(match){
+    const value=match.slice(1).map(Number);
+    if(value[2]>value[0]&&value[3]>value[1]){
+     report.nativeBoundsAttempts=attempt;
+     report.nativeBounds=value;
+     return value;
+    }
+   }
+  } catch {
+   // Android may return a null root while WebView is still rendering.
+   // Retry the native hierarchy; never substitute guessed screen coordinates.
+  }
+  await delay(700);
+ }
+ throw new Error('Native WebView hierarchy unavailable after four fresh captures');
+}
+
 let bounds;
 function native(p,s){return [Math.round(bounds[0]+p.x*(bounds[2]-bounds[0])/s.width),Math.round(bounds[1]+p.y*(bounds[3]-bounds[1])/s.height)];}
 async function tap(key){for(let i=0;i<6;i++){const s=await read(),p=s.controls[key];if(p){adb('shell','input','tap',...native(p,s).map(String));await delay(700);return;}adb('shell','input','swipe',String((bounds[0]+bounds[2])/2),String(bounds[3]-170),String((bounds[0]+bounds[2])/2),String(bounds[1]+170),'400');await delay(500);}throw new Error(`Visible control missing: ${key}`);}
 async function type(key,value){assert.match(value,/^[a-zA-Z0-9@._+!-]+$/,'Dedicated credentials must use characters supported by native adb text input');await tap(key);adb('shell','input','text',value);adb('shell','input','keyevent','111');}
 try{
  read=await connect();await wait(s=>s.ready,'Library unavailable');
- adb('shell','uiautomator','dump','/sdcard/account-bounds.xml');const xml=adb('shell','cat','/sdcard/account-bounds.xml');
- const node=xml.match(/<node\b[^>]*class="android\.webkit\.WebView"[^>]*>/)?.[0];bounds=node.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/).slice(1).map(Number);
- await tap('account');await type('email',email);await type('password',password);await tap('login');
+ bounds=await readNativeBounds();
+ report.nativeLoginStartedAt=new Date().toISOString();await tap('account');await type('email',email);await type('password',password);await tap('login');
  await wait(s=>s.loggedIn&&s.profileVisible,'Native login failed');assert.equal((await read()).isAdmin,false,'Use a non-admin dedicated account');assert.match((await read()).name,/^Irgun QA /,'Refuse to mutate a personal account');report.checks.push('Native email/password login and profile');
  await tap('settings');await wait(s=>s.settingsVisible,'Settings missing');report.checks.push('Account settings displayed');
  await tap('shiurim');await tap('open');await wait(s=>!!s.watchId,'Lecture did not open');const id=(await read()).watchId;
- const before=await read();await tap('like');await wait(s=>s.likes.includes(id)!==before.likes.includes(id),'Like toggle failed');
+ report.accountMutationsStartedAt=new Date().toISOString();const before=await read();await tap('like');await wait(s=>s.likes.includes(id)!==before.likes.includes(id),'Like toggle failed');
  await tap('save');await tap('later');await wait(s=>s.later.includes(id)!==before.later.includes(id),'Save toggle failed');await tap('closePicker');await tap('follow');await wait(s=>JSON.stringify(s.follows)!==JSON.stringify(before.follows),'Follow toggle failed');await wait(s=>s.videoPlaying&&s.videoTime>1,'Playback needed to record real history');
  await tap('closeWatch');await tap('library');await tap('playlists');const name=`Irgun-QA-${Date.now()}`;await type('playlistName',name);await tap('createPlaylist');await wait(s=>s.playlists.some(p=>p.name===name),'Playlist creation failed');
  const changed=await read();ws.close();adb('shell','am','force-stop','org.irgunshiuraitorah.app');adb('shell','am','start','-n','org.irgunshiuraitorah.app/.SplashActivity');await delay(5000);read=await connect();
  await wait(s=>s.ready&&s.loggedIn&&s.playlists.some(p=>p.name===name),'Session/playlist did not survive relaunch');const restored=await read();assert.equal(restored.likes.includes(id),changed.likes.includes(id));assert.equal(restored.later.includes(id),changed.later.includes(id));assert.deepEqual(restored.follows.slice().sort(),changed.follows.slice().sort());assert.ok(restored.history.includes(id),'Playback history must survive relaunch');report.checks.push('Server-backed likes, Watch Later, follows, history and playlist survive process restart');
  // Restore only the lecture flags changed by this run. Leave the named QA playlist for review.
- await tap('shiurim');await tap('open');assert.equal((await wait(s=>!!s.watchId,'Lecture unavailable')).watchId,id,'Cleanup must target the same lecture');await tap('like');await tap('save');await tap('later');await tap('closePicker');await tap('follow');await tap('closeWatch');await tap('account');await tap('logout');await wait(s=>!s.loggedIn&&s.likes.length===0&&s.later.length===0&&s.playlists.length===0,'Logout did not clear account data');report.checks.push('Logout clears account state');report.status='passed';
-}catch(e){report.status='failed';report.error=String(e.message).replaceAll(email,'[email]').replaceAll(password,'[password]');throw e;}finally{ws?.close();writeFileSync('emulator-report/account.json',JSON.stringify(report,null,2));}
+ await tap('shiurim');await tap('open');assert.equal((await wait(s=>!!s.watchId,'Lecture unavailable')).watchId,id,'Cleanup must target the same lecture');await tap('like');await tap('save');await tap('later');await tap('closePicker');await tap('follow');await tap('closeWatch');await tap('account');await tap('logout');await wait(s=>!s.loggedIn&&s.likes.length===0&&s.later.length===0&&s.playlists.length===0,'Logout did not clear account data');report.checks.push('Logout clears account state');report.accountMutationsFinishedAt=new Date().toISOString();report.status='passed';
+}catch(e){report.status='failed';report.error=String(e.message).replaceAll(email,'[email]').replaceAll(password,'[password]');process.exitCode=1;}finally{report.finishedAt=new Date().toISOString();ws?.close();writeFileSync('emulator-report/account.json',JSON.stringify(report,null,2));}
