@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/android-emulator-smoke.yml'
       - 'scripts/android-emulator-*'
+      - 'scripts/prepare_android_icons.sh'
+      - 'app-icon-v7-master.jpg'
       - 'src/**'
       - 'android/**'
       - 'index.html'
@@ -46,10 +48,18 @@ jobs:
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
           "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
       - run: npm ci
+      - name: Prepare selected launcher icon
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+          npm install --no-save @capacitor/assets@3.0.5
+          bash scripts/prepare_android_icons.sh
       - name: Check tab gesture regressions
         run: node --test scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs
       - run: npm run build
       - run: npx cap sync android
+      - name: Generate Android launcher resources
+        run: npx @capacitor/assets generate --android
       - name: Add emulator-only native volume observation
         run: python3 scripts/android-emulator-prepare.py
       - run: chmod +x android/gradlew
