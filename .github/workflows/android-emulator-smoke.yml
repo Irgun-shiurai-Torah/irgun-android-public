@@ -29,6 +29,9 @@ permissions:
 jobs:
   startup:
     runs-on: ubuntu-latest
+    env:
+      IST_TEST_EMAIL: ${{ secrets.IST_TEST_EMAIL }}
+      IST_TEST_PASSWORD: ${{ secrets.IST_TEST_PASSWORD }}
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
@@ -60,11 +63,6 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Test authenticated account session when credentials are configured
-        env:
-          IST_TEST_EMAIL: ${{ secrets.IST_TEST_EMAIL }}
-          IST_TEST_PASSWORD: ${{ secrets.IST_TEST_PASSWORD }}
-        run: node scripts/android-emulator-auth.mjs
       - name: Test Android 11 tabs, MP4 playback and 10-minute audio/video handoff
         uses: reactivecircus/android-emulator-runner@v2
         with:
