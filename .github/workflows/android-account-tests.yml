@@ -70,5 +70,6 @@ jobs:
           path: |
             emulator-report/account.json
             emulator-report/startup.png
+            emulator-report/account-failure.png
           if-no-files-found: warn
           retention-days: 14
