@@ -17,6 +17,15 @@ adb shell am force-stop org.irgunshiuraitorah.app || true
 adb shell am start -n org.irgunshiuraitorah.app/.SplashActivity
 sleep 4
 adb exec-out screencap -p > emulator-report/after-splash.png || true
+
+# Capture the actual launcher mask so the selected Torah icon can be checked
+# for circle/squircle clipping on a real Android 11 emulator.
+adb shell input keyevent KEYCODE_HOME
+sleep 2
+adb exec-out screencap -p > emulator-report/launcher-icon.png || true
+adb shell am start -n org.irgunshiuraitorah.app/.SplashActivity
+sleep 2
+
 node scripts/android-emulator-inspect.mjs | tee emulator-report/webview.json
 node scripts/android-emulator-tabs.mjs | tee emulator-report/tab-swipes.log
 
