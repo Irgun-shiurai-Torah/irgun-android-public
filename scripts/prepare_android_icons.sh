@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MASTER="app-icon-v7-master.jpg"
+MASTER="app-icon-v7-master.png"
 if [ ! -f "$MASTER" ]; then
   echo "Missing selected app icon master: $MASTER" >&2
   exit 2
