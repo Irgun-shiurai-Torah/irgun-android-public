@@ -32,7 +32,8 @@ window.ISTAccountTest = { snapshot() {
     playlists:state.playlists.map(x=>({id:x.id,name:x.name,items:x.items.length})),
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
     settingsVisible:!!document.querySelector('#appEmailToggle'),profileVisible:!!document.querySelector('#profileForm'),
-    authError:!!document.querySelector('.auth-card .form-message'),
+    authError:!!document.querySelector('.auth-card .form-message'),playlistPickerOpen:!!document.querySelector('.playlist-picker-backdrop'),
     videoTime:Number(state.watchVimeo?.video?.currentTime)||0,videoPlaying:!!state.watchVimeo?.video&&!state.watchVimeo.video.paused};
 }};
 if(window.ISTSimulator){const original=window.ISTSimulator.snapshot.bind(window.ISTSimulator);window.ISTSimulator.snapshot=()=>({...original(),account:window.ISTAccountTest.snapshot()});}
+
