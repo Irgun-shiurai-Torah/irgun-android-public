@@ -34,5 +34,6 @@ sleep 3
 
 node scripts/android-emulator-inspect.mjs | tee emulator-report/webview.json
 node scripts/android-emulator-tabs.mjs | tee emulator-report/tab-swipes.log
+node scripts/android-emulator-auth.mjs | tee emulator-report/authenticated-session.log
 
 node scripts/android-emulator-mp4.mjs | tee emulator-report/reported-shiur.log

@@ -31,6 +31,9 @@ permissions:
 jobs:
   startup:
     runs-on: ubuntu-latest
+    env:
+      IST_TEST_EMAIL: ${{ secrets.IST_TEST_EMAIL }}
+      IST_TEST_PASSWORD: ${{ secrets.IST_TEST_PASSWORD }}
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
