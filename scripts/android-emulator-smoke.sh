@@ -31,9 +31,9 @@ for attempt in $(seq 1 10); do
     break
   fi
 
-  # The Pixel launcher's accessible Apps list button is above the dock.
-  # A swipe starting in the bottom Google search bar can leave the home
-  # screen unchanged, so use the observed button bounds when available.
+  # The Pixel launcher's Apps list accessibility node is above the dock.
+  # A physical tap on this virtual accessibility node does not open the
+  # drawer. Swipe from the workspace above its observed bounds instead.
   drawer_point=$(python3 - <<'DRAWER_POINT'
 import re
 import xml.etree.ElementTree as ET
@@ -54,7 +54,7 @@ DRAWER_POINT
 )
   if [ -n "$drawer_point" ]; then
     read -r drawer_x drawer_y <<< "$drawer_point"
-    adb shell input tap "$drawer_x" "$drawer_y"
+    adb shell input swipe "$drawer_x" "$((drawer_y - 20))" "$drawer_x" "$((drawer_y / 4))" 500
   else
     # Fallback for launchers without an accessible drawer button. Use the
     # observed screen dimensions and start above the search/navigation area.
