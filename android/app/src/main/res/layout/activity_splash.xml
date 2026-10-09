@@ -2,14 +2,41 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#F8F9FB">
+    android:background="#0B2B49"
+    android:padding="24dp">
 
-    <ImageView
-        android:id="@+id/irgunSplashImage"
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:contentDescription="@null"
-        android:scaleType="fitCenter"
-        android:background="#F8F9FB"
-        android:src="@drawable/irgun_elegant_splash" />
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center"
+        android:orientation="vertical">
+
+        <ImageView
+            android:id="@+id/irgunSplashImage"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:adjustViewBounds="true"
+            android:contentDescription="@null"
+            android:maxWidth="420dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/irgun_elegant_splash" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_marginTop="20dp"
+            android:autoSizeMaxTextSize="26sp"
+            android:autoSizeMinTextSize="14sp"
+            android:autoSizeStepGranularity="1sp"
+            android:autoSizeTextType="uniform"
+            android:fontFamily="serif"
+            android:gravity="center"
+            android:maxLines="1"
+            android:text="@string/irgun_splash_title"
+            android:textColor="#F4D798"
+            android:textDirection="ltr"
+            android:textSize="26sp" />
+    </LinearLayout>
 </FrameLayout>
+

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MASTER="app-icon-v7-master.png"
+MASTER="app-icon-v8-master.png"
 if [ ! -f "$MASTER" ]; then
   echo "Missing selected app icon master: $MASTER" >&2
   exit 2
@@ -18,10 +18,11 @@ fi
 
 mkdir -p assets
 # Keep the complete selected artwork inside Android's adaptive-icon safe area.
-# The matching gold background fills circle, squircle and rounded-square masks
-# without cutting off the Torah scroll, globe, Hebrew lettering or English name.
-"${IMG[@]}" "$MASTER" -resize 820x820 -gravity center -background "#F4D798" -extent 1024x1024 assets/icon-only.png
+# The matching navy background fills circle, squircle and rounded-square masks
+# without cutting off the Torah scroll, globe or Hebrew lettering.
+"${IMG[@]}" "$MASTER" -resize 820x820 -gravity center -background "#0B2B49" -extent 1024x1024 assets/icon-only.png
 "${IMG[@]}" "$MASTER" -resize 820x820 -gravity center -background none -extent 1024x1024 assets/icon-foreground.png
-"${IMG[@]}" -size 1024x1024 canvas:"#F4D798" assets/icon-background.png
+"${IMG[@]}" -size 1024x1024 canvas:"#0B2B49" assets/icon-background.png
 
 identify assets/icon-only.png assets/icon-foreground.png assets/icon-background.png 2>/dev/null || true
+
