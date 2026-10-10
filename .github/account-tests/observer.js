@@ -15,6 +15,10 @@ window.ISTAccountTest = { snapshot() {
     history: '[data-library-section="history"]', likes: '[data-library-section="likes"]',
     saved: '[data-library-section="later"]', following: '[data-library-section="following"]'
   };
+  const video = state.watchVimeo?.getVideoElement?.()
+    || document.querySelector('#watchDirectHlsVideo')
+    || state.watchVimeo?.video
+    || null;
   const controls = {};
   for (const [key, query] of Object.entries(queries)) {
     const candidates = [...document.querySelectorAll(query)];
@@ -33,7 +37,7 @@ window.ISTAccountTest = { snapshot() {
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
     settingsVisible:!!document.querySelector('#appEmailToggle'),profileVisible:!!document.querySelector('#profileForm'),
     authError:!!document.querySelector('.auth-card .form-message'),playlistPickerOpen:!!document.querySelector('.playlist-picker-backdrop'),
-    videoTime:Number(state.watchVimeo?.video?.currentTime)||0,videoPlaying:!!state.watchVimeo?.video&&!state.watchVimeo.video.paused};
+    videoTime:Number(video?.currentTime)||0,videoPlaying:!!video&&!video.paused&&video.readyState>=2};
 }};
 if(window.ISTSimulator){const original=window.ISTSimulator.snapshot.bind(window.ISTSimulator);window.ISTSimulator.snapshot=()=>({...original(),account:window.ISTAccountTest.snapshot()});}
 
