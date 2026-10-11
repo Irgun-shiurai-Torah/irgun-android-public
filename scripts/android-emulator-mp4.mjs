@@ -164,7 +164,7 @@ try {
   // Reproduce the user's sequence with physical Android input, not media setters.
   const screenshot = name => writeFileSync(`emulator-report/${name}.png`,execFileSync('adb',['exec-out','screencap','-p']));
   const audioPlaying = s => s.activeMode==='audio' && s.native?.mode==='AUDIO' && s.native.audioIsPlaying;
-  const videoPlaying = s => s.activeMode==='video' && s.native?.mode==='VIDEO' && s.video && !s.video.paused && s.video.ready>=2;
+  const videoPlaying = s => s.activeMode==='video' && s.native?.mode==='VIDEO' && s.video && !s.video.paused && s.video.ready>=2 && !s.video.muted && s.video.volume>0;
   const oneAudible = (s,mode) => {
     assert.equal(s.diagnostic,false,'Internal fallback banner must stay absent');
     assert.ok(s.webAudio.every(a=>a.paused||a.muted||a.volume===0),'Browser audio must not overlap native playback');
