@@ -114,8 +114,8 @@ try {
   }
   assert.ok(search,'Home search must be visible');
   await tapVisible('#homeLibrarySearch');
-  const code=String(target.shiurCode||target.title.match(/IST-[A-Z]+\d+/)?.[0]||'');
-  assert.ok(/^IST-[A-Z]+\d+$/.test(code),'HLS shiur must have a searchable code for real Android native UI');
+  const code=String(target.shiurCode||target.title.match(/\bCH\s*\d+\b/i)?.[0]?.replace(/\s+/g,'')||'');
+  assert.ok(/^[A-Z]+\d+$/.test(code),'HLS fixture must have a searchable lecture code from its actual title');
   adb('shell','input','text',code);adb('shell','input','keyevent','KEYCODE_ENTER');await delay(800);
   // Dismiss the keyboard only if still present, without navigating back.
   if(/mInputShown=true/.test(adb('shell','dumpsys','input_method')))adb('shell','input','keyevent','KEYCODE_BACK');
