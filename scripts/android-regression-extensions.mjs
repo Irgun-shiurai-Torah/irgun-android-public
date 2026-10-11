@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
 // Run after android-emulator-mp4.mjs: the actual reported shiur is already
