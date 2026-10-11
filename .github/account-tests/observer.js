@@ -29,7 +29,13 @@ window.ISTAccountTest = { snapshot() {
     });
     if(chosen){const r=chosen.getBoundingClientRect();controls[key]={x:r.left+r.width/2,y:r.top+r.height/2,label:chosen.innerText||chosen.getAttribute('aria-label')||'',active:chosen.classList.contains('active')};}
   }
-  return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,
+  const libraryStrip = document.querySelector('.library-tabs-scroll');
+  const stripRect = libraryStrip?.getBoundingClientRect();
+  const libraryTabStrip = stripRect && stripRect.width > 0 && stripRect.height > 0
+    ? { x:stripRect.x, y:stripRect.y, width:stripRect.width, height:stripRect.height,
+        scrollLeft:libraryStrip.scrollLeft, scrollWidth:libraryStrip.scrollWidth, clientWidth:libraryStrip.clientWidth }
+    : null;
+  return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,libraryTabStrip,
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
     name:state.user?.name||'',accountEmail:state.user?.email||'',screen:state.screen,likes:[...state.myLikes],later:[...state.watchLater],
     follows:[...state.follows.keys()],history:state.history.map(x=>String(x.id||x.vimeoId||'')),
