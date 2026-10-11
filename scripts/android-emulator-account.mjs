@@ -83,8 +83,14 @@ async function tap(key) {
   }
   // Find real controls by scrolling in the direction their screen position requires.
   const returnToTop=['closeWatch','login','settings'].includes(key);
-  if(returnToTop)adb('shell','input','swipe',String((bounds[0]+bounds[2])/2),String(bounds[1]+180),String((bounds[0]+bounds[2])/2),String(bounds[3]-170),'400');
-  else adb('shell','input','swipe',String((bounds[0]+bounds[2])/2),String(bounds[3]-170),String((bounds[0]+bounds[2])/2),String(bounds[1]+170),'400');
+  const commentAction=['commentText','postComment','editQaComment','editedQaText','saveQaComment','deleteQaComment'].includes(key);
+  // The video player and action buttons swallow drags in the middle of the
+  // viewport. Drag over the lower white comments/details scroll surface instead.
+  const x=commentAction ? Math.round((bounds[0]+bounds[2])/2) : Math.round(bounds[2]-25);
+  const yStart=commentAction ? bounds[3]-72 : bounds[3]-150;
+  const yEnd=bounds[1]+135;
+  if(returnToTop)adb('shell','input','swipe',String(x),String(yEnd),String(x),String(yStart),'480');
+  else adb('shell','input','swipe',String(x),String(yStart),String(x),String(yEnd),'480');
   await delay(500);
  }
  throw new Error(`Visible control missing: ${key}`);
