@@ -175,6 +175,14 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let hasVisibleFrame = false;
   let destroyed = false;
   let recoveryInProgress = false;
+  // A playing flag is not proof of moving video. Old Android WebViews can
+  // exhaust buffered media after an Audio -> Video seek without emitting error.
+  let lastMotionAt = Date.now();
+  let previousClock = -1;
+  let previousFrames = null;
+  let lastStallRecoveryAt = 0;
+  let stallRecoveryCount = 0;
+  let stalledPlaybackWatchdog = 0;
   const decodedFrames = () => {
     const quality = video.getVideoPlaybackQuality?.();
     const count = Number(quality?.totalVideoFrames ?? video.webkitDecodedFrameCount);
@@ -396,6 +404,45 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     if (!document.hidden && !video.paused && !hasVisibleFrame && !recoveryInProgress && !destroyed) void checkVisualPlayback();
   };
   document.addEventListener('visibilitychange', onVisibilityChange);
+  stalledPlaybackWatchdog = setInterval(() => {
+    if (destroyed || recoveryInProgress || document.hidden || video.paused || video.ended ||
+        !activeSource || video.seeking || video.readyState < 2) {
+      lastMotionAt = Date.now();
+      previousClock = Number(video.currentTime) || 0;
+      previousFrames = decodedFrames();
+      return;
+    }
+    const now = Date.now();
+    const clock = Number(video.currentTime) || 0;
+    const frames = decodedFrames();
+    const clockMoved = previousClock >= 0 && clock > previousClock + 0.14;
+    const framesMoved = frames !== null && previousFrames !== null && frames > previousFrames;
+    if (clockMoved || framesMoved) {
+      lastMotionAt = now;
+      stallRecoveryCount = 0;
+    }
+    previousClock = clock;
+    previousFrames = frames;
+    // Limit retries. No silent "pass" is possible: exhausted recovery goes
+    // through the existing explicit error/Vimeo-fallback path.
+    if (now - lastMotionAt < 9000 || now - lastStallRecoveryAt < 25000) return;
+    lastStallRecoveryAt = now;
+    stallRecoveryCount += 1;
+    console.warn('[Playback] Video stalled with playing=true', {
+      source: activeSource === sources.hls ? 'hls' : 'mp4',
+      seconds: clock, frames, buffered: video.buffered?.length || 0,
+      attempt: stallRecoveryCount
+    });
+    if (stallRecoveryCount > 2) {
+      adapter.reportError(new Error('Video playback remains stalled after recovery'),
+        clock, true);
+      clearInterval(stalledPlaybackWatchdog);
+      return;
+    }
+    // This requires actual new decoded frames. If HLS remains frozen,
+    // checkVisualPlayback switches to the MP4 or reports a hard failure.
+    void checkVisualPlayback();
+  }, 2500);
   const attachSource = async (url, useHls) => {
     if (!url) throw new Error('No direct video source');
     if (hls) { try { hls.destroy(); } catch (_) {} hls = null; }
@@ -520,7 +567,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   })();
   const adapter = makePlayerAdapter(video, stage, () => hls, readyPromise);
   // Keep the adapter's reference to the HLS instance current after attachment and recovery.
-  adapter.destroy = () => { destroyed = true; ++visualCheck; clearTimeout(singleTapTimer); clearTimeout(seekHintTimer); document.removeEventListener('visibilitychange', onVisibilityChange); try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
+  adapter.destroy = () => { destroyed = true; clearInterval(stalledPlaybackWatchdog); ++visualCheck; clearTimeout(singleTapTimer); clearTimeout(seekHintTimer); document.removeEventListener('visibilitychange', onVisibilityChange); try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
   adapter.on('error', detail => {
     // A Drive video has no Vimeo source to fall back to. Stop its soundtrack
     // rather than leave the user listening to a black, unresponsive player.

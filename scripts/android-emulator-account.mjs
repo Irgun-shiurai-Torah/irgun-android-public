@@ -153,12 +153,56 @@ try{
  await tap('settings');await wait(s=>s.settingsVisible,'Settings missing');report.checks.push('Account settings displayed');
  await tap('shiurim');await tap('open');await wait(s=>!!s.watchId,'Lecture did not open');const id=(await read()).watchId;
  report.accountMutationsStartedAt=new Date().toISOString();const before=await read();await tap('like');await wait(s=>s.likes.includes(id)!==before.likes.includes(id),'Like toggle failed');report.checks.push('Native Like toggle');
- await tap('save');await tap('later');await wait(s=>s.later.includes(id)!==before.later.includes(id),'Save toggle failed');await closeSavePicker();report.checks.push('Native Watch Later toggle and dialog closure');await tap('follow');await wait(s=>JSON.stringify(s.follows)!==JSON.stringify(before.follows),'Follow toggle failed');report.checks.push('Native speaker follow toggle');const playbackObserved=await wait(s=>s.videoPlaying&&s.videoTime>1&&s.history.includes(id),'Playback needed to record real history');
- await delay(1400);
+ await tap('save');await tap('later');await wait(s=>s.later.includes(id)!==before.later.includes(id),'Save toggle failed');await closeSavePicker();report.checks.push('Native Watch Later toggle and dialog closure');await tap('follow');await wait(s=>JSON.stringify(s.follows)!==JSON.stringify(before.follows),'Follow toggle failed');report.checks.push('Native speaker follow toggle');
+
+ // Previous test waited for history without ever pressing Play. The physical
+ // emulator screenshot showed a paused Audio player at 0:00, so explicitly
+ // start playback through a real Android touch before asserting progress.
+ if((await read()).watchMode!=='audio')await tap('audioMode');
+ await wait(s=>s.watchMode==='audio','Audio mode did not open for real playback history');
+ if(!(await read()).audioPlaying)await tap('audioPlay');
+ const playbackObserved=await wait(s=>s.audioPlaying&&s.audioTime>1,'Native Media3 audio must start and advance before history is tested');
+ await delay(3500);
  const laterPlayback=await read();
- assert.ok(laterPlayback.videoPlaying&&laterPlayback.videoTime>playbackObserved.videoTime+0.6,
-   'Actual Android video clock must advance after recording history');
- report.checks.push('Actual playing lecture history recorded');
+ assert.ok(laterPlayback.audioPlaying&&laterPlayback.audioTime>playbackObserved.audioTime+2,
+   'Actual Media3 audio clock must advance while the account is signed in');
+ report.checks.push('Real Android playback started with native Play and advanced');
+ 
+ // Check the real API from a separate authenticated QA session. In-memory
+ // history is not evidence that a POST reached the server, and the app does
+ // not add an unseen row to the local list before the next /history reload.
+ const testHeaders={Origin:'https://localhost','X-Irgun-App':'1','Content-Type':'application/json'};
+ const auth=await fetch('https://api.irgunshiuraitorah.com/login',{
+   method:'POST',headers:testHeaders,body:JSON.stringify({email,password}),signal:AbortSignal.timeout(20000)
+ });
+ assert.equal(auth.status,200,'Second authenticated QA session needed to verify server history');
+ const credentials=await auth.json();
+ assert.equal(String(credentials.user?.email||'').trim().toLowerCase(),email.trim().toLowerCase(),'History check authenticated an unexpected user');
+ assert.ok(credentials.sessionToken,'History check did not receive a real app session');
+ let savedRow=null,historyHttp=0;
+ const historyDeadline=Date.now()+45000;
+ while(Date.now()<historyDeadline) {
+   const historyResponse=await fetch('https://api.irgunshiuraitorah.com/history',{
+     headers:{...testHeaders,Authorization:'Bearer '+credentials.sessionToken},
+     signal:AbortSignal.timeout(18000)
+   });
+   historyHttp=historyResponse.status;
+   if(historyResponse.ok) {
+     const historyData=await historyResponse.json();
+     const rows=Array.isArray(historyData.items)?historyData.items:[];
+     savedRow=rows.find(row=>String(row.videoId||row.rawAudioId||row.id||'').replace(/^audio:/,'')===id&&
+       Number(row.progressSeconds||row.positionSeconds||0)>=playbackObserved.audioTime);
+     if(savedRow)break;
+   }
+   await delay(1300);
+ }
+ assert.ok(savedRow,'Real server playback history not recorded for the playing shiur (last HTTP '+historyHttp+')');
+ report.actualServerHistory={id,positionSeconds:Number(savedRow.progressSeconds||savedRow.positionSeconds||0),
+   mediaType:String(savedRow.mediaType||''),httpStatus:historyHttp};
+ report.checks.push('Signed-in native playback created a real server history row with advancing position');
+ await fetch('https://api.irgunshiuraitorah.com/logout',{
+   method:'POST',headers:{...testHeaders,Authorization:'Bearer '+credentials.sessionToken}
+ }).catch(()=>{});
  qaCommentMarker='IRGUN-QA-'+Date.now();report.commentVideoId=id;
  await type('commentText',qaCommentMarker);await tap('postComment');
  const withComment=await wait(s=>s.comments.some(c=>c.text===qaCommentMarker&&c.mine),'Native posted QA comment not visible');
@@ -178,7 +222,7 @@ try{
   like:changed.likes.includes(id),
   watchLater:changed.later.includes(id),
   followingCount:changed.follows.length,
-  playbackHistoryRecorded:changed.history.includes(id),
+  playbackHistoryRecorded:!!report.actualServerHistory,
   qaPlaylistCreated:changed.playlists.some(p=>p.name===name)
  };
  ws.close();adb('shell','am','force-stop','org.irgunshiuraitorah.app');
