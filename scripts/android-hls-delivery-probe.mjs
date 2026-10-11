@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import { writeFileSync,mkdirSync } from 'node:fs';
+import {fetchProbe} from './android-probe-request.mjs';
 
 const base='https://api.irgunshiuraitorah.com';
 const id=String(process.env.IRGUN_HLS_TEST_ID||'1232214252');
 const origin='https://localhost';
-const report={id,origin,requests:[],result:'running'};
+const report={id,origin,requests:[],transportFailures:[],result:'running'};
 async function request(path,{range=false,binary=false}={}){
-  const response=await fetch(base+path,{headers:{Origin:origin,'X-Irgun-App':'1',...(range?{Range:'bytes=0-65535'}:{})},signal:AbortSignal.timeout(65000)});
+  report.activeRequest=path;
+  const response=await fetchProbe(base+path,{headers:{Origin:origin,'X-Irgun-App':'1',...(range?{Range:'bytes=0-65535'}:{})}},
+    {failures:report.transportFailures});
   const cors=response.headers.get('access-control-allow-origin');
   report.requests.push({path,status:response.status,cors,contentType:response.headers.get('content-type'),bytes:response.headers.get('content-length'),range:response.headers.get('content-range')});
   assert.equal(cors,origin,path+' must be CORS-accessible from Android WebView origin');
@@ -44,5 +47,5 @@ try{
   assert.ok(segmentDurations.length>=50,'Long lecture manifest must contain many media segments');
   assert.ok(totalManifestSeconds>1800,'Reported HLS manifest must cover at least 30 minutes, not stop around 10 minutes');
   report.result='passed';
-}catch(e){report.result='failed';report.error=String(e.stack||e);process.exitCode=1;}
+}catch(e){report.result='failed';report.error=String(e.stack||e);report.cause=String(e.cause?.message||'');report.causeCode=String(e.cause?.code||'');process.exitCode=1;}
 finally{report.finishedAt=new Date().toISOString();mkdirSync('emulator-report',{recursive:true});writeFileSync('emulator-report/hls-delivery.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));}
