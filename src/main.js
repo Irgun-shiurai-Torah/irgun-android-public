@@ -6450,10 +6450,23 @@ function bind() {
     toggleWatchLater(el.dataset.save);
   }));
 
-  document.querySelectorAll('[data-follow-type]').forEach(el => el.addEventListener('click', async () => {
-    await preserveWatchTime();
-    toggleFollow(el.dataset.followType, el.dataset.followKey, el.dataset.followLabel);
-  }));
+  document.querySelectorAll('[data-follow-type]').forEach(el => {
+    // The persistent watch video lives outside #app. Renders for Save/Watch
+    // Later must not rebind this same DOM element and POST twice to /follows.
+    if (el.dataset.followBound === '1') return;
+    el.dataset.followBound = '1';
+    el.addEventListener('click', async event => {
+      event.stopPropagation();
+      if (el.dataset.followBusy === '1') return;
+      el.dataset.followBusy = '1';
+      try {
+        await preserveWatchTime();
+        await toggleFollow(el.dataset.followType, el.dataset.followKey, el.dataset.followLabel);
+      } finally {
+        delete el.dataset.followBusy;
+      }
+    });
+  });
 
   document.querySelectorAll('[data-share-kind]').forEach(el => el.addEventListener('click', () => shareItem(el.dataset.shareKind, el.dataset.shareId)));
   document.querySelectorAll('[data-download-kind]').forEach(el => el.addEventListener('click', () => downloadItem(el.dataset.downloadKind, el.dataset.downloadId)));
