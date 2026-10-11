@@ -29,6 +29,20 @@ try{
   await request('/media/'+encodeURIComponent(id)+'/360p.ts',{range:true,binary:true});
   const script=await request('/media-player/hls.js');
   assert.ok(script.length>100000&&script.includes('Hls'),'Proxied HLS.js must be provided, not a redirect/error page');
+  // The long October 6 lecture stalled precisely at 9:59.9 after seeking.
+  // Inspect the actual server HLS manifest, not only our shorter fixture.
+  const reportedId=String(process.env.IRGUN_REPORTED_HLS_TEST_ID||'1233236785:585d5d53db');
+  const prefix='/media/'+encodeURIComponent(reportedId);
+  const timelineDescriptor=JSON.parse(await request(prefix+'/source.json'));
+  assert.ok(timelineDescriptor.video?.hls,'Reported lecture must advertise its HLS source');
+  const reportedManifest=await request(prefix+'/360p.m3u8');
+  assert.match(reportedManifest,/^#EXTM3U/m,'Reported lecture must serve a valid HLS media playlist');
+  const segmentDurations=[...reportedManifest.matchAll(/^#EXTINF:([0-9.]+)/gm)].map(m=>Number(m[1]));
+  const totalManifestSeconds=segmentDurations.reduce((sum,v)=>sum+v,0);
+  report.reportedLecture={id:reportedId,manifestSegments:segmentDurations.length,manifestDurationSeconds:totalManifestSeconds,
+    endList:reportedManifest.includes('#EXT-X-ENDLIST')};
+  assert.ok(segmentDurations.length>=50,'Long lecture manifest must contain many media segments');
+  assert.ok(totalManifestSeconds>1800,'Reported HLS manifest must cover at least 30 minutes, not stop around 10 minutes');
   report.result='passed';
 }catch(e){report.result='failed';report.error=String(e.stack||e);process.exitCode=1;}
 finally{report.finishedAt=new Date().toISOString();mkdirSync('emulator-report',{recursive:true});writeFileSync('emulator-report/hls-delivery.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));}
