@@ -235,11 +235,29 @@ try{
     assert.ok(notification.includes(pkg),'The app did not post a media notification while backgrounded');
     const sessions=adb('shell','dumpsys','media_session');
     assert.ok(sessions.includes(pkg),'The Android Media3 session is absent while backgrounded');
-    report.background={notificationPosted:true,sessionRegistered:true};
+    report.background={notificationPosted:true,sessionRegistered:true, androidApi:report.androidApi};
     adb('shell','cmd','statusbar','expand-notifications');
     await delay(1400);
-    adb('shell','uiautomator','dump','--compressed','/sdcard/irgun-notification.xml');
-    const xml=adb('shell','cat','/sdcard/irgun-notification.xml');
+    // Android notification shade is sometimes non-idle on API 34+.
+    // Only tap a fresh, actual accessibility node; never infer its location.
+    let xml='',shadeErrors=[];
+    for(let attempt=1;attempt<=7;attempt++) {
+      adb('shell','rm','-f','/sdcard/irgun-notification.xml');
+      try {
+        const args=['shell','uiautomator','dump'];
+        if(attempt%2===0)args.push('--compressed');
+        args.push('/sdcard/irgun-notification.xml');
+        adb(...args);
+        xml=adb('shell','cat','/sdcard/irgun-notification.xml');
+        if(xml.includes('<node'))break;
+        shadeErrors.push('Empty native notification hierarchy: attempt '+attempt);
+      }catch(error){
+        shadeErrors.push('Attempt '+attempt+': '+String(error.message||error).slice(0,160));
+      }
+      await delay(700);
+    }
+    assert.ok(xml.includes('<node'),'Could not inspect real notification controls: '+shadeErrors.join(' | '));
+    screenshot('actual-android-notification-shade');
     const nodes=xml.match(/<node\b[^>]*>/g)||[];
     const selected=nodes.find(n=>/text="[^"]*(?:Irgun|Shiur|Prizant)/i.test(n)||/content-desc="[^"]*(?:Irgun|Shiur|Prizant)/i.test(n));
     assert.ok(selected,'Media notification must have a tappable, visible title in Android shade');
