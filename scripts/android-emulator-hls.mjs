@@ -235,6 +235,27 @@ try {
     choice:targetChoice,oldSeconds:timeAtQuality,newSeconds:after.video.time});
   const screenshot=name=>writeFileSync('emulator-report/'+name+'.png',execFileSync('adb',['exec-out','screencap','-p']));
   screenshot('hls-picture-after-quality-change');
+  if(process.env.IRGUN_SOAK_TO_AUDIO==='1') {
+    // Start the 15-minute reliability run from a proven, frame-decoding HLS
+    // lecture, using an actual Android tap (no JS setters or forced timers).
+    await tapVisible('[data-watch-mode="audio"]');
+    const audio=await wait(s=>s.activeMode==='audio' &&
+      s.native?.mode==='AUDIO' && s.native.audioIsPlaying &&
+      Number(s.native.audioDurationMs)>1000000);
+    assert.ok(audio.webAudio.every(a=>a.paused||a.muted||a.volume===0),
+      'HLS->Audio must not leave separate browser audio playing');
+    assert.ok(!audio.video || audio.video.paused||audio.video.muted||audio.video.volume===0,
+      'Parked HLS picture must not remain audibly active over native Audio');
+    const start=Number(audio.native.audioPositionMs);
+    await delay(2300);
+    const progressed=await read();
+    assert.ok(progressed.native.audioIsPlaying &&
+      Number(progressed.native.audioPositionMs)>start+1200,
+      'Real native Audio must advance before the 15-minute soak starts');
+    report.checks.push({label:'HLS lecture handed off to real audible Media3 Audio for 15-minute soak',
+      beforeMs:start,afterMs:Number(progressed.native.audioPositionMs)});
+    screenshot('soak-audio-source-started');
+  }
   report.result='passed';
 } catch (error) {
   report.result='failed';report.error=String(error.stack||error);

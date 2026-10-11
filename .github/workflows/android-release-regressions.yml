@@ -150,10 +150,11 @@ jobs:
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
             adb shell am start -n org.irgunshiuraitorah.app/.SplashActivity
             node scripts/android-emulator-inspect.mjs > emulator-report/startup-soak.json
-            # Start actual Audio using the real media test instead of the
-            # older audio-start script that hung until the job was cancelled.
-            # This still requires true 15-minute wall-clock soak assertions.
-            timeout --signal=TERM --kill-after=10s 8m node scripts/android-emulator-mp4.mjs > emulator-report/handoff-soak.json
+            # Start a real HLS video with decoded frames, then physically
+            # switch to native Audio. The Oct-6 MP4-only fixture occasionally
+            # fails before playback begins, so it cannot seed a 15-minute soak.
+            # The HLS script's real source and frame assertions still must pass.
+            IRGUN_SOAK_TO_AUDIO=1 timeout --signal=TERM --kill-after=10s 8m node scripts/android-emulator-hls.mjs > emulator-report/handoff-soak.json
             test -s emulator-report/handoff-soak.json
             node scripts/android-emulator-soak.mjs
       - name: Upload 15-minute observation logs
