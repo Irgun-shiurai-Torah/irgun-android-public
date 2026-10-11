@@ -4727,8 +4727,11 @@ async function setVimeoHandoffMuted(player, muted) {
 }
 
 
-async function confirmVideoAudibleAfterAuthority(player, timeoutMs = 2600) {
+async function confirmVideoAudibleAfterAuthority(player, timeoutMs = 6500) {
   const deadline = Date.now() + timeoutMs;
+  // An Android focus transaction can briefly unmute the WebView and then
+  // re-mute it a fraction of a second later. Require stable audible playback.
+  let audibleSince = 0;
   while (Date.now() < deadline) {
     const element = player?.getVideoElement?.();
     if (element) {
@@ -4742,7 +4745,12 @@ async function confirmVideoAudibleAfterAuthority(player, timeoutMs = 2600) {
         ]);
       }
       if (!element.paused && element.readyState >= 2 && element.videoWidth > 0 &&
-          !element.muted && element.volume > 0) return true;
+          !element.muted && element.volume > 0) {
+        if (!audibleSince) audibleSince = Date.now();
+        if (Date.now() - audibleSince >= 1250) return true;
+      } else {
+        audibleSince = 0;
+      }
     } else if (player) {
       // Vimeo iframe path: use the actual player API; a resolved setter is not
       // proof that the iframe became audible on this WebView version.
@@ -4756,7 +4764,12 @@ async function confirmVideoAudibleAfterAuthority(player, timeoutMs = 2600) {
         inspect(player.getMuted?.bind(player), null),
         inspect(player.getVolume?.bind(player), 0)
       ]);
-      if (!paused && muted === false && Number(volume) > 0) return true;
+      if (!paused && muted === false && Number(volume) > 0) {
+        if (!audibleSince) audibleSince = Date.now();
+        if (Date.now() - audibleSince >= 1250) return true;
+      } else {
+        audibleSince = 0;
+      }
     }
     await new Promise(resolve => setTimeout(resolve, 180));
   }
