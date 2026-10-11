@@ -1,12 +1,13 @@
 import {execFileSync} from 'node:child_process';
 import {writeFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
+import {nativeHierarchy} from './android-native-hierarchy.mjs';
 const email=process.env.IRGUN_TEST_EMAIL,password=process.env.IRGUN_TEST_PASSWORD;
 assert.ok(email&&password,'Configure dedicated verified account secrets IRGUN_TEST_EMAIL and IRGUN_TEST_PASSWORD');
 const adb=(...a)=>execFileSync('adb',a,{encoding:'utf8'}).trim();
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const report={checks:[],credentialsRecorded:false,startedAt:new Date().toISOString()};let ws;
-let qaCommentId='',qaCommentMarker='',accountDisplayName='';
+let qaCommentId='',qaCommentMarker='',accountDisplayName='',restartPlaylistName='';
 async function connect(){
  // The WebView CDP target can briefly disappear during IME/dialog lifecycle.
  // Retry discovery against the ACTUAL running app process. Never manufacture a
@@ -32,7 +33,7 @@ async function connect(){
  const socket=ws;let id=0;const pending=new Map();
  socket.addEventListener('close',()=>{for(const p of pending.values()){clearTimeout(p.timer);p.reject(new Error('Observation connection closed'));}pending.clear();});
  socket.addEventListener('message',e=>{const m=JSON.parse(e.data),p=pending.get(m.id);if(!p)return;pending.delete(m.id);clearTimeout(p.timer);m.error||m.result.exceptionDetails?p.reject(new Error('Observation failed')):p.resolve(m.result.result.value);});
- return ()=>new Promise((resolve,reject)=>{const n=++id;const timer=setTimeout(()=>{pending.delete(n);reject(new Error('Observation timeout'));},10000);pending.set(n,{resolve,reject,timer});socket.send(JSON.stringify({id:n,method:'Runtime.evaluate',params:{expression:'JSON.stringify(window.ISTAccountTest ? window.ISTAccountTest.snapshot() : {ready:false,observerReady:false})',returnByValue:true}}));}).then(JSON.parse);
+ return (expression='JSON.stringify(window.ISTAccountTest ? window.ISTAccountTest.snapshot() : {ready:false,observerReady:false})')=>new Promise((resolve,reject)=>{const n=++id;const timer=setTimeout(()=>{pending.delete(n);reject(new Error('Observation timeout'));},10000);pending.set(n,{resolve,reject,timer});socket.send(JSON.stringify({id:n,method:'Runtime.evaluate',params:{expression,returnByValue:true,awaitPromise:true}}));}).then(JSON.parse);
 }
 let readSnapshot;
 async function read(){
@@ -50,29 +51,13 @@ async function closeSavePicker(){if((await read()).playlistPickerOpen)await tap(
 async function wait(test,message){report.stage=message;let s;const deadline=Date.now()+30000;while(Date.now()<deadline){s=await read();if(test(s))return s;await delay(300);}throw new Error(message);}
 
 async function readNativeBounds() {
- for(let attempt=1;attempt<=4;attempt++){
-  // Do not reuse an older hierarchy if this capture fails during startup.
-  adb('shell','rm','-f','/sdcard/account-bounds.xml');
-  try {
-   adb('shell','uiautomator','dump','--compressed','/sdcard/account-bounds.xml');
-   const xml=adb('shell','cat','/sdcard/account-bounds.xml');
-   const node=xml.match(/<node\b[^>]*class="android\.webkit\.WebView"[^>]*>/)?.[0];
-   const match=node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
-   if(match){
-    const value=match.slice(1).map(Number);
-    if(value[2]>value[0]&&value[3]>value[1]){
-     report.nativeBoundsAttempts=attempt;
-     report.nativeBounds=value;
-     return value;
-    }
-   }
-  } catch {
-   // Android may return a null root while WebView is still rendering.
-   // Retry the native hierarchy; never substitute guessed screen coordinates.
-  }
-  await delay(700);
- }
- throw new Error('Native WebView hierarchy unavailable after four fresh captures');
+ const window=await readSnapshot("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{}).then(JSON.stringify)");
+ assert.equal(window.focused,true,'Irgun must own the actual foreground window before an app tap');
+ const value=[window.left,window.top,window.right,window.bottom];
+ assert.ok(value.every(Number.isFinite)&&value[2]>value[0]&&value[3]>value[1],
+   'Fresh native WebView geometry must have a nonzero size');
+ report.nativeBounds=value;
+ return value;
 }
 
 let bounds;
@@ -80,6 +65,7 @@ function native(p,s){return [Math.round(bounds[0]+p.x*(bounds[2]-bounds[0])/s.wi
 async function tap(key) {
  report.stage='Native tap: '+key;
  for(let i=0;i<9;i++) {
+  bounds=await readNativeBounds();
   const s=await read(),p=s.controls[key];
   if(p) {
    adb('shell','input','tap',...native(p,s).map(String));
@@ -115,7 +101,7 @@ async function tap(key) {
       JSON.stringify(report.commentScrollGestures.slice(-4)));
     continue;
   }
-  const returnToTop=['closeWatch','login','settings'].includes(key);
+  const returnToTop=['closeWatch','email','password','login','settings'].includes(key);
   const x=Math.round(bounds[2]-25),yStart=bounds[3]-150,yEnd=bounds[1]+135;
   if(returnToTop)adb('shell','input','swipe',String(x),String(yEnd),String(x),String(yStart),'480');
   else adb('shell','input','swipe',String(x),String(yStart),String(x),String(yEnd),'480');
@@ -129,9 +115,22 @@ async function type(key,value){assert.match(value,/^[a-zA-Z0-9@._+!-]+$/,'Dedica
  const ime=adb('shell','dumpsys','input_method');
  if(/(?:mInputShown|isInputViewShown)=true/.test(ime))adb('shell','input','keyevent','4');
  await delay(500);}
+async function dismissKeyboardBeforeSave(){
+ const shown=()=>/(?:mInputShown|isInputViewShown)=true/.test(adb('shell','dumpsys','input_method'));
+ if(shown()){
+  adb('shell','input','keyevent','KEYCODE_BACK');
+  const deadline=Date.now()+7000;
+  while(shown()&&Date.now()<deadline)await delay(250);
+  assert.equal(shown(),false,'The actual Android keyboard must close before tapping comment Save');
+  await delay(500);
+ }
+ // IME resizing changes the mapping between DOM points and native pixels.
+ // Re-measure the actual window after dismissal; retain all saved-text assertions.
+ bounds=await readNativeBounds();
+ report.commentSaveKeyboardDismissed=true;
+}
 async function acceptDeleteConfirmation(){
- adb('shell','uiautomator','dump','--compressed','/sdcard/account-confirm.xml');
- const xml=adb('shell','cat','/sdcard/account-confirm.xml');
+ const xml=nativeHierarchy('emulator-report/account-confirm.xml');
  const nodes=xml.match(/<node\b[^>]*>/g)||[];
  const positive=nodes.find(n=>/text="(OK|Yes|Delete)"/i.test(n)&&/clickable="true"/.test(n));
  assert.ok(positive,'Actual Android native confirm button must be shown');
@@ -181,7 +180,10 @@ try{
  // start playback through a real Android touch before asserting progress.
  if((await read()).watchMode!=='audio')await tap('audioMode');
  await wait(s=>s.watchMode==='audio','Audio mode did not open for real playback history');
- if(!(await read()).audioPlaying)await tap('audioPlay');
+ const audioStart=await read();
+ // A buffering Media3 source may already have accepted Play. Toggling its
+ // button as it becomes ready would immediately pause the real playback.
+ if(!audioStart.audioPlaying&&!audioStart.audioPlayWhenReady)await tap('audioPlay');
  const playbackObserved=await wait(s=>s.audioPlaying&&s.audioTime>1,'Native Media3 audio must start and advance before history is tested');
  await delay(3500);
  const laterPlayback=await read();
@@ -253,13 +255,15 @@ try{
  const editedInput=await wait(s=>s.qaEditor?.value===qaCommentMarker+'-EDITED',
    'Android keyboard did not append the QA edit to the comment textarea');
  assert.equal(editedInput.qaEditor.value,qaCommentMarker+'-EDITED','Edit textarea must preserve the original comment');
+ await dismissKeyboardBeforeSave();
+ assert.equal((await read()).qaEditor?.value,qaCommentMarker+'-EDITED','Closing the keyboard must preserve the edited comment');
  await tap('saveQaComment');
  await wait(s=>s.comments.some(c=>c.id===qaCommentId&&c.text===qaCommentMarker+'-EDITED'),'Edited comment was not saved');
  report.checks.push('Native UI edit comment persisted');
  await tap('deleteQaComment');await acceptDeleteConfirmation();
  await wait(s=>!s.comments.some(c=>c.id===qaCommentId),'Native QA comment deletion failed');
  report.checks.push('Native UI deleted its own QA comment');qaCommentId='';
- await tap('closeWatch');await tap('library');await tap('playlists');const name=`Irgun-QA-${Date.now()}`;await type('playlistName',name);await tap('createPlaylist');await wait(s=>s.playlists.some(p=>p.name===name),'Playlist creation failed');
+ await tap('closeWatch');await tap('library');await tap('playlists');const name=`Irgun-QA-${Date.now()}`;restartPlaylistName=name;await type('playlistName',name);await tap('createPlaylist');await wait(s=>s.playlists.some(p=>p.name===name),'Playlist creation failed');
  const changed=await read();
  report.beforeRestart = {
   signedIn:changed.loggedIn,
@@ -304,13 +308,19 @@ try{
  await tap('logout');await wait(s=>!s.loggedIn,'Second native logout failed');
  report.checks.push('Subsequent logout successful');
  report.accountMutationsFinishedAt=new Date().toISOString();report.status='passed';
-}catch(e){if(report.checks.includes('Native email/password login and profile')){
+}catch(e){
  try{report.appPidAtFailure=adb('shell','pidof','org.irgunshiuraitorah.app')||'';}catch(_){}
  try{report.foregroundAtFailure=adb('shell','dumpsys','activity','activities').split('\n').filter(line=>/mResumedActivity|topResumedActivity|ResumedActivity/.test(line)).slice(0,8);}catch(_){}
  try{const diagnostics=execFileSync('adb',['logcat','-d','-t','3000','-s','AndroidRuntime:E','chromium:E','cr_AwContents:E','IrgunPlayback:D','ActivityTaskManager:W','*:S'],{encoding:'utf8'});
   writeFileSync('emulator-report/account-android-errors.log',diagnostics.replaceAll(email,'[email]').replaceAll(password,'[password]'));}catch(_){}
- try{const s=await read();report.failurePlayback={watchMode:s.watchMode,audioPlaying:s.audioPlaying,audioTime:s.audioTime,currentId:s.currentId,nativeAudio:s.nativeAudio};}catch(_){}
- try{adb('shell','screencap','-p','/sdcard/account-failure.png');adb('pull','/sdcard/account-failure.png','emulator-report/account-failure.png');report.failureScreenshotCredentialsAbsent=true;}catch{}}report.status='failed';report.error=String(e.message).replaceAll(email,'[email]').replaceAll(password,'[password]');process.exitCode=1; }finally{
+ try{const s=await read();report.failurePlayback={watchMode:s.watchMode,audioPlaying:s.audioPlaying,audioTime:s.audioTime,currentId:s.currentId,nativeAudio:s.nativeAudio};
+  report.startupAtFailure={libraryReady:s.libraryReady,loading:s.loading,bootstrapInFlight:s.bootstrapInFlight,
+    authBusy:s.authBusy,authMode:s.authMode,authError:s.authError,authFields:s.authFields,
+    loggedIn:s.loggedIn,hasStoredSession:s.hasStoredSession,playlistsCount:s.playlists.length,
+    qaPlaylistFound:!!restartPlaylistName&&s.playlists.some(p=>p.name===restartPlaylistName)};}catch(_){}
+ // Only capture a signed-in page after the form has disappeared. Pre-login
+ // failures still retain the safe booleans and native diagnostics above.
+ try{const s=await read();if(s.loggedIn&&!s.controls.email&&!s.controls.password&&!s.authFields.emailPresent&&!s.authFields.passwordPresent){adb('shell','screencap','-p','/sdcard/account-failure.png');adb('pull','/sdcard/account-failure.png','emulator-report/account-failure.png');report.failureScreenshotCredentialsAbsent=true;}}catch{}report.status='failed';report.error=String(e.message).replaceAll(email,'[email]').replaceAll(password,'[password]');process.exitCode=1; }finally{
  try{await cleanupQaComment();}catch(cleanup){report.qaCommentCleanedUp=false;report.cleanupFailure=String(cleanup.message||cleanup).replaceAll(email,'[email]').replaceAll(password,'[password]');report.status='failed';process.exitCode=1;}
  report.finishedAt=new Date().toISOString();ws?.close();try{adb('shell','am','force-stop','org.irgunshiuraitorah.app');adb('shell','am','start','-n','org.irgunshiuraitorah.app/.SplashActivity');await delay(1500);report.evidenceCredentialsCleared=true;}catch{}writeFileSync('emulator-report/account.json',JSON.stringify(report,null,2));}
 

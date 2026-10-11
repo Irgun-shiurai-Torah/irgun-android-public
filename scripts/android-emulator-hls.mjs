@@ -1,12 +1,14 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
+import {observedAdb} from './android-adb-observer.mjs';
+import {nativeHierarchy} from './android-native-hierarchy.mjs';
 
 // Read the real WebView through CDP, but perform every navigation gesture with
 // Android input events. No DOM clicks or synthetic touch events stand in for UI.
-const adb = (...args) => execFileSync('adb', args, { encoding: 'utf8' }).trim();
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const report = { gestures: [], checks: [] };
+const adb = observedAdb(report);
 let ws;
 try {
   const pid = adb('shell', 'pidof', 'org.irgunshiuraitorah.app').split(/\s+/)[0];
@@ -75,6 +77,8 @@ try {
         frames:v.getVideoPlaybackQuality?.().totalVideoFrames??v.webkitDecodedFrameCount,error:v.error?.code,
         hlsLastError:v.dataset.hlsLastError||null,hlsFallbackReason:v.dataset.hlsFallbackReason||null,
         hlsRecoveryAttempts:v.dataset.hlsRecoveryAttempts||null,
+        hlsQualityRecovery:v.dataset.hlsQualityRecovery||null,
+        hlsCurrentLevel:v.dataset.hlsCurrentLevel??null,hlsBufferedLevel:v.dataset.hlsBufferedLevel??null,
         seeking:v.seeking,rate:v.playbackRate,buffered:Array.from({length:v.buffered.length},(_,i)=>[v.buffered.start(i),v.buffered.end(i)]),
         rect:r?{x:r.x,y:r.y,width:r.width,height:r.height}:null,
         stage:stage?{x:stage.x,y:stage.y,width:stage.width,height:stage.height}:null}:null,
@@ -87,7 +91,7 @@ try {
   })())`));
   const read = async () => {
     const dom = await readDOM();
-    dom.native = await evaluate("window.Capacitor.nativePromise('IrgunPlayback','getState',{})");
+    dom.native = await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaPlaybackSnapshot',{})");
     return dom;
   };
   const wait = async predicate => {
@@ -95,49 +99,13 @@ try {
     for(let i=0;i<120;i++) {state=await read();if(predicate(state))return state;await delay(500);}
     throw new Error(`Video did not settle: ${JSON.stringify(state)}`);
   };
-  // Android 14+ may report a null UIAutomator root during WebView startup.
-  // Use fresh native accessibility bounds, never guessed tap coordinates.
-  let measuredBounds=null;
-  const hierarchyErrors=[];
-  for(let attempt=1;attempt<=7 && !measuredBounds;attempt++) {
-    for(const compressed of [false,true]) {
-      adb('shell','rm','-f','/sdcard/irgun-hls-bounds.xml');
-      try {
-        const args=['shell','uiautomator','dump'];
-        if(compressed)args.push('--compressed');
-        args.push('/sdcard/irgun-hls-bounds.xml');
-        adb(...args);
-        const xml=adb('shell','cat','/sdcard/irgun-hls-bounds.xml');
-        const node=xml.match(/<node\b[^>]*class="android\.webkit\.WebView"[^>]*>/)?.[0];
-        const match=node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
-        const rect=match?.slice(1).map(Number);
-        if(rect && rect[2]>rect[0] && rect[3]>rect[1]) {
-          measuredBounds=rect;
-          report.nativeBoundsAttempt=attempt;
-          report.nativeBoundsCompressed=compressed;
-          break;
-        }
-        hierarchyErrors.push('Attempt '+attempt+': no real WebView node');
-      } catch(error) {
-        hierarchyErrors.push('Attempt '+attempt+': '+String(error.message||error).slice(0,160));
-      }
-    }
-    if(!measuredBounds) {
-      adb('shell','input','keyevent','KEYCODE_WAKEUP');
-      await delay(850);
-    }
-  }
-  if (!measuredBounds) {
-    const windows=adb('shell','dumpsys','window','windows');
-    const appWindow=windows.split(/Window #/).find(part=>part.includes('org.irgunshiuraitorah.app/') && /mFrame=|Frames:|frame=/.test(part));
-    const rect=appWindow?.match(/mFrame=\[(\d+),(\d+)\]\[(\d+),(\d+)\]/)
-      || appWindow?.match(/frame=\[(\d+),(\d+)\]\[(\d+),(\d+)\]/i);
-    if(rect && Number(rect[3])>Number(rect[1]) && Number(rect[4])>Number(rect[2])){
-      measuredBounds=rect.slice(1).map(Number);
-      report.nativeBoundsSource='actual Android app window frame';
-    }
-  }
-  assert.ok(measuredBounds,'Native Android WebView bounds unavailable: '+hierarchyErrors.join(' | '));
+  // Read the actual native WebView directly. UIAutomator's wait-for-idle dump
+  // blocks on a moving page and cannot prove foreground ownership.
+  const windowBounds = await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+  assert.equal(windowBounds.focused,true,'Irgun must own the foreground window; an ANR dialog is a failure');
+  const measuredBounds=[windowBounds.left,windowBounds.top,windowBounds.right,windowBounds.bottom];
+  assert.ok(measuredBounds.every(Number.isFinite)&&measuredBounds[2]>measuredBounds[0]&&measuredBounds[3]>measuredBounds[1],
+    'Actual native WebView bounds must have a nonzero size');
   const [left,top,right,bottom]=measuredBounds;
   report.nativeBounds=measuredBounds;
   const nativePoint=p=>[Math.round(left+p.x*(right-left)/p.width),Math.round(top+p.y*(bottom-top)/p.height)];
@@ -219,15 +187,17 @@ try {
   assert.ok(initial.quality&&!initial.quality.hidden,'Multi-variant HLS must show its quality selector');
   const playable=initial.quality.options.filter(o=>o.value!=='-1');
   assert.ok(playable.length>=2,'At least two video qualities must be selectable');
-  const targetChoice=playable.find(x=>/360p/.test(x.label))||playable[0];
+  const currentLevel=String(initial.video.hlsCurrentLevel??'');
+  assert.ok(playable.some(x=>x.value===currentLevel),'The initially playing HLS fragment must identify its real quality');
+  const targetChoice=playable.find(x=>x.value!==currentLevel)||playable[0];
+  assert.notEqual(targetChoice.value,currentLevel,'The native quality test must select a different variant');
   // This is a native Android tap, followed by a native Android popup item tap.
   // Runtime.evaluate is ONLY read-only inspection.
   const dropdown=await visiblePoint('[data-hls-quality]');
   assert.ok(dropdown,'HLS quality dropdown must be visible and hit-testable');
   adb('shell','input','tap',...nativePoint(dropdown).map(String));
   await delay(700);
-  adb('shell','uiautomator','dump','--compressed','/sdcard/irgun-hls-options.xml');
-  const xmlOptions=adb('shell','cat','/sdcard/irgun-hls-options.xml');
+  const xmlOptions=nativeHierarchy('emulator-report/irgun-hls-options.xml');
   const lines=xmlOptions.match(/<node\b[^>]*>/g)||[];
   const matching=lines.find(x=>x.includes('text="'+targetChoice.label+'"'));
   assert.ok(matching,'Real Android quality options popup must include '+targetChoice.label);
@@ -235,15 +205,23 @@ try {
   assert.ok(b&&b[2]>b[0]&&b[3]>b[1],'Quality popup option must have visible screen coordinates');
   adb('shell','input','tap',String(Math.floor((b[0]+b[2])/2)),String(Math.floor((b[1]+b[3])/2)));
   const selected=await wait(s=>s.quality?.value===targetChoice.value,'Quality selection did not stick');
+  report.qualitySelected=selected;
   assert.equal(selected.sourceType,'hls','Quality selection must not switch to MP4');
   assert.equal(selected.video.error,undefined,'Video decoder reported error');
   const timeAtQuality=selected.video.time,framesAtQuality=selected.video.frames;
   await delay(4500);
   const after=await read();
+  report.afterQuality=after;
   assert.equal(after.sourceType,'hls','Quality switching may not switch to MP4 fallback');
   assert.ok(after.video.time>timeAtQuality+2,'Quality change stopped the video');
   assert.ok(after.video.frames>framesAtQuality+4,'Video picture froze when quality changed');
   assert.ok(after.video.time>=timeAtQuality,'Quality change restarted the shiur');
+  // A select value alone is not proof that a different quality was played.
+  // Conservative HLS switching keeps the existing buffer, then consumes the
+  // chosen variant. Require its real FRAG_CHANGED observation and new frames.
+  const changed=await wait(s=>s.sourceType==='hls'&&s.video?.hlsCurrentLevel===targetChoice.value);
+  report.qualityFragment=changed;
+  await moving('Selected HLS variant renders advancing decoded frames');
   report.checks.push({label:'Native quality selection preserves moving HLS picture and position',
     choice:targetChoice,oldSeconds:timeAtQuality,newSeconds:after.video.time});
   const screenshot=name=>writeFileSync('emulator-report/'+name+'.png',execFileSync('adb',['exec-out','screencap','-p']));

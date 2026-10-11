@@ -18,6 +18,13 @@ window.ISTReleaseQA = { snapshot() {
     videos: document.querySelectorAll('#watchDirectHlsVideo').length,
     iframes: document.querySelectorAll('#watchVimeoFrame').length,
     sourceType: String(state.watchVimeo?.getSourceType?.() || ''),
+    handoff: {
+      audioToVideo: !!state.watchAudioToVideoHandoff,
+      commitBusy: !!state.watchAudioToVideoCommitBusy,
+      targetSeconds: Number(state.watchAudioToVideoTargetSeconds || 0),
+      videoPlaying: !!state.watchVideoPlaying,
+      authorityFence: state.playbackAuthorityFence ? { ...state.playbackAuthorityFence } : null
+    },
     video: element ? {
       src: String(element.currentSrc || element.src || ''),
       time: Number(element.currentTime || 0),
@@ -33,11 +40,13 @@ window.ISTReleaseQA = { snapshot() {
     offline: [...state.offlineDownloads.values()].map(row => ({
       key: String(row.key || ''), id: String(row.id || ''),
       kind: String(row.kind || ''), bytes: Number(row.bytes || 0),
+      downloadAttempts: Number(row.downloadAttempts || 1),
       uri: String(row.uri || '')
     })),
     offlineSaveError: String(state.offlineSaveLastError || '').slice(0,350),
     offlineJobs: [...state.offlineJobs.entries()].map(([key, job]) => ({
-      key: String(key), percent: Number(job.percent || 0)
+      key: String(key), percent: Number(job.percent || 0),
+      attempt: Number(job.attempt || 1), bytes: Number(job.bytes || 0), total: Number(job.total || 0)
     })),
     currentOffline: !!state.current?.offline,
     currentId: String(state.current?.id || ''),

@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
+import {nativeHierarchy} from './android-native-hierarchy.mjs';
 
 // Run after android-emulator-mp4.mjs: the actual reported shiur is already
 // playing in native AUDIO mode. All UI actions below are physical ADB events.
@@ -60,7 +61,7 @@ async function read() {
   const snap=await evaluate('JSON.stringify(window.ISTReleaseQA?.snapshot?.() || {observerMissing:true})');
   const s=JSON.parse(snap);
   assert.equal(s.observerMissing,undefined,'QA observer must be appended to this disposable build');
-  s.native=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','getState',{})");
+  s.native=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaPlaybackSnapshot',{})");
   return s;
 }
 async function wait(test,message,timeout=45000) {
@@ -73,33 +74,13 @@ async function wait(test,message,timeout=45000) {
   throw new Error(message+'; last='+JSON.stringify(last||{})+'; error='+String(lastError||'none'));
 }
 async function nativeBounds() {
-  for(let i=0;i<5;i++){
-    try{
-      adb('shell','rm','-f','/sdcard/irgun-regression-bounds.xml');
-      adb('shell','uiautomator','dump','/sdcard/irgun-regression-bounds.xml');
-      const xml=adb('shell','cat','/sdcard/irgun-regression-bounds.xml');
-      const node=xml.match(/<node\b[^>]*class="android\.webkit\.WebView"[^>]*>/)?.[0];
-      const arr=node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
-      if(arr&&arr[2]>arr[0]&&arr[3]>arr[1])return arr;
-    }catch{}
-    await delay(700);
-  }
-  // The real media handoff test already obtained uncompressed native WebView
-  // bounds on this exact emulator and screenshot geometry. Reuse that measured
-  // result only when the UI hierarchy temporarily returns a null root.
-  try {
-    const prior=JSON.parse(readFileSync('emulator-report/reported-shiur.json','utf8'));
-    const measured=prior.nativeBounds;
-    const current=adb('shell','wm','size').match(/(\d+)x(\d+)/g)?.at(-1)?.split('x').map(Number);
-    assert.ok(prior.result==='passed'&&Array.isArray(measured)&&measured.length===4,
-      'Only passed baseline observations may provide fallback native bounds');
-    assert.ok(current&&measured[0]>=0&&measured[1]>=0&&measured[2]<=current[0]&&measured[3]<=current[1],
-      'Baseline bounds must fit actual current Android screen');
-    report.boundsSource='measured by preceding real-media baseline';
-    return measured;
-  } catch (error) {
-    throw new Error('Actual Android WebView bounds are unavailable: '+String(error.message||error));
-  }
+  const geometry=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+  assert.equal(geometry.focused,true,'Irgun must own the native foreground window before an app tap');
+  const arr=[geometry.left,geometry.top,geometry.right,geometry.bottom];
+  assert.ok(arr.every(Number.isFinite)&&arr[2]>arr[0]&&arr[3]>arr[1],
+    'Fresh actual Android WebView bounds required');
+  report.boundsSource='fresh native WebView location and size';
+  return arr;
 }
 const nativeXY=(point)=>{
   assert.ok(bounds,'Observed native window bounds required');
@@ -115,6 +96,7 @@ async function hit(selector){
   return JSON.parse(await evaluate(expr));
 }
 async function tap(selector){
+  bounds=await nativeBounds();
   const point=await hit(selector);
   assert.ok(point,'A visible, hit-tested native control is required: '+selector);
   const xy=nativeXY(point);
@@ -137,28 +119,13 @@ async function tapWithScroll(selector) {
   throw new Error('Required control was not visible after native scrolling: '+selector);
 }
 async function tapPositiveAndroidDialog(){
-  let failures=[];
-  for(let attempt=1;attempt<=6;attempt++){
-    const xmlPath='/sdcard/irgun-offline-delete-dialog.xml';
-    adb('shell','rm','-f',xmlPath);
-    try{
-      const args=['shell','uiautomator','dump'];
-      if(attempt%2===0)args.push('--compressed');
-      args.push(xmlPath);
-      adb(...args);
-      const xml=adb('shell','cat',xmlPath);
-      const nodes=xml.match(/<node\b[^>]*>/g)||[];
-      const positive=nodes.find(n=>/text="(OK|Yes|Delete|Remove)"/i.test(n)&&/clickable="true"/.test(n));
-      const rect=positive?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
-      if(rect&&rect[2]>rect[0]&&rect[3]>rect[1]){
-        adb('shell','input','tap',String(Math.round((rect[0]+rect[2])/2)),String(Math.round((rect[1]+rect[3])/2)));
-        return;
-      }
-      failures.push('No native positive confirmation in attempt '+attempt);
-    }catch(e){failures.push(String(e.message||e).slice(0,160));}
-    await delay(650);
-  }
-  throw new Error('Could not confirm actual Android offline-file deletion: '+failures.join(' | '));
+  const xml=nativeHierarchy('emulator-report/irgun-offline-delete-dialog.xml');
+  const nodes=xml.match(/<node\b[^>]*>/g)||[];
+  const positive=nodes.find(n=>/text="(OK|Yes|Delete|Remove)"/i.test(n)&&/clickable="true"/.test(n));
+  const rect=positive?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
+  assert.ok(rect&&rect[2]>rect[0]&&rect[3]>rect[1],
+    'Actual Android offline-file deletion confirmation must be visible');
+  adb('shell','input','tap',String(Math.round((rect[0]+rect[2])/2)),String(Math.round((rect[1]+rect[3])/2)));
 }
 function checks(label,details={}) {report.checks.push({label,...details});save();}
 async function section(name,fn){
@@ -167,7 +134,16 @@ async function section(name,fn){
   report.androidApi = Number(adb('shell','getprop','ro.build.version.sdk'));
   try {await fn();checks(name);console.log('PASS: '+name);}
   catch(e){const error=String(e.stack||e);report.failures.push({name,error});screenshot('failed-'+report.failures.length);console.error('FAIL: '+name+': '+error.slice(0,1400));}
-  finally{save();}
+  finally{
+    // A failed notification observation must not leave SystemUI covering every
+    // later physical tap. Its original failure remains in the report.
+    if(name.startsWith('Home during video')){
+      adb('shell','cmd','statusbar','collapse');
+      adb('shell','am','start','-W','-n',pkg+'/.MainActivity');
+      await delay(500);
+    }
+    save();
+  }
 }
 function noDuplicatePlayback(s){
   assert.ok(s.overlays===1,'Exactly one video overlay is expected');
@@ -278,31 +254,27 @@ try{
     assert.ok(notification.includes(pkg),'The app did not post a media notification while backgrounded');
     const sessions=adb('shell','dumpsys','media_session');
     assert.ok(sessions.includes(pkg),'The Android Media3 session is absent while backgrounded');
-    report.background={notificationPosted:true,sessionRegistered:true, androidApi:report.androidApi};
+    const background=await read();audibleAudio(background);
+    assert.ok(background.native.audioPositionMs/1000>=beforePosition+1,'Home must preserve the actual playing position');
+    await delay(1400);
+    const continuing=await read();audibleAudio(continuing);
+    assert.ok(continuing.native.audioPositionMs>background.native.audioPositionMs+700,
+      'Actual audible native Audio must advance in the background before reopening');
+    report.background={notificationPosted:true,sessionRegistered:true, androidApi:report.androidApi,
+      beforeMs:background.native.audioPositionMs,afterMs:continuing.native.audioPositionMs,
+      audibleVolume:continuing.native.audioOutputVolume};
     adb('shell','cmd','statusbar','expand-notifications');
     await delay(1400);
-    // Android notification shade is sometimes non-idle on API 34+.
-    // Only tap a fresh, actual accessibility node; never infer its location.
-    let xml='',shadeErrors=[];
-    for(let attempt=1;attempt<=7;attempt++) {
-      adb('shell','rm','-f','/sdcard/irgun-notification.xml');
-      try {
-        const args=['shell','uiautomator','dump'];
-        if(attempt%2===0)args.push('--compressed');
-        args.push('/sdcard/irgun-notification.xml');
-        adb(...args);
-        xml=adb('shell','cat','/sdcard/irgun-notification.xml');
-        if(xml.includes('<node'))break;
-        shadeErrors.push('Empty native notification hierarchy: attempt '+attempt);
-      }catch(error){
-        shadeErrors.push('Attempt '+attempt+': '+String(error.message||error).slice(0,160));
-      }
-      await delay(700);
-    }
-    assert.ok(xml.includes('<node'),'Could not inspect real notification controls: '+shadeErrors.join(' | '));
+    // Read the actual SystemUI tree without waiting for the continuously
+    // updating media progress view to become idle. Taps still use ADB input.
+    const xml=nativeHierarchy('emulator-report/irgun-notification.xml');
     screenshot('actual-android-notification-shade');
     const nodes=xml.match(/<node\b[^>]*>/g)||[];
-    const selected=nodes.find(n=>/text="[^"]*(?:Irgun|Shiur|Prizant)/i.test(n)||/content-desc="[^"]*(?:Irgun|Shiur|Prizant)/i.test(n));
+    const title=String(v.native.title||'');
+    assert.ok(title,'The playing Irgun session must identify its notification title');
+    const escapedTitle=title.replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+    const selected=nodes.find(n=>/visible="true"/.test(n)&&
+      (n.includes('text="'+escapedTitle+'"')||n.includes('content-desc="'+escapedTitle+'"')));
     assert.ok(selected,'Media notification must have a tappable, visible title in Android shade');
     const rect=selected.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
     assert.ok(rect&&rect[2]>rect[0]&&rect[3]>rect[1],'Visible notification title must have native screen bounds');
@@ -311,6 +283,8 @@ try{
     bounds=await nativeBounds();
     const back=await wait(s=>s.native.mode==='AUDIO'&&s.native.audioIsPlaying,'Notification did not reopen playing native Audio',50000);
     assert.ok(back.native.audioPositionMs/1000>=beforePosition+1,'Background handoff lost saved Video progress');
+    assert.ok(back.native.audioPositionMs>=continuing.native.audioPositionMs-750,
+      'Notification reopening must not rewind native Audio to the parked Video clock');
     audibleAudio(back);
     adb('shell','input','keyevent','KEYCODE_MEDIA_PAUSE');
     await wait(s=>s.native.mode==='AUDIO'&&!s.native.audioIsPlaying,'Media notification/session Pause action not respected',17000);
@@ -350,7 +324,7 @@ try{
       const start=await read();audibleAudio(start);await delay(3500);
       const end=await read();audibleAudio(end);
       assert.ok(end.native.audioPositionMs>start.native.audioPositionMs+1400,'Downloaded audio must continue playing without internet');
-      checks('Actual downloaded audio played while offline',{bytes:record.bytes});
+      checks('Actual downloaded audio played while offline',{bytes:record.bytes,downloadAttempts:record.downloadAttempts});
     }finally{await setOnline(true);}
     const present=await read();
     assert.ok(present.offline.some(x=>x.key===record.key&&x.bytes>0),'Downloaded file disappeared before deletion');

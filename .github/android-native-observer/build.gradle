@@ -1,0 +1,12 @@
+apply plugin: 'com.android.application'
+android {
+    namespace 'org.irgunshiuraitorah.qa'
+    compileSdk rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId 'org.irgunshiuraitorah.qa'
+        minSdk 24
+        targetSdk 36
+        versionCode 1
+        versionName '1'
+    }
+}

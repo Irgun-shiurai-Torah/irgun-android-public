@@ -52,6 +52,9 @@ window.ISTAccountTest = { snapshot() {
     : null;
   return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,libraryTabStrip,watchScroll,
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
+    libraryReady:!!state.libraryReady,loading:!!state.loading,bootstrapInFlight:!!bootstrapInFlight,hasStoredSession:!!state.token,
+    authBusy:!!state.authBusy,authMode:String(state.authMode||''),
+    authFields:{emailPresent:!!document.getElementById('authEmail')?.value,passwordPresent:!!document.getElementById('authPassword')?.value},
     name:state.user?.name||'',profileShownName:document.querySelector('.profile-line span')?.textContent||'',
     accountEmail:state.user?.email||'',screen:state.screen,
     comments:(state.watchComments||[]).map(c=>({id:String(c.id),text:String(c.text),mine:String(c.user_id)===String(state.user?.id)})),
@@ -60,6 +63,7 @@ window.ISTAccountTest = { snapshot() {
     follows:[...state.follows.keys()],history:state.history.map(x=>historyRowId(x)),
     historyPositions:state.history.map(x=>({id:historyRowId(x),progressSeconds:Number(x.progressSeconds||x.positionSeconds||0),mediaType:String(x.mediaType||'')})),
     watchMode:String(state.watchMode||''),audioPlaying:state.nativePlayback?.mode==='AUDIO'&&Boolean(state.nativePlayback?.audioIsPlaying),
+    audioPlayWhenReady:state.nativePlayback?.mode==='AUDIO'&&Boolean(state.nativePlayback?.audioPlayWhenReady),
     audioTime:Number(state.nativePlayback?.audioPositionMs||0)/1000,
     currentId:String(state.current?.id||''),nativeAudio:{
       mode:String(state.nativePlayback?.mode||''),lectureId:String(state.nativePlayback?.lectureId||''),
