@@ -9,6 +9,7 @@ on:
       - '.github/workflows/android-release-regressions.yml'
       - 'scripts/android-regression-extensions.mjs'
       - 'scripts/android-website-account-sync.mjs'
+      - 'scripts/android-comments-qa.mjs'
       - 'scripts/android-hls-delivery-probe.mjs'
       - 'src/**'
       - 'android/**'
@@ -106,6 +107,34 @@ jobs:
           name: android-hls-delivery-${{ github.run_id }}
           path: emulator-report/hls-delivery.json
           if-no-files-found: warn
+          retention-days: 14
+
+
+  qa-comments:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    concurrency:
+      group: irgun-android-logged-in-account-qa
+      cancel-in-progress: false
+    env:
+      IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
+      IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
+    steps:
+      - name: Require dedicated QA account
+        run: test -n "$IRGUN_TEST_EMAIL" && test -n "$IRGUN_TEST_PASSWORD"
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Real comment create, edit, delete and unauthenticated tampering tests
+        run: node scripts/android-comments-qa.mjs
+      - name: Preserve comment lifecycle and cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-qa-comments-${{ github.run_id }}
+          path: emulator-report/comments.json
+          if-no-files-found: error
           retention-days: 14
 
   website-android-account-sync:
