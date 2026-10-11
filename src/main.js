@@ -4726,6 +4726,43 @@ async function setVimeoHandoffMuted(player, muted) {
   } catch (_) {}
 }
 
+
+async function confirmVideoAudibleAfterAuthority(player, timeoutMs = 2600) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const element = player?.getVideoElement?.();
+    if (element) {
+      // Modern Android WebView can re-mute or suspend the media element during
+      // the Media3 focus transaction. Never accept a silent VIDEO owner.
+      if (element.muted || element.volume <= 0) await setVimeoHandoffMuted(player, false);
+      if (element.paused && element.readyState >= 2) {
+        await Promise.race([
+          Promise.resolve(player.play()).catch(() => {}),
+          new Promise(resolve => setTimeout(resolve, 350))
+        ]);
+      }
+      if (!element.paused && element.readyState >= 2 && element.videoWidth > 0 &&
+          !element.muted && element.volume > 0) return true;
+    } else if (player) {
+      // Vimeo iframe path: use the actual player API; a resolved setter is not
+      // proof that the iframe became audible on this WebView version.
+      await setVimeoHandoffMuted(player, false);
+      const inspect = (fn, fallback) => Promise.race([
+        Promise.resolve(fn?.()).catch(() => fallback),
+        new Promise(resolve => setTimeout(() => resolve(fallback), 350))
+      ]);
+      const [paused, muted, volume] = await Promise.all([
+        inspect(player.getPaused?.bind(player), true),
+        inspect(player.getMuted?.bind(player), null),
+        inspect(player.getVolume?.bind(player), 0)
+      ]);
+      if (!paused && muted === false && Number(volume) > 0) return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, 180));
+  }
+  return false;
+}
+
 async function finishAudioToVideoHandoff(videoKey, player = state.watchVimeo) {
   const key = String(videoKey || '');
   // Vimeo's play event and the readiness waiter can hit this simultaneously. If
@@ -4751,6 +4788,9 @@ async function finishAudioToVideoHandoff(videoKey, player = state.watchVimeo) {
         // can safely restore Audio mode without ever producing double audio.
         await PlaybackController.switchAuthorityToVideo(position, duration, true);
         await setVimeoHandoffMuted(player, false);
+        if (!await confirmVideoAudibleAfterAuthority(player)) {
+          throw new Error('Native VIDEO authority was confirmed but the picture is paused or muted');
+        }
       } else {
         // Web/iOS has no native authority transaction to confirm. Make the already-
         // synchronized Vimeo audible first, then pause HTML audio to avoid a gap.
