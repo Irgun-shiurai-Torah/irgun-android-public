@@ -207,3 +207,37 @@ test('failed preparation restarts Audio if muted WebView playback took its focus
   assert.equal(f.state.current,f.item);assert.ok(!f.events.includes('commit'));
   assert.deepEqual(f.events.find(e=>typeof e==='object'),{position:603,playing:true,volume:1});
 });
+
+test('Follow binding must not double-submit after a persistent video overlay survives renders', async () => {
+  const start = mainSource.indexOf("  document.querySelectorAll('[data-follow-type]').forEach(el => {");
+  const end = mainSource.indexOf("  document.querySelectorAll('[data-share-kind]')", start);
+  assert.ok(start >= 0 && end > start, 'Follow event binding block must be present');
+  const binding = mainSource.slice(start, end);
+  const handlers = [];
+  const element = {
+    dataset: { followType: 'speaker', followKey: 'rav-qa', followLabel: 'Test Speaker' },
+    addEventListener(type, handler) { assert.equal(type, 'click'); handlers.push(handler); }
+  };
+  let followCalls = 0;
+  const resolvers = [];
+  const context = {
+    document: { querySelectorAll: selector => selector === '[data-follow-type]' ? [element] : [] },
+    preserveWatchTime: async () => {},
+    toggleFollow: () => new Promise(resolve => { followCalls++; resolvers.push(resolve); })
+  };
+  runInNewContext(binding, context); // Initial video render.
+  runInNewContext(binding, context); // Save/Watch Later dialog render.
+  runInNewContext(binding, context); // Closing dialog / re-render.
+  assert.equal(handlers.length, 1, 'A persistent Follow button must have only one click handler');
+  const evt = { stopPropagation() {} };
+  const first = handlers[0](evt), second = handlers[0](evt); // Two fast taps.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(followCalls, 1, 'A second tap while waiting must not issue a second request');
+  resolvers.shift()();
+  await Promise.all([first, second]);
+  const third = handlers[0](evt);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(followCalls, 2, 'The Follow button must work again once the request resolves');
+  resolvers.shift()();
+  await third;
+});
