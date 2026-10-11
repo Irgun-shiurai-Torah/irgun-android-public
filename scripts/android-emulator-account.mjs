@@ -96,8 +96,35 @@ try{
  report.accountMutationsStartedAt=new Date().toISOString();const before=await read();await tap('like');await wait(s=>s.likes.includes(id)!==before.likes.includes(id),'Like toggle failed');report.checks.push('Native Like toggle');
  await tap('save');await tap('later');await wait(s=>s.later.includes(id)!==before.later.includes(id),'Save toggle failed');await closeSavePicker();report.checks.push('Native Watch Later toggle and dialog closure');await tap('follow');await wait(s=>JSON.stringify(s.follows)!==JSON.stringify(before.follows),'Follow toggle failed');report.checks.push('Native speaker follow toggle');await wait(s=>s.videoPlaying&&s.videoTime>1&&s.history.includes(id),'Playback needed to record real history');report.checks.push('Actual playing lecture history recorded');
  await tap('closeWatch');await tap('library');await tap('playlists');const name=`Irgun-QA-${Date.now()}`;await type('playlistName',name);await tap('createPlaylist');await wait(s=>s.playlists.some(p=>p.name===name),'Playlist creation failed');
- const changed=await read();ws.close();adb('shell','am','force-stop','org.irgunshiuraitorah.app');adb('shell','am','start','-n','org.irgunshiuraitorah.app/.SplashActivity');await delay(5000);readSnapshot=await connect();
- await wait(s=>s.ready&&s.loggedIn&&s.playlists.some(p=>p.name===name),'Session/playlist did not survive relaunch');const restored=await read();assert.equal(restored.likes.includes(id),changed.likes.includes(id));assert.equal(restored.later.includes(id),changed.later.includes(id));assert.deepEqual(restored.follows.slice().sort(),changed.follows.slice().sort());assert.ok(restored.history.includes(id),'Playback history must survive relaunch');report.checks.push('Server-backed likes, Watch Later, follows, history and playlist survive process restart');
+ const changed=await read();
+ report.beforeRestart = {
+  signedIn:changed.loggedIn,
+  like:changed.likes.includes(id),
+  watchLater:changed.later.includes(id),
+  followingCount:changed.follows.length,
+  playbackHistoryRecorded:changed.history.includes(id),
+  qaPlaylistCreated:changed.playlists.some(p=>p.name===name)
+ };
+ ws.close();adb('shell','am','force-stop','org.irgunshiuraitorah.app');
+ adb('shell','am','start','-n','org.irgunshiuraitorah.app/.SplashActivity');
+ await delay(5000);readSnapshot=await connect();
+ await wait(s=>s.ready&&s.loggedIn&&s.playlists.some(p=>p.name===name),'Session/playlist did not survive relaunch');
+ const restored=await read();
+ const expectedFollows=changed.follows.slice().sort(),actualFollows=restored.follows.slice().sort();
+ report.restartComparison={
+  signedIn:restored.loggedIn,
+  qaPlaylistFound:restored.playlists.some(p=>p.name===name),
+  like:{expected:changed.likes.includes(id),actual:restored.likes.includes(id)},
+  watchLater:{expected:changed.later.includes(id),actual:restored.later.includes(id)},
+  follows:{expectedCount:expectedFollows.length,actualCount:actualFollows.length,match:JSON.stringify(expectedFollows)===JSON.stringify(actualFollows)},
+  playbackHistory:{expected:true,actual:restored.history.includes(id)}
+ };
+ report.stage='Verify restored Like, Watch Later, Following, History and playlist';
+ assert.equal(report.restartComparison.like.actual,report.restartComparison.like.expected,'Like did not persist across Android app restart');
+ assert.equal(report.restartComparison.watchLater.actual,report.restartComparison.watchLater.expected,'Watch Later did not persist across Android app restart');
+ assert.ok(report.restartComparison.follows.match,'Following did not persist across Android app restart');
+ assert.ok(report.restartComparison.playbackHistory.actual,'Playback history did not persist across Android app restart');
+ report.checks.push('Server-backed likes, Watch Later, follows, history and playlist survive process restart');
  // Restore only the lecture flags changed by this run. Leave the named QA playlist for review.
  await tap('shiurim');await tap('open');assert.equal((await wait(s=>!!s.watchId,'Lecture unavailable')).watchId,id,'Cleanup must target the same lecture');await tap('like');await tap('save');await tap('later');await closeSavePicker();await tap('follow');await wait(s=>s.likes.includes(id)===before.likes.includes(id)&&s.later.includes(id)===before.later.includes(id)&&JSON.stringify(s.follows.slice().sort())===JSON.stringify(before.follows.slice().sort()),'Lecture flags were not restored');report.checks.push('Lecture flags restored');await tap('closeWatch');await tap('account');await tap('logout');await wait(s=>!s.loggedIn&&s.likes.length===0&&s.later.length===0&&s.playlists.length===0,'Logout did not clear account data');report.checks.push('Logout clears account state');report.accountMutationsFinishedAt=new Date().toISOString();report.status='passed';
 }catch(e){if(report.checks.includes('Native email/password login and profile')){try{adb('shell','screencap','-p','/sdcard/account-failure.png');adb('pull','/sdcard/account-failure.png','emulator-report/account-failure.png');report.failureScreenshotCredentialsAbsent=true;}catch{}}report.status='failed';report.error=String(e.message).replaceAll(email,'[email]').replaceAll(password,'[password]');process.exitCode=1;}finally{report.finishedAt=new Date().toISOString();ws?.close();try{adb('shell','am','force-stop','org.irgunshiuraitorah.app');adb('shell','am','start','-n','org.irgunshiuraitorah.app/.SplashActivity');await delay(1500);report.evidenceCredentialsCleared=true;}catch{}writeFileSync('emulator-report/account.json',JSON.stringify(report,null,2));}
