@@ -9,6 +9,12 @@ on:
       - '.github/workflows/android-account-tests.yml'
       - 'scripts/android-emulator-account*'
 
+# This workflow mutates a shared QA account; concurrent runs would toggle each
+# other's Likes/Watch Later/follows and make persistence assertions misleading.
+concurrency:
+  group: irgun-android-logged-in-account-qa
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
