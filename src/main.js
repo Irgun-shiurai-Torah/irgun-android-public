@@ -7223,8 +7223,15 @@ async function startAudio(item, resumeAt = 0) {
 }
 
 function togglePlay() {
+  if (!state.current && state.watchVideo && state.watchMode === 'audio') {
+    state.current = videoAudioPlaybackItem(state.watchVideo, videoId(state.watchVideo));
+  }
   if (!state.current && !(state.watchVideo && state.watchMode === 'video')) return;
-  if (playbackIsPaused()) PlaybackController.play().catch(()=>{}); else PlaybackController.pause().catch(()=>{});
+  const action = playbackIsPaused() ? PlaybackController.play() : PlaybackController.pause();
+  Promise.resolve(action).catch(error => {
+    console.warn('[Playback] Play/Pause failed', error);
+    setToast(currentLanguage()==='he'?'לא היה אפשר להפעיל את השיעור. נסו שוב.':'Playback could not start. Please try again.');
+  });
   updatePlayerUi();
 }
 
@@ -7794,7 +7801,27 @@ const PlaybackController = {
   async play() {
     if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo) return state.watchVimeo.play();
     if (usesNativeUnifiedAudio()) {
-      const result = await nativeMediaPlugin().play();
+      const plugin = nativeMediaPlugin();
+      // The old play() bridge resolved even when Media3 still owned VIDEO or
+      // had no audio MediaItem. The Audio screen must establish AUDIO authority.
+      if (state.watchVideo && state.watchMode === 'audio') {
+        const id = videoId(state.watchVideo);
+        const item = state.current?.id === id ? state.current : videoAudioPlaybackItem(state.watchVideo, id);
+        const snapshot = await plugin.getState().catch(() => null);
+        const hasSource = snapshot?.mode === 'AUDIO' &&
+          String(snapshot.lectureId || '') === String(id) && Boolean(snapshot.hasAudioSource);
+        if (item && (!hasSource || !snapshot.audioPlayWhenReady)) {
+          const position = Math.max(0, Number(snapshot?.audioPositionMs || 0) / 1000, Number(state.watchResumeSeconds) || 0);
+          state.current = item;
+          setPlaybackAuthorityFence('AUDIO', id, 5000);
+          await this.loadLecture(item, position, true);
+          const started = await this.startAudioAt(position, true, { volume:1, commit:true });
+          await this.refreshFromNative();
+          return started;
+        }
+      }
+      const result = await plugin.play();
+      await this.refreshFromNative();
       return result;
     }
     return audio.play();

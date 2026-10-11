@@ -183,6 +183,8 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let lastStallRecoveryAt = 0;
   let stallRecoveryCount = 0;
   let stalledPlaybackWatchdog = 0;
+  let fatalHlsRecoveries = 0;
+  let lastHlsFailure = '';
   const decodedFrames = () => {
     const quality = video.getVideoPlaybackQuality?.();
     const count = Number(quality?.totalVideoFrames ?? video.webkitDecodedFrameCount);
@@ -367,9 +369,23 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       // They cannot prove that a picture advanced; avoid falsely rejecting HLS.
       visible = true;
     }
+    if (!visible && activeSource === sources.hls && hls && !recoveryInProgress) {
+      // HLS can be buffering its first decoded frames on slow WebViews. Give
+      // the same HLS stream one bounded loader recovery before MP4 fallback.
+      recoveryInProgress = true;
+      try {
+        const position = Math.max(0, Number(video.currentTime) || initialPosition);
+        hls.stopLoad();
+        hls.startLoad(position);
+        visible = await waitForVideoFrame(8500);
+      } catch (error) {
+        console.warn('[Playback] HLS visual recovery failed', error);
+      } finally { recoveryInProgress = false; }
+    }
     if (!visible && activeSource === sources.hls && sources.mp4) {
       const position = Math.max(0, Number(video.currentTime) || initialPosition);
-      console.warn('[Playback] Drive HLS did not produce moving video frames; trying MP4');
+      video.dataset.hlsFallbackReason = lastHlsFailure || 'No moving decoded frames after HLS retry';
+      console.warn('[Playback] HLS did not recover moving frames; trying MP4');
       recoveryInProgress = true;
       try {
         await attachSource(sources.mp4, false);
@@ -417,7 +433,9 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     const frames = decodedFrames();
     const clockMoved = previousClock >= 0 && clock > previousClock + 0.14;
     const framesMoved = frames !== null && previousFrames !== null && frames > previousFrames;
-    if (clockMoved || framesMoved) {
+    // An advancing audio clock with frozen frames is NOT healthy video.
+    // Both must advance when the WebView exposes a decoded-frame count.
+    if (clockMoved && (frames === null || previousFrames === null || framesMoved)) {
       lastMotionAt = now;
       stallRecoveryCount = 0;
     }
@@ -477,6 +495,8 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
           maxBufferLength:30,
           maxMaxBufferLength:60,
           startPosition:initialPosition,
+          // Decode the lowest HLS variant first on older hardware/WebViews.
+          startLevel:0,
           capLevelToPlayerSize:true
         });
         hls.attachMedia(video);
@@ -492,11 +512,23 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
           };
           hls.on(Hls.Events.MANIFEST_PARSED, () => { updateQualityOptions(); finish(); });
           hls.on(Hls.Events.ERROR, (_event, info) => {
-            if (!info?.fatal) return;
-            if (!finished) finish(new Error(`HLS playback failed: ${info.details || 'fatal error'}`));
-            else if (activeSource === url) {
-              void recoverFromHlsFailure(info, Hls);
+            if (!info?.fatal || destroyed || activeSource !== url) return;
+            lastHlsFailure = String(info.details || info.type || 'fatal HLS error');
+            video.dataset.hlsLastError = lastHlsFailure;
+            if (fatalHlsRecoveries < 2) {
+              try {
+                if (info.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                  fatalHlsRecoveries++; hls.recoverMediaError(); return;
+                }
+                if (info.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                  fatalHlsRecoveries++; hls.startLoad(Math.max(0, Number(video.currentTime) || 0)); return;
+                }
+              } catch (error) {
+                console.warn('[Playback] HLS recovery failed', error);
+              }
             }
+            if (!finished) finish(new Error(`HLS playback failed: ${lastHlsFailure}`));
+            else void recoverFromHlsFailure(info, Hls);
           });
         });
       }

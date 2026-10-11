@@ -60,6 +60,12 @@ window.ISTAccountTest = { snapshot() {
     historyPositions:state.history.map(x=>({id:historyRowId(x),progressSeconds:Number(x.progressSeconds||x.positionSeconds||0),mediaType:String(x.mediaType||'')})),
     watchMode:String(state.watchMode||''),audioPlaying:state.nativePlayback?.mode==='AUDIO'&&Boolean(state.nativePlayback?.audioIsPlaying),
     audioTime:Number(state.nativePlayback?.audioPositionMs||0)/1000,
+    currentId:String(state.current?.id||''),nativeAudio:{
+      mode:String(state.nativePlayback?.mode||''),lectureId:String(state.nativePlayback?.lectureId||''),
+      connected:!!state.nativePlayback?.connected,hasAudioSource:!!state.nativePlayback?.hasAudioSource,
+      audioReady:!!state.nativePlayback?.audioReady,audioIsPlaying:!!state.nativePlayback?.audioIsPlaying,
+      audioPlayWhenReady:!!state.nativePlayback?.audioPlayWhenReady,
+      audioPositionMs:Number(state.nativePlayback?.audioPositionMs||0),nativeDisabled:!!state.nativePlaybackDisabled},
     playlists:state.playlists.map(x=>({id:x.id,name:x.name,items:x.items.length})),
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
     settingsVisible:!!document.querySelector('#appEmailToggle'),profileVisible:!!document.querySelector('#profileForm'),
