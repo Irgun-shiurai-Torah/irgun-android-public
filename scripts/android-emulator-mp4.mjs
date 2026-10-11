@@ -85,6 +85,7 @@ try {
     .match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
   assert.ok(bounds,'Native WebView bounds required');
   const [left,top,right,bottom]=bounds.slice(1).map(Number);
+  report.nativeBounds=[left,top,right,bottom];
   const nativePoint=p=>[Math.round(left+p.x*(right-left)/p.width),Math.round(top+p.y*(bottom-top)/p.height)];
   const visiblePoint=async selector=>JSON.parse(await evaluate(`JSON.stringify((()=>{
     // A card has several Watch targets. Its cover center can be obscured by
