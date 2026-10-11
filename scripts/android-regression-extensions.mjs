@@ -122,6 +122,20 @@ async function tap(selector){
   await delay(500);
   return xy;
 }
+async function tapWithScroll(selector) {
+  for(let attempt=0;attempt<8;attempt++) {
+    const point=await hit(selector);
+    if(point) return tap(selector);
+    // Physical swipes in the current Android WebView, not synthetic DOM scrolling.
+    assert.ok(bounds,'Actual measured native WebView bounds required to scroll');
+    const x=Math.round((bounds[0]+bounds[2])/2);
+    const top=Math.round(bounds[1]+(bounds[3]-bounds[1])*0.30);
+    const bottom=Math.round(bounds[1]+(bounds[3]-bounds[1])*0.82);
+    adb('shell','input','swipe',String(x),String(bottom),String(x),String(top),'380');
+    await delay(450);
+  }
+  throw new Error('Required control was not visible after native scrolling: '+selector);
+}
 function checks(label,details={}) {report.checks.push({label,...details});save();}
 async function section(name,fn){
   report.activeSection=name;save();
@@ -276,22 +290,6 @@ try{
     assert.ok(resumed.native.audioPositionMs/1000>=beforePosition,'Reopening must not reset the timer');
   });
 
-  await section('Wi-Fi and mobile-data interruptions recover video at saved position',async()=>{
-    await closePlayer();const a=await videoReady();const prior=a.video.time;
-    try{
-      await setOnline(false);
-      assert.equal(adb('shell','settings','get','global','wifi_on'),'0','Wi-Fi was not disabled');
-      await delay(4300);
-    }finally{await setOnline(true);}
-    const recovered=await wait(s=>s.watchMode==='video'&&s.video&&!s.video.paused&&s.video.ready>=2,'Video did not recover from network interruption',65000);
-    await delay(2300);
-    const after=await read();
-    audibleVideo(after);
-    assert.ok(after.video.time>recovered.video.time+0.8,'Video clock did not recover');
-    assert.ok(after.video.time>=prior-2,'Video resumed from the beginning after Wi-Fi loss');
-    checks('Video playback recovery after Wi-Fi/mobile-data interruption',{startSeconds:prior,endSeconds:after.video.time});
-  });
-
   await section('Actual offline download plays native audio without Wi-Fi or mobile data',async()=>{
     await closePlayer();await videoReady();
     const before=await read();
@@ -314,32 +312,39 @@ try{
     }finally{await setOnline(true);}
   });
 
-  await section('Playback speed defaults to 1x; 1.5x persists after process relaunch',async()=>{
-    await closePlayer();await audioReady();
-    // The prior tests must not silently normalize a wrong initial default.
-    const first=await read();
-    assert.ok(Math.abs(first.speed-1)<0.01,'Default playback speed must be 1x');
-    await tap('[data-open-player]');
-    await wait(s=>s.playerOpen,'Full audio player did not open');
-    await tap('[data-speed-choice="1.5"]');
-    const faster=await wait(s=>Math.abs(s.speed-1.5)<0.01&&Math.abs(s.native.playbackSpeed-1.5)<0.05,'1.5x speed was not applied');
-    audibleAudio(faster);
-    await closePlayer();
-    const old=faster.native.audioPositionMs;
-    await delay(2200);
-    assert.ok((await read()).native.audioPositionMs>old+2000,'1.5x audio should advance');
-    ws.close();
-    adb('shell','am','force-stop',pkg);
-    adb('shell','am','start','-W','-n',pkg+'/.SplashActivity');
-    await delay(3000);await connect();bounds=await nativeBounds();
-    const newState=await wait(s=>s.ready,'App did not reload after force-stop',45000);
-    assert.ok(Math.abs(newState.speed-1.5)<0.01,'Playback speed preference was lost after relaunch');
-    // Restore the default setting in the disposable emulator checkout.
-    // The new process may no longer have an active lecture; report the saved
-    // preference but do not silently alter state with CDP.
+  await section('Wi-Fi and mobile-data interruptions recover video at saved position',async()=>{
+    await closePlayer();const a=await videoReady();const prior=a.video.time;
+    try{
+      await setOnline(false);
+      assert.equal(adb('shell','settings','get','global','wifi_on'),'0','Wi-Fi was not disabled');
+      await delay(4300);
+    }finally{await setOnline(true);}
+    const recovered=await wait(s=>s.watchMode==='video'&&s.video&&!s.video.paused&&s.video.ready>=2,'Video did not recover from network interruption',65000);
+    await delay(2300);
+    const after=await read();
+    audibleVideo(after);
+    assert.ok(after.video.time>recovered.video.time+0.8,'Video clock did not recover');
+    assert.ok(after.video.time>=prior-2,'Video resumed from the beginning after Wi-Fi loss');
+    checks('Video playback recovery after Wi-Fi/mobile-data interruption',{startSeconds:prior,endSeconds:after.video.time});
   });
 
-  await section('Small-screen English/Hebrew layouts retain usable navigation',async()=>{
+  await section('Long-session lock/unlock and resumed media controls do not crash',async()=>{
+    await closePlayer();
+    // Resume an existing lecture when the cold relaunch closed the watch page.
+    // Keep the assertion explicit: no fake media state is inserted into JS.
+    const current=await read();
+    assert.ok(current.watchId,'A real shiur must remain available for reliability test');
+    let a=await audioReady();audibleAudio(a);
+    for(let i=0;i<3;i++) {
+      adb('shell','input','keyevent','KEYCODE_POWER');await delay(1300);
+      adb('shell','input','keyevent','KEYCODE_POWER');
+      adb('shell','input','keyevent','KEYCODE_MENU');await delay(1000);
+      const b=await wait(s=>s.watchId&&s.native.audioIsPlaying,'Lock/unlock lost audio playback');
+      assert.ok(b.native.audioPositionMs>=a.native.audioPositionMs,'Audio time reset on lock/unlock');
+      a=b;
+    }
+    assert.ok(adb('shell','pidof',pkg),'Android process crashed during lock/unlock');
+  });  await section('Small-screen English/Hebrew layouts retain usable navigation',async()=>{
     try{
       adb('shell','wm','size','240x320');
       await delay(1400);
@@ -361,23 +366,39 @@ try{
     }
   });
 
-  await section('Long-session lock/unlock and resumed media controls do not crash',async()=>{
+  await section('Playback starts at 1x; native 1.25x, 1.5x, 2x work; 1.5x survives restart',async()=>{
     await closePlayer();
-    // Resume an existing lecture when the cold relaunch closed the watch page.
-    // Keep the assertion explicit: no fake media state is inserted into JS.
-    const current=await read();
-    assert.ok(current.watchId,'A real shiur must remain available for reliability test');
-    let a=await audioReady();audibleAudio(a);
-    for(let i=0;i<3;i++) {
-      adb('shell','input','keyevent','KEYCODE_POWER');await delay(1300);
-      adb('shell','input','keyevent','KEYCODE_POWER');
-      adb('shell','input','keyevent','KEYCODE_MENU');await delay(1000);
-      const b=await wait(s=>s.watchId&&s.native.audioIsPlaying,'Lock/unlock lost audio playback');
-      assert.ok(b.native.audioPositionMs>=a.native.audioPositionMs,'Audio time reset on lock/unlock');
-      a=b;
+    const playing=await audioReady();
+    audibleAudio(playing);
+    assert.ok(Math.abs(playing.speed-1)<0.01,'Fresh-session default speed must be 1x, never 0.75x');
+    // The speed settings are on the full player opened from the mini player.
+    // The Watch page itself has no [data-open-player] control.
+    await tap('[data-close-watch]');
+    await wait(s=>!s.watchId&&s.currentId==='1233236785:585d5d53db','Closing Watch must retain live native audio');
+    await tapWithScroll('.mini-player .mini-copy');
+    await wait(s=>s.playerOpen,'Audio full-player settings did not open from real mini player');
+    for(const rate of [1.25,1.5,2,1.5]) {
+      await tapWithScroll('[data-speed-choice="'+rate+'"]');
+      const adjusted=await wait(s=>Math.abs(s.speed-rate)<0.01&&Math.abs(s.native.playbackSpeed-rate)<0.05,
+        'Native Media3 playback speed did not become '+rate+'x',20000);
+      audibleAudio(adjusted);
+      const old=adjusted.native.audioPositionMs;
+      await delay(2100);
+      const newer=await read();
+      assert.ok(newer.native.audioPositionMs>old+rate*1100,'Audio clock did not advance at '+rate+'x');
+      checks('Native playback speed '+rate+'x',{timeBeforeMs:old,timeAfterMs:newer.native.audioPositionMs});
     }
-    assert.ok(adb('shell','pidof',pkg),'Android process crashed during lock/unlock');
+    await closePlayer();
+    ws.close();
+    adb('shell','am','force-stop',pkg);
+    adb('shell','am','start','-W','-n',pkg+'/.SplashActivity');
+    await delay(3000);
+    await connect();bounds=await nativeBounds();
+    const restored=await wait(s=>s.ready,'App did not reload after force-stop',45000);
+    assert.ok(Math.abs(restored.speed-1.5)<0.01,'1.5x playback speed preference was lost after relaunch');
   });
+
+
 } catch(e){
   report.failures.push({name:'setup',error:String(e.stack||e)});
   screenshot('release-setup-failure');
