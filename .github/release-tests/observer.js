@@ -17,6 +17,7 @@ window.ISTReleaseQA = { snapshot() {
     overlays: document.querySelectorAll('#persistentVideoMount .watch-overlay, #app .watch-overlay').length,
     videos: document.querySelectorAll('#watchDirectHlsVideo').length,
     iframes: document.querySelectorAll('#watchVimeoFrame').length,
+    sourceType: String(state.watchVimeo?.getSourceType?.() || ''),
     video: element ? {
       src: String(element.currentSrc || element.src || ''),
       time: Number(element.currentTime || 0),
