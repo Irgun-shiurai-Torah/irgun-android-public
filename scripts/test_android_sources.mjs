@@ -1,15 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAndroidHlsPlayer } from '../src/android-hls-video.js';
+import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } from '../src/offline-validation.js';
+import { downloadOfflineAudio } from '../src/offline-download.js';
 
 class Element extends EventTarget {
   constructor(tag) {
-    super(); this.tagName = tag; this.children = []; this.nodes = new Map();
+    super(); this.tagName = tag; this.children = []; this.nodes = new Map(); this.dataset = {};
     this.classList = { add(){}, remove(){}, contains(){return false;}, toggle(){} };
     this.style = { setProperty(){}, removeProperty(){} };
     this.readyState = 1; this.duration = 3663; this.currentTime = 0; this.paused = true; this.volume = 1;
   }
   setAttribute(){} removeAttribute(){} load(){} pause(){this.paused = true;}
+  add(){}
   play(){this.paused = false; return Promise.resolve();}
   canPlayType(){return 'maybe';}
   appendChild(child){child.parentElement = this; this.children.push(child);}
@@ -17,8 +20,8 @@ class Element extends EventTarget {
   querySelector(selector){if(!this.nodes.has(selector)) this.nodes.set(selector, new Element('button')); return this.nodes.get(selector);}
   replaceWith(child){child.parentElement = this.parentElement;}
 }
-async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {nativeHls = true} = {}) {
-  const original = { document:globalThis.document, window:globalThis.window, fetch:globalThis.fetch };
+async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {nativeHls = true, Hls, onReady, isPictureInPicture} = {}) {
+  const original = { document:globalThis.document, window:globalThis.window, fetch:globalThis.fetch, Option:globalThis.Option };
   const calls = [];
   const doc = new EventTarget(); doc.createElement = tag => {
     const element = new Element(tag);
@@ -26,14 +29,20 @@ async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {n
     return element;
   }; doc.body = new Element('body');
   globalThis.document = doc;
-  globalThis.window = {Hls:{isSupported:()=>false}};
+  globalThis.window = {Hls:Hls || {isSupported:()=>false}};
+  globalThis.Option = class {};
   globalThis.fetch = async url => {calls.push(url);return {ok:true,json:async()=>descriptor};};
   const iframe = new Element('iframe'); new Element('div').appendChild(iframe);
+  let player;
   try {
-    const player = await createAndroidHlsPlayer({apiBase:'https://api.example.test',platform:'android',videoId,iframe,resumeSeconds});
+    player = await createAndroidHlsPlayer({apiBase:'https://api.example.test',platform:'android',videoId,iframe,resumeSeconds,isPictureInPicture});
     await player.ready();
+    if (onReady) await onReady(player);
     return { source:player.getSourceType(), url:player.getVideoElement().src, position:await player.getCurrentTime(), paused:await player.getPaused(), calls };
   } finally {
+    // Dispose the real player's watchdog before restoring the mocked DOM.
+    // Leaving it alive prevents node --test from exiting and blocks the APK jobs.
+    await player?.destroy();
     Object.assign(globalThis,original);
   }
 }
@@ -52,6 +61,149 @@ test('unplayable HLS uses the direct MP4 before Vimeo fallback',async()=>{
 });
 test('no direct source still rejects so the existing Vimeo fallback can run',async()=>{
   await assert.rejects(fixture({video:{hls:null,mp4:null}}),/No HLS or MP4 source is ready/);
+});
+
+class RecoveringHls {
+  static Events = {MANIFEST_PARSED:'manifest',ERROR:'error'};
+  static ErrorTypes = {MEDIA_ERROR:'media',NETWORK_ERROR:'network'};
+  static isSupported(){return true;}
+  constructor(){RecoveringHls.current=this;this.levels=[];this.listeners=new Map();this.starts=0;}
+  attachMedia(){} loadSource(){} stopLoad(){} destroy(){}
+  startLoad(){this.starts++;}
+  on(name,callback){this.listeners.set(name,callback);if(name==='manifest')queueMicrotask(callback);}
+  emitError(){this.listeners.get('error')?.('error',{fatal:true,type:'other',details:'test decoder failure'});}
+}
+const settleRecovery = async () => {for(let i=0;i<8;i++)await Promise.resolve();};
+const recoverySources = {video:{hls:'https://media.example.test/master.m3u8',mp4:'https://media.example.test/video.mp4'}};
+test('pausing during an HLS visual retry cannot restart parked video or select MP4',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','setInterval','Date']});
+  await fixture(recoverySources,'1233236785:585d5d53db',0,{Hls:RecoveringHls,onReady:async player=>{
+    const video=player.getVideoElement();video.videoWidth=640;video.readyState=2;
+    video.getVideoPlaybackQuality=()=>({totalVideoFrames:0});
+    let plays=0;video.play=()=>{plays++;video.paused=false;return Promise.resolve();};
+    await player.play();video.dispatchEvent(new Event('playing'));
+    t.mock.timers.tick(12000);await settleRecovery();
+    assert.equal(RecoveringHls.current.starts,1,'The test must reach a real pending visual retry');
+    await player.pause();
+    t.mock.timers.tick(8500);await settleRecovery();
+    t.mock.timers.tick(10000);await settleRecovery();
+    t.mock.timers.tick(12000);await settleRecovery();
+    assert.equal(plays,1,'Cancelled HLS recovery must never replay video');
+    assert.equal(video.paused,true);
+    assert.equal(player.getSourceType(),'hls','A cancelled visual retry must not attach fallback media');
+    assert.equal(RecoveringHls.current.starts,1,'Cancelled recovery must not load another HLS retry');
+  }});
+});
+test('pausing while a fatal HLS fallback loads metadata cannot autoplay that fallback',async()=>{
+  await fixture(recoverySources,'1233236785:585d5d53db',0,{Hls:RecoveringHls,onReady:async player=>{
+    const video=player.getVideoElement();let plays=0;
+    video.play=()=>{plays++;video.paused=false;return Promise.resolve();};
+    await player.play();
+    video.readyState=0;
+    RecoveringHls.current.emitError();
+    assert.equal(player.getSourceType(),'mp4','The test must reach the pending fatal-error fallback');
+    await player.pause();
+    video.readyState=1;video.dispatchEvent(new Event('loadedmetadata'));
+    await settleRecovery();
+    assert.equal(plays,1,'An old play intent must not restart video after an Audio handoff');
+    assert.equal(video.paused,true);
+  }});
+});
+test('a WebView decoder error which pauses HLS recovers MP4 with the accepted play intent',async()=>{
+  await fixture(recoverySources,'1233236785:585d5d53db',0,{Hls:RecoveringHls,onReady:async player=>{
+    const video=player.getVideoElement();let plays=0;
+    video.play=()=>{plays++;video.paused=false;return Promise.resolve();};
+    await player.play();
+    // Android reported error=3 and paused=true while the user was playing.
+    video.error={code:3};video.paused=true;video.readyState=0;
+    video.dispatchEvent(new Event('error'));
+    assert.equal(player.getSourceType(),'mp4');
+    video.error=null;video.readyState=1;video.dispatchEvent(new Event('loadedmetadata'));
+    await settleRecovery();
+    assert.equal(plays,2,'Recovery must resume the previously playing lecture');
+    assert.equal(video.paused,false);
+  }});
+});
+
+test('Home cancels a queued WebView Play before a notification can reveal it',async()=>{
+  await fixture(recoverySources,'lecture',0,{onReady:async player=>{
+    const video=player.getVideoElement();await player.play();
+    const queued=player.play();
+    document.hidden=true;document.dispatchEvent(new Event('visibilitychange'));
+    await queued;
+    assert.equal(video.paused,true,'Home must cancel a pending play even if Android itself paused the element');
+    assert.equal(video.muted,true,'The parked video must not retain audible output');
+    document.hidden=false;document.dispatchEvent(new Event('visibilitychange'));await settleRecovery();
+    assert.equal(video.paused,true,'Notification reopening must leave native Audio in charge');
+    await player.setMuted(false);await player.play();
+    assert.equal(video.paused,false,'A later explicit Video transaction may still play');
+  }});
+});
+test('Home cancels a decoder recovery that was waiting for metadata',async()=>{
+  await fixture(recoverySources,'lecture',0,{Hls:RecoveringHls,onReady:async player=>{
+    const video=player.getVideoElement();let plays=0;
+    video.play=()=>{plays++;video.paused=false;return Promise.resolve();};
+    await player.play();video.readyState=0;RecoveringHls.current.emitError();
+    document.hidden=true;document.dispatchEvent(new Event('visibilitychange'));
+    video.readyState=1;video.dispatchEvent(new Event('loadedmetadata'));await settleRecovery();
+    document.hidden=false;document.dispatchEvent(new Event('visibilitychange'));await settleRecovery();
+    assert.equal(plays,1,'A recovery queued before Home must not reclaim WebView audio focus');
+    assert.equal(video.paused,true);assert.equal(video.muted,true);
+  }});
+});
+test('entering actual PiP keeps video playing when the Activity becomes hidden',async()=>{
+  await fixture(recoverySources,'lecture',0,{isPictureInPicture:()=>true,onReady:async player=>{
+    const video=player.getVideoElement();video.muted=false;await player.play();
+    document.hidden=true;document.dispatchEvent(new Event('visibilitychange'));
+    assert.equal(video.paused,false);assert.equal(video.muted,false);
+  }});
+});
+
+class BufferedQualityHls extends RecoveringHls {
+  constructor(){super();this.levels=[{height:360},{height:480}];this.recoveries=0;}
+  attachMedia(video){this.video=video;}
+  recoverMediaError(){this.recoveries++;this.video.readyState=0;this.video.currentTime=0;this.video.paused=true;}
+}
+const chooseQuality = video => {
+  const controls=video.parentElement.children.find(e=>e.className==='watch-hls-controls');
+  const select=controls.querySelector('[data-hls-quality]');
+  select.value='1';select.dispatchEvent(new Event('change'));
+};
+const stalledQualityVideo = video => {
+  video.currentTime=42;video.readyState=2;video.videoWidth=640;
+  video.getVideoPlaybackQuality=()=>({totalVideoFrames:100});
+  video.buffered={length:1,start:()=>36,end:()=>60};
+};
+test('quality selection recovers a stationary buffered HLS decoder at the saved position',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','setInterval','Date']});
+  await fixture(recoverySources,'lecture',0,{Hls:BufferedQualityHls,onReady:async player=>{
+    const video=player.getVideoElement();stalledQualityVideo(video);await player.play();chooseQuality(video);
+    t.mock.timers.tick(2000);await settleRecovery();
+    assert.equal(BufferedQualityHls.current.recoveries,1,'A frozen buffered decoder must receive a bounded HLS recovery');
+    video.readyState=2;video.dispatchEvent(new Event('loadedmetadata'));await settleRecovery();
+    assert.equal(video.currentTime,42,'Reattaching the decoder must preserve lecture position');
+    assert.equal(video.paused,false);assert.equal(player.getSourceType(),'hls');
+  }});
+});
+test('Audio handoff cancels a pending quality recovery without replaying video',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','setInterval','Date']});
+  await fixture(recoverySources,'lecture',0,{Hls:BufferedQualityHls,onReady:async player=>{
+    const video=player.getVideoElement();stalledQualityVideo(video);let plays=0;
+    video.play=()=>{plays++;video.paused=false;return Promise.resolve();};
+    await player.play();chooseQuality(video);t.mock.timers.tick(2000);await settleRecovery();
+    assert.equal(BufferedQualityHls.current.recoveries,1,'Reach a pending metadata recovery before cancelling');
+    await player.pause();video.readyState=2;video.dispatchEvent(new Event('loadedmetadata'));await settleRecovery();
+    assert.equal(plays,1);assert.equal(video.paused,true);assert.equal(player.getSourceType(),'hls');
+  }});
+});
+test('quality selection leaves healthy motion and a network underrun alone',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','setInterval','Date']});
+  for(const healthy of [true,false])await fixture(recoverySources,'lecture',0,{Hls:BufferedQualityHls,onReady:async player=>{
+    const video=player.getVideoElement();stalledQualityVideo(video);await player.play();chooseQuality(video);
+    if(healthy)video.currentTime+=1;
+    else video.buffered={length:1,start:()=>36,end:()=>42.2};
+    t.mock.timers.tick(2000);await settleRecovery();assert.equal(BufferedQualityHls.current.recoveries,0);
+  }});
 });
 
 const {vimeoEmbedSource} = await import('../src/vimeoEmbed.js');
@@ -79,6 +231,133 @@ test('invalid Vimeo IDs never turn into a different numeric video',()=>{
 const {readFileSync} = await import('node:fs');
 const {runInNewContext} = await import('node:vm');
 const mainSource = readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
+
+test('an interrupted native MP3 GET cleans its partial file before a single bounded retry',async()=>{
+  const events=[];let calls=0;
+  const options={url:'https://api.example.test/audio/lecture',path:'file:///audio.mp3',headers:{'X-Irgun-App':'1'},progress:true};
+  const result=await downloadOfflineAudio(options,{
+    download:async received=>{assert.equal(received,options);events.push('download');if(++calls===1)throw {code:'OS-PLUG-FLTR-0008'};},
+    removePartial:async()=>events.push('cleanup'),onRetry:async info=>events.push('attempt:'+info.attempt),
+    delay:async ms=>{assert.equal(ms,1000);events.push('backoff');}
+  });
+  assert.equal(result.attempts,2);assert.deepEqual(events,['download','cleanup','attempt:2','backoff','download']);
+});
+test('persistent native connection failures stay failed after the bounded retry',async()=>{
+  let calls=0,cleanups=0;
+  const error={code:'OS-PLUG-FLTR-0008',message:'Failed to connect to server.'};
+  await assert.rejects(downloadOfflineAudio({}, {download:async()=>{calls++;throw error;},
+    removePartial:async()=>cleanups++,delay:async()=>{}}),received=>received===error);
+  assert.equal(calls,2);assert.equal(cleanups,1);
+});
+test('HTTP, authentication, permission and unknown download errors are never retried',async()=>{
+  for(const error of [{code:'OS-PLUG-FLTR-0010',data:{httpStatus:503}},
+    {code:'OS-PLUG-FLTR-0010',data:{httpStatus:401}},{code:'OS-PLUG-FLTR-0006'},
+    {code:'OS-PLUG-FLTR-0011'},{code:'OS-PLUG-FLTR-0008',httpStatus:500},
+    new Error('Incomplete or non-audio download')]){
+    let calls=0;
+    await assert.rejects(downloadOfflineAudio({}, {download:async()=>{calls++;throw error;},
+      removePartial:async()=>{throw Error('A non-transport failure must not reach retry cleanup');}}),received=>received===error);
+    assert.equal(calls,1);
+  }
+});
+test('a partial file that cannot be removed prevents another native transfer',async()=>{
+  let calls=0;
+  const error=new Error('Cannot delete partial file');
+  await assert.rejects(downloadOfflineAudio({}, {download:async()=>{calls++;throw {code:'OS-PLUG-FLTR-0008'};},
+    removePartial:async()=>{throw error;}}),received=>received===error);
+  assert.equal(calls,1);
+});
+
+function offlineSaveFixture({failure,actualBytes=60268750}={}) {
+  const id='1233236785:585d5d53db',url='https://api.example.test/audio/'+encodeURIComponent(id),key='video:'+id;
+  const item={id,hasAudio:true,duration:3663};let progress,calls=0,bytes=0,removed=0;
+  const state={offlineDownloads:new Map(),offlineJobs:new Map(),videoById:new Map([[id,item]]),screen:'shiurim',token:''};
+  const events=[];
+  const context={state,API:'https://api.example.test',CSS:{escape:value=>value},Date,console:{warn(){}},
+    Capacitor:{isNativePlatform:()=>true,getPlatform:()=> 'android'},Directory:{Data:'DATA'},
+    Filesystem:{mkdir:async()=>{},getUri:async()=>({uri:'file:///audio.mp3'}),stat:async()=>({size:bytes}),
+      deleteFile:async()=>{events.push('cleanup');bytes=0;removed++;}},
+    FileTransfer:{addListener:async(_,listener)=>{progress=listener;return {remove:async()=>removed++};},
+      downloadFile:async()=>{
+        events.push('download');calls++;
+        if(failure==='connection'&&calls===1){bytes=4301864;progress({url,bytes,contentLength:60268750});throw {code:'OS-PLUG-FLTR-0008'};}
+        if(failure==='persistent'||failure==='http'){
+          bytes=4301864;progress({url,bytes,contentLength:60268750});
+          throw {code:failure==='http'?'OS-PLUG-FLTR-0010':'OS-PLUG-FLTR-0008',message:'Failed download'};
+        }
+        bytes=actualBytes;progress({url,bytes,contentLength:60268750});
+      }},
+    downloadOfflineAudio:(options,deps)=>downloadOfflineAudio(options,{...deps,delay:async()=>{}}),
+    isPlausibleOfflineAudio,minimumOfflineAudioBytes,audioDownloadPath,
+    offlineKeyFor:()=>key,usageAnalytics:{event(){}},videoId:()=>id,mediaApiId:()=>id,
+    itemTitle:()=> 'Shiur',itemSubtitle:()=> 'Speaker',document:{querySelector:()=>null},
+    refreshOfflineButtonsForKey(){},refreshInteractiveUi(){},persistOfflineDownloads(){},setToast(){},currentLanguage:()=> 'en'};
+  const start=mainSource.indexOf('async function saveOffline(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('async function deleteOffline(',start))+'\nthis.save=saveOffline;',context);
+  return {state,events,key,save:()=>context.save('video',id),calls:()=>calls,removed:()=>removed,bytes:()=>bytes};
+}
+test('the actual Offline Save recovers the observed 4.3MB interruption and records only the complete MP3',async()=>{
+  const f=offlineSaveFixture({failure:'connection'});await f.save();
+  assert.equal(f.calls(),2);assert.deepEqual(f.events,['download','cleanup','download']);
+  const record=f.state.offlineDownloads.get(f.key);assert.equal(record.bytes,60268750);assert.equal(record.downloadAttempts,2);
+  assert.equal(f.state.offlineJobs.size,0);assert.equal(f.state.offlineSaveLastError,'');assert.equal(f.removed(),2);
+});
+test('the actual Offline Save never marks a failed, truncated or HTTP-error transfer saved',async()=>{
+  for(const options of [{failure:'persistent'},{failure:'http'},{actualBytes:4301864}]){
+    const f=offlineSaveFixture(options);await f.save();
+    assert.equal(f.state.offlineDownloads.size,0);assert.equal(f.state.offlineJobs.size,0);assert.equal(f.bytes(),0);
+    assert.ok(f.state.offlineSaveLastError);assert.equal(f.calls(),options.failure==='persistent'?2:1);
+  }
+});
+function authRenderFixture({busy=false,mode='login'}={}) {
+  const state={screen:'account',authMode:mode,authBusy:busy,user:null};
+  const field=id=>({id,value:'',selectionStart:3,selectionEnd:3,focus(){document.activeElement=this;},setSelectionRange(a,b){this.selectionStart=a;this.selectionEnd=b;}});
+  let fields=new Map(['authEmail','authPassword'].map(id=>[id,field(id)]));
+  const form=()=>({dataset:{authDraftMode:'login'}});
+  const document={activeElement:fields.get('authPassword'),getElementById:id=>id==='authForm'?form():fields.get(id)};
+  fields.get('authEmail').value='qa@example.test';fields.get('authPassword').value='typed-in-dom';
+  const app={set innerHTML(_){fields=new Map(['authEmail','authPassword'].map(id=>[id,field(id)]));document.activeElement=null;}};
+  const context={state,document,app,tabSwipeRenderGate:{shouldDefer:()=>false},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
+    accountHtml:()=>'',shell:x=>x,playlistPickerHtml:()=>'',bind(){},syncLivePlaybackAnalytics(){},updatePlayerUi(){},refreshOfflineButtonsForKey(){}};
+  const start=mainSource.indexOf('function preserveAuthFormDraft(');
+  const renderStart=mainSource.indexOf('function render()');
+  const source=(start>=0?mainSource.slice(start,renderStart):'')+mainSource.slice(renderStart,mainSource.indexOf('function syncOpenFilterChecks(',renderStart));
+  runInNewContext(source+'\nthis.renderApp=render;',context);
+  return {render:context.renderApp,field:id=>fields.get(id),document};
+}
+test('background render preserves sign-in fields and focused selection in the live DOM',()=>{
+  const f=authRenderFixture();f.render();
+  assert.equal(f.field('authEmail').value,'qa@example.test');assert.equal(f.field('authPassword').value,'typed-in-dom');
+  assert.equal(f.document.activeElement,f.field('authPassword'));assert.equal(f.field('authPassword').selectionStart,3);
+});
+test('login submission and auth-mode changes discard the previous credential draft',()=>{
+  for(const options of [{busy:true},{mode:'register'}]){
+    const f=authRenderFixture(options);f.render();
+    assert.equal(f.field('authPassword').value,'');assert.equal(f.field('authEmail').value,'');
+  }
+});
+test('clicking Login submits once without the form becoming an auth-mode button',()=>{
+  const state={authMode:'login',authBusy:false,authMessage:''};
+  const htmlStart=mainSource.indexOf('function authHtml()');
+  const form=new EventTarget();form.dataset={};let connected=true,logins=0,renders=0;
+  const fields={authForm:form,authEmail:{value:'qa@example.test'},authPassword:{value:'test-password'}};
+  const document={getElementById:id=>fields[id],querySelectorAll:selector=>selector==='[data-auth-mode]'&&form.dataset.authMode?[form]:[]};
+  const context={state,document,Capacitor:{isNativePlatform:()=>false},esc:x=>x,tr:x=>x,googleGIcon:()=>'',
+    render(){renders++;connected=false;},login(email,password){assert.equal(email,'qa@example.test');assert.equal(password,'test-password');logins++;}};
+  runInNewContext(mainSource.slice(htmlStart,mainSource.indexOf('function relatedVideos(',htmlStart))+'\nthis.html=authHtml();',context);
+  const tag=context.html.match(/<form\b[^>]*id="authForm"[^>]*>/)?.[0];assert.ok(tag);
+  const mode=tag.match(/\bdata-auth-mode="([^"]*)"/);if(mode)form.dataset.authMode=mode[1];
+  const modeStart=mainSource.indexOf("  document.querySelectorAll('[data-auth-mode]')");
+  const submitStart=mainSource.indexOf("  const authForm = document.getElementById('authForm');");
+  runInNewContext(mainSource.slice(modeStart,mainSource.indexOf("  document.querySelectorAll('[data-google-login]')",modeStart))+
+    mainSource.slice(submitStart,mainSource.indexOf('  const forgotPasswordForm',submitStart)),context);
+  // A submit-button click bubbles through its form before the default submit.
+  // Removing the form during that click cancels the browser's default action.
+  form.dispatchEvent(new Event('click',{bubbles:true}));
+  if(connected)form.dispatchEvent(new Event('submit',{cancelable:true}));
+  assert.equal(renders,0,'Mode buttons must not handle clicks on the form or its fields');
+  assert.equal(logins,1,'A physical Login click must reach the real login handler exactly once');
+});
 function hostFixture() {
   class Node {
     constructor(){this.children=[];this.classList={remove(){},toggle(){}};}
@@ -106,7 +385,7 @@ test('old Android WebView clears the persistent host on close',()=>{
   assert.equal(f.mount.children.length,0);assert.equal(f.overlay.parentElement,null);assert.equal(f.state.watchHostedExternally,false);
 });
 
-function handoffFixture({movingClock=true,movingFrames=true,paused=false,focusStopped=false}={}) {
+function handoffFixture({movingClock=true,movingFrames=true,paused=false,focusStopped=false,framesReadyAfterMs=0}={}) {
   let now=0, position=600, frames=100;
   const state={watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',watchMode:'video',
     watchAudioToVideoTargetSeconds:600,watchVideo:{id:'lecture'},
@@ -116,7 +395,7 @@ function handoffFixture({movingClock=true,movingFrames=true,paused=false,focusSt
     setCurrentTime:async n=>{position=n;return n;}};
   const context={state,console:{warn(){}},Date:{now:()=>now},usesNativeUnifiedAudio:()=>true,
     playbackPositionSeconds:()=>600+(focusStopped?0:now/1000),
-    setTimeout:callback=>{now+=350;if(movingClock&&!paused)position+=.35;if(movingFrames&&!paused)frames+=10;callback();}};
+    setTimeout:callback=>{now+=350;if(movingClock&&!paused)position+=.35;if(movingFrames&&!paused&&now>=framesReadyAfterMs)frames+=10;callback();}};
   const start=mainSource.indexOf('async function waitForVimeoHandoffReady(');
   runInNewContext(mainSource.slice(start,mainSource.indexOf('function videoAudioPlaybackItem(',start))+'\nthis.wait=waitForVimeoHandoffReady;',context);
   return {state,player,wait:context.wait};
@@ -131,6 +410,123 @@ test('Audio handoff rejects a stationary destination and preserves explicit Paus
 });
 test('Audio handoff accepts a synchronized destination only after clocks and frames advance',async()=>{
   const f=handoffFixture();assert.ok(await f.wait(f.player,'lecture',800)>600);
+});
+test('HLS handoff lets a keyframe decode before chasing the advancing Audio clock',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
+  let decodeAt=3000,basePosition=606,position=606,frames=327,decoded=false,lastAdvancedAt=0;
+  const seeks=[];
+  // API 35 briefly reports seeking=false before a keyframe can play. Metadata
+  // and a resolved seek setter are not proof that the decoder has settled.
+  const element={paused:false,seeking:false,readyState:1,videoWidth:640};
+  const advance=()=>{
+    if(Date.now()<decodeAt)return;
+    decoded=true;element.readyState=4;
+    position+=(Date.now()-Math.max(decodeAt,lastAdvancedAt))/1000*(Number(element.playbackRate)||1);
+    lastAdvancedAt=Date.now();
+    frames=327+Math.floor((Date.now()-decodeAt)/1000*30);
+  };
+  element.getVideoPlaybackQuality=()=>{advance();return {totalVideoFrames:frames};};
+  const player={getPaused:async()=>false,getSourceType:()=> 'hls',getVideoElement:()=>element,
+    getCurrentTime:async()=>{advance();return position;},setCurrentTime:async n=>{
+      seeks.push({at:Date.now(),position:n});position=basePosition=n;
+      decodeAt=Date.now()+(decoded?100:3000);lastAdvancedAt=decodeAt;element.readyState=1;return n;
+    }};
+  const state={watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',
+    nativePlayback:{mode:'AUDIO',audioIsPlaying:true,audioPlayWhenReady:true}};
+  const context={state,Date,setTimeout,console:{warn(){}},usesNativeUnifiedAudio:()=>true,
+    playbackPositionSeconds:()=>606+Date.now()/1000};
+  const start=mainSource.indexOf('async function waitForVimeoHandoffReady(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function videoAudioPlaybackItem(',start))+'\nthis.wait=waitForVimeoHandoffReady;',context);
+  let settled=false,result;
+  const transaction=context.wait(player,'lecture',15000).then(value=>{settled=true;result=value;});
+  for(let i=0;i<170&&!settled;i++){
+    t.mock.timers.tick(100);
+    for(let j=0;j<12;j++)await Promise.resolve();
+  }
+  await transaction;
+  assert.ok(result>609,'A buffered HLS destination must become synchronized instead of restarting its pending decode');
+  assert.ok(seeks.every(s=>s.at>=3000),'Do not replace a pending keyframe with another live-clock seek');
+  assert.ok(Math.abs(result-context.playbackPositionSeconds())<=1.8,'The completed transfer must retain the live Audio position');
+});
+test('HLS handoff gives a distant segment time to decode without relaxing frame or position checks',async()=>{
+  const early=handoffFixture({framesReadyAfterMs:9000});
+  assert.equal(await early.wait(early.player,'lecture',8000),null,'An eight-second wait must reject the still-frozen picture');
+  const f=handoffFixture({framesReadyAfterMs:9000});
+  const transaction=resumeFixture({readyWait:(_,id,budget)=>f.wait(f.player,id,budget)});
+  assert.equal(await transaction.resume(),true,'A synchronized HLS picture decoding after nine seconds must complete the handoff');
+});
+for(const cancel of [false,true])test('HLS catch-up preserves decoded progress and restores requested speed, cancel='+cancel,async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
+  const rate=1.5,decodeDelay=6000,seeks=[],rates=[];let decodeAt=decodeDelay,lastAt=decodeAt,position=606,frames=0,currentRate=rate;
+  const state={playbackSpeed:rate,watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',nativePlayback:{mode:'AUDIO',audioIsPlaying:true,audioPlayWhenReady:true}};
+  const element={paused:false,seeking:false,readyState:1,videoWidth:640,
+    get playbackRate(){return currentRate;},set playbackRate(value){currentRate=value;rates.push(value);if(cancel&&value>rate)state.watchAudioToVideoHandoff=false;}};
+  const advance=()=>{
+    if(Date.now()<decodeAt)return;
+    const elapsed=(Date.now()-Math.max(lastAt,decodeAt))/1000;
+    position+=elapsed*currentRate;frames+=Math.round(elapsed*30*currentRate);lastAt=Date.now();element.readyState=4;
+  };
+  element.getVideoPlaybackQuality=()=>{advance();return {totalVideoFrames:frames};};
+  const player={getSourceType:()=> 'hls',getVideoElement:()=>element,getPaused:async()=>false,
+    getCurrentTime:async()=>{advance();return position;},setCurrentTime:async value=>{
+      seeks.push(value);position=value;decodeAt=Date.now()+decodeDelay;lastAt=decodeAt;element.readyState=1;return value;
+    }};
+  const context={state,Date,setTimeout,console:{warn(){}},usesNativeUnifiedAudio:()=>true,playbackPositionSeconds:()=>606+Date.now()/1000*rate};
+  const start=mainSource.indexOf('async function waitForVimeoHandoffReady(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function videoAudioPlaybackItem(',start))+'\nthis.wait=waitForVimeoHandoffReady;',context);
+  let settled=false,result;const transaction=context.wait(player,'lecture',15000).then(value=>{result=value;settled=true;});
+  for(let i=0;i<170&&!settled;i++){t.mock.timers.tick(100);for(let j=0;j<12;j++)await Promise.resolve();}
+  await transaction;
+  assert.ok(rates.some(value=>value>rate),'The delayed moving destination must catch up without replacing its keyframe');
+  assert.equal(seeks.length,0,'Repeated seeks must not discard a decoded HLS destination');
+  assert.equal(element.playbackRate,rate,'Success and cancellation must restore the selected 1.5x speed');
+  if(cancel)assert.equal(result,null);
+  else {assert.ok(result>606);assert.ok(Math.abs(result-context.playbackPositionSeconds())<=1.8,'Only synchronized advancing playback can finish');}
+});
+test('logout shows the start of the sign-in form after a scrolled account profile',async()=>{
+  const state={screen:'account',accountSection:'settings',user:{id:1}};
+  let scrolled=480;const events=[];
+  const start=mainSource.indexOf('async function logout(');
+  const context={state,apiJson:async()=>events.push('logout'),setToken:value=>events.push(value),
+    resetUserState(){state.user=null;},render(){events.push('render');},
+    window:{scrollTo(options){assert.equal(events.at(-1),'render');scrolled=options.top;}}};
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('async function updateProfile(',start))+'\nthis.logout=logout;',context);
+  await context.logout();assert.equal(state.user,null);assert.equal(state.accountSection,'profile');
+  assert.equal(scrolled,0,'Email and password must be reachable immediately after logout');
+});
+test('restart restores the exact Drive-inclusive catalog cache and retains legacy caches',async()=>{
+  for(const path of ['/video-map?driveLibrary=1','/video-map']) {
+    const video={id:'drivev-restart',title:'Saved Drive lecture'};
+    const state={counter:1,trends:{}};
+    const cache=new Map([['bootstrap:'+path,{data:[video],savedAt:123}]]);
+    const context={state,Math,Map,console:{warn(){}},loadMetadata:async()=>{},
+      offlineCacheGet:async key=>cache.get(key)||null,enrichVideo:v=>v,enrichAudio:v=>v,
+      itemDate:()=>0,videoId:v=>v.id,rawAudioId:v=>v.id,render(){}};
+    const start=mainSource.indexOf('async function hydrateInitialCatalogCache(');
+    runInNewContext(mainSource.slice(start,mainSource.indexOf('async function bootstrap(',start))+'\nthis.hydrate=hydrateInitialCatalogCache;',context);
+    assert.equal(await context.hydrate(),true,'The saved '+path+' catalog must be usable after process restart');
+    assert.equal(state.loading,false);assert.equal(state.videoById.get(video.id),video);
+  }
+});
+test('ready catalog and restored account remain usable while secondary startup feeds are pending',async()=>{
+  const state={libraryReady:false,loading:true,counter:1,trends:{},screen:'home'};
+  const rendered=[];const stalled=new Promise(()=>{});
+  const context={state,Map,console:{error(){},warn(){}},bootstrapInFlight:false,
+    loadMetadata:async()=>{},initNativeDownloader:async()=>{},
+    bootstrapJson:async()=>[{id:'lecture'}],bootstrapJsonOr:async(_,fallback)=>fallback,
+    enrichVideo:v=>v,enrichAudio:v=>v,itemDate:()=>0,videoId:v=>v.id,rawAudioId:v=>v.id,
+    restoreSession:async()=>{state.user={id:1};state.playlists=[{id:'server-playlist'}];},
+    loadSponsorRibbon:()=>stalled,loadScheduleData:()=>stalled,loadLiveStatus:()=>stalled,
+    handleAppReturn:async()=>{},render(){rendered.push({loading:state.loading,loggedIn:!!state.user});},
+    updateReconnectTimer(){}};
+  const start=mainSource.indexOf('async function bootstrap(options');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('async function restoreSession(',start))+'\nthis.bootstrap=bootstrap;',context);
+  const boot=context.bootstrap({initial:true});
+  for(let i=0;i<24;i++)await Promise.resolve();
+  assert.equal(state.libraryReady,true);assert.equal(state.playlists[0]?.id,'server-playlist');
+  assert.equal(state.loading,false,'Secondary sponsor/schedule/live requests must not retain the loading screen');
+  assert.ok(rendered.some(r=>!r.loading&&r.loggedIn),'The restored account must render before secondary requests complete');
+  await boot;
 });
 test('MP4 handoff waits for the following byte range before transferring sound',async()=>{
   for(const [ahead,expected] of [[1,false],[15,true]]) {
@@ -169,20 +565,94 @@ test('live Audio callbacks keep the destination visible while handoff buffers',(
   const snapshot={mode:'AUDIO',lectureId:'lecture',currentPositionMs:601000};
   assert.equal(context.conflicts(snapshot),false);context.reconcile(snapshot);assert.equal(state.watchMode,'video');
 });
+test('queued Audio snapshots cannot overwrite confirmed Video authority during commit',()=>{
+  const state={watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',
+    nativePlayback:{mode:'VIDEO'},playbackAuthorityFence:{mode:'VIDEO',lectureId:'lecture',expiresAt:Date.now()+5000}};
+  const start=mainSource.indexOf('function nativeSnapshotConflicts(');
+  const context={state,Date};
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function nativeAudioPositionSeconds',start))+
+    '\nthis.conflicts=nativeSnapshotConflicts;',context);
+  assert.equal(context.conflicts({mode:'AUDIO',lectureId:'lecture'}),true);
+  assert.equal(context.conflicts({mode:'VIDEO',lectureId:'lecture'}),false);
+  state.nativePlayback.mode='AUDIO';
+  assert.equal(context.conflicts({mode:'AUDIO',lectureId:'lecture'}),false,'Preparation still follows live Audio');
+});
+test('delayed video source events cannot publish VIDEO over an Audio rollback',async()=>{
+  const state={watchMode:'video',playbackAuthorityFence:{mode:'AUDIO'}};
+  const calls=[];
+  const start=mainSource.indexOf('async function syncNativeMediaSession(');
+  const context={state,setNativePipEligibility(){},usesNativeUnifiedAudio:()=>true,
+    PlaybackController:{setVideoState:async(...args)=>calls.push(args)}};
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function clearNativeMediaSession(',start))+
+    '\nthis.publish=syncNativeMediaSession;',context);
+  await context.publish({id:'lecture'},false,613,3663,'video');
+  assert.equal(calls.length,0,'The paused destination must not override the restored Audio owner');
+  state.playbackAuthorityFence.mode='VIDEO';
+  await context.publish({id:'lecture'},true,613,3663,'video');
+  assert.equal(calls.length,1,'An explicit new Video selection still publishes normally');
+});
+test('native Audio reconciliation changes ownership before the parked player emits Pause',()=>{
+  let pauses=0,muted=false;
+  const state={watchVideo:{id:'lecture'},watchMode:'video',watchVimeo:{pause(){
+    assert.equal(state.watchMode,'audio');assert.equal(muted,true);pauses++;return Promise.resolve();
+  }}};
+  const start=mainSource.indexOf('function reconcileNativeWatchAudio(');
+  const context={state,videoId:v=>v.id,ensureNativeAudioCurrentForWatch(){},
+    setVimeoHandoffMuted:async(player,value)=>{muted=value;},
+    parkHostedVideoForAudio(){},render(){},document:{getElementById(){return {};}}};
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('const PlaybackController =',start))+
+    '\nthis.reconcile=reconcileNativeWatchAudio;',context);
+  context.reconcile({mode:'AUDIO',lectureId:'lecture',currentPositionMs:613000});
+  assert.equal(pauses,1);assert.equal(state.watchResumeSeconds,613);
+});
+test('a late Video Play callback cannot prewarm or report playing over the Audio owner',async()=>{
+  const state={watchVimeoGeneration:4,watchMode:'audio',watchVideoPlaying:false};
+  const events=[];
+  const context={state,generation:4,videoKey:'lecture',document:{hidden:false},
+    player:{pause:async()=>events.push('pause')},setVimeoHandoffMuted:async(_,muted)=>events.push('muted:'+muted),
+    usageAnalytics:{setMedia(){throw Error('Late playback must not be reported');}},
+    prewarmVideoAudioMetadata(){throw Error('Late playback must not prewarm');}};
+  const start=mainSource.indexOf("player.on('play', async () => {");
+  const end=mainSource.indexOf("    player.on('pause',",start);
+  runInNewContext(mainSource.slice(start,end).replace("player.on('play', async () => {",'this.onPlay = async () => {').replace(/\}\);\s*$/, '};'),context);
+  await context.onPlay();assert.deepEqual(events,['muted:true','pause']);assert.equal(state.watchVideoPlaying,false);
+});
+test('Video prewarming cannot reload the stale clock while native Audio owns this lecture',()=>{
+  const state={watchMode:'video',watchResumeSeconds:659.235,nativePlayback:{mode:'AUDIO',lectureId:'lecture'}};
+  let loads=0;
+  const context={state,usesNativeUnifiedAudio:()=>true,PlaybackController:{loadLecture:async()=>loads++},
+    videoAudioPlaybackItem:()=>({url:'https://api.example.test/audio/lecture'}),offlineRecordForAudioItem:()=>null,offlineFileUrl:()=>''};
+  const start=mainSource.indexOf('function prewarmVideoAudioMetadata(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function currentLanguage(',start))+'\nthis.prewarm=prewarmVideoAudioMetadata;',context);
+  context.prewarm({hasAudio:true},'lecture');assert.equal(loads,0);
+  state.nativePlayback.mode='VIDEO';context.prewarm({hasAudio:true},'lecture');assert.equal(loads,1);
+  state.watchMode='audio';context.prewarm({hasAudio:true},'lecture');assert.equal(loads,1);
+});
+test('delayed Video snapshots cannot replace the Audio view after its short fence expires',()=>{
+  const state={watchVideo:{id:'lecture'},watchMode:'audio',nativePlayback:{mode:'AUDIO'},
+    playbackAuthorityFence:{mode:'AUDIO',lectureId:'lecture',expiresAt:0}};
+  const context={state,Date,videoId:v=>v.id};
+  const start=mainSource.indexOf('function nativeSnapshotConflicts(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function nativeAudioPositionSeconds(',start))+'\nthis.conflicts=nativeSnapshotConflicts;',context);
+  assert.equal(context.conflicts({mode:'VIDEO',lectureId:'lecture'}),true,'A queued Video state must not turn the Audio clock into 0:00');
+  assert.equal(context.conflicts({mode:'AUDIO',lectureId:'lecture'}),false,'Actual native Audio progress must still update');
+  state.watchMode='video';state.watchAudioToVideoHandoff=true;state.watchAudioToVideoHandoffId='lecture';
+  assert.equal(context.conflicts({mode:'VIDEO',lectureId:'lecture'}),false,'A new explicit Video selection can complete its transaction');
+});
 
-function resumeFixture({ready=600.35,commitFails=false,focusStopped=false}={}) {
+function resumeFixture({ready=600.35,commitFails=false,focusStopped=false,readyWait}={}) {
   const item={id:'lecture'};
-  const state={current:item,watchResumeSeconds:600,nativePlayback:{mode:'AUDIO'},playbackSpeed:1};
+  const state={current:item,watchResumeSeconds:600,nativePlayback:{mode:'AUDIO',audioIsPlaying:!focusStopped,audioPlayWhenReady:!focusStopped},playbackSpeed:1};
   const events=[];
   const player={getCurrentTime:async()=>600,setPlaybackRate:async()=>{},play:()=>new Promise(()=>{}),pause:async()=>events.push('pause')};
   state.watchVimeo=player;
   const context={state,console:{debug(){},warn(){}},setTimeout(){},usesNativeUnifiedAudio:()=>true,
     playbackPositionSeconds:()=>600,setVimeoHandoffMuted:async(_,muted)=>events.push(muted?'mute':'unmute'),
-    waitForVimeoHandoffReady:async()=>{events.push('verify');return ready;},
+    waitForVimeoHandoffReady:async(...args)=>{events.push('verify');return readyWait?readyWait(...args):ready;},
     finishAudioToVideoHandoff:async()=>{events.push('commit');state.current=null;state.nativePlayback.mode='VIDEO';if(commitFails)throw Error('native error');return true;},
-    nativeMediaPlugin:()=>({getState:async()=>({...state.nativePlayback,audioPositionMs:603000,audioPlayWhenReady:!focusStopped})}),
+    nativeMediaPlugin:()=>({getState:async()=>({...state.nativePlayback,audioPositionMs:603000})}),
     setPlaybackAuthorityFence:mode=>events.push(mode),
-    PlaybackController:{startAudioAt:async(position,playing,options)=>{events.push({position,playing,volume:options.volume});state.nativePlayback.mode='AUDIO';}},
+    PlaybackController:{startAudioAt:async(position,playing,options)=>{events.push({position,playing,volume:options.volume});Object.assign(state.nativePlayback,{mode:'AUDIO',audioIsPlaying:playing,audioPlayWhenReady:playing});}},
     refreshPersistentMiniVideoChrome(){},videoAudioPlaybackItem:()=>item};
   const start=mainSource.indexOf('async function resumeParkedVideoFromAudio(');
   runInNewContext(mainSource.slice(start,mainSource.indexOf('function watchHtml(',start))+'\nthis.resume=resumeParkedVideoFromAudio;',context);
@@ -200,10 +670,80 @@ test('partial native commit rolls back to audible Audio at its advancing shadow 
   const f=resumeFixture({commitFails:true});assert.equal(await f.resume(),false);
   assert.equal(f.state.current,f.item);assert.equal(f.state.nativePlayback.mode,'AUDIO');
   assert.deepEqual(f.events.find(e=>typeof e==='object'),{position:603,playing:true,volume:1});
-  assert.ok(f.events.lastIndexOf('mute')<f.events.indexOf('AUDIO'));
+  assert.ok(f.events.indexOf('AUDIO')<f.events.indexOf('pause'),
+    'Audio ownership must be fenced before the failed destination emits Pause');
 });
 test('failed preparation restarts Audio if muted WebView playback took its focus',async()=>{
   const f=resumeFixture({ready:null,focusStopped:true});assert.equal(await f.resume(),false);
   assert.equal(f.state.current,f.item);assert.ok(!f.events.includes('commit'));
   assert.deepEqual(f.events.find(e=>typeof e==='object'),{position:603,playing:true,volume:1});
+});
+
+test('Follow binding must not double-submit after a persistent video overlay survives renders', async () => {
+  const start = mainSource.indexOf("  document.querySelectorAll('[data-follow-type]').forEach(el => {");
+  const end = mainSource.indexOf("  document.querySelectorAll('[data-share-kind]')", start);
+  assert.ok(start >= 0 && end > start, 'Follow event binding block must be present');
+  const binding = mainSource.slice(start, end);
+  const handlers = [];
+  const element = {
+    dataset: { followType: 'speaker', followKey: 'rav-qa', followLabel: 'Test Speaker' },
+    addEventListener(type, handler) { assert.equal(type, 'click'); handlers.push(handler); }
+  };
+  let followCalls = 0;
+  const resolvers = [];
+  const context = {
+    document: { querySelectorAll: selector => selector === '[data-follow-type]' ? [element] : [] },
+    preserveWatchTime: async () => {},
+    toggleFollow: () => new Promise(resolve => { followCalls++; resolvers.push(resolve); })
+  };
+  runInNewContext(binding, context); // Initial video render.
+  runInNewContext(binding, context); // Save/Watch Later dialog render.
+  runInNewContext(binding, context); // Closing dialog / re-render.
+  assert.equal(handlers.length, 1, 'A persistent Follow button must have only one click handler');
+  const evt = { stopPropagation() {} };
+  const first = handlers[0](evt), second = handlers[0](evt); // Two fast taps.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(followCalls, 1, 'A second tap while waiting must not issue a second request');
+  resolvers.shift()();
+  await Promise.all([first, second]);
+  const third = handlers[0](evt);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(followCalls, 2, 'The Follow button must work again once the request resolves');
+  resolvers.shift()();
+  await third;
+});
+
+test('audio downloads use the validated audio stream and preserve unlisted source identity', () => {
+  assert.equal(audioDownloadPath('1233236785:585d5d53db'),'/audio/1233236785%3A585d5d53db');
+  assert.equal(audioDownloadPath('drivev-example'),'/audio/drivev-example');
+});
+test('offline audio rejects 2,407-byte HTML/error page previously saved as one-hour MP3', () => {
+  assert.ok(minimumOfflineAudioBytes(3663)>1_000_000);
+  assert.equal(isPlausibleOfflineAudio(2407,3663),false);
+  assert.equal(isPlausibleOfflineAudio(128_000,3663),false);
+  assert.equal(isPlausibleOfflineAudio(4_000_000,3663),true);
+});
+test('offline audio refuses missing, zero and short downloaded files even without duration metadata', () => {
+  assert.equal(isPlausibleOfflineAudio(0),false);
+  assert.equal(isPlausibleOfflineAudio(null),false);
+  assert.equal(isPlausibleOfflineAudio(8192),false);
+  assert.equal(isPlausibleOfflineAudio(65536),true);
+});
+
+test('A paused/stalled HLS seek is not restarted continuously while Audio continues playing', async () => {
+  const f=handoffFixture({movingClock:false,movingFrames:false});
+  const player=f.player, element=player.getVideoElement();
+  let attempts=0;
+  const prior=player.setCurrentTime;
+  player.setCurrentTime=async seconds=>{attempts++;return prior(seconds);};
+  const result=await f.wait(player,'lecture',4000);
+  assert.equal(result,null,'Frozen video must not be accepted as a successful handoff');
+  assert.ok(attempts<=3,'Stalled WebView video must not restart HLS seeks every 90ms (got '+attempts+')');
+  element.seeking=true;
+  const f2=handoffFixture({movingClock:false,movingFrames:false});
+  f2.player.getVideoElement().seeking=true;
+  let racing=0;
+  f2.player.setCurrentTime=async n=>{racing++;return n;};
+  assert.equal(await f2.wait(f2.player,'lecture',2800),null);
+  assert.equal(racing,0,'An active media element seek must not be interrupted with a second seek');
 });

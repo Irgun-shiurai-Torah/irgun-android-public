@@ -8,6 +8,8 @@ import { FileTransfer } from '@capacitor/file-transfer';
 import { Share } from '@capacitor/share';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { createAndroidHlsPlayer } from './android-hls-video.js';
+import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } from './offline-validation.js';
+import { downloadOfflineAudio } from './offline-download.js';
 import { vimeoEmbedSource } from './vimeoEmbed.js';
 import { AppleSignIn, SignInScope } from '@capawesome/capacitor-apple-sign-in';
 
@@ -397,9 +399,12 @@ function offlineKeyFor(kind, id) {
 
 function offlineRecordForAudioItem(item) {
   if (!item) return null;
-  if (item.kind === 'library-audio') return state.offlineDownloads.get(offlineKeyFor('audio', item.id)) || null;
-  if (item.kind === 'video-audio') return state.offlineDownloads.get(offlineKeyFor('video', item.id)) || null;
-  return null;
+  const key = item.kind === 'library-audio'
+    ? offlineKeyFor('audio', item.id)
+    : item.kind === 'video-audio' ? offlineKeyFor('video', item.id) : '';
+  const record = key ? state.offlineDownloads.get(key) : null;
+  // Never redirect playback to a truncated or mislabeled 2 KB download.
+  return record && isPlausibleOfflineAudio(record.bytes, record.durationSeconds) ? record : null;
 }
 
 function offlineRecordForCatalogItem(item) {
@@ -408,7 +413,7 @@ function offlineRecordForCatalogItem(item) {
 }
 
 function offlineFileUrl(record) {
-  if (!record || !record.uri) return '';
+  if (!record?.uri || !isPlausibleOfflineAudio(record.bytes, record.durationSeconds)) return '';
   try { return Capacitor.convertFileSrc(record.uri); } catch (_) { return record.uri; }
 }
 
@@ -423,7 +428,8 @@ function humanBytes(bytes) {
 
 function offlineActionState(kind, id) {
   const key = offlineKeyFor(kind, id);
-  const record = state.offlineDownloads.get(key) || null;
+  const entry = state.offlineDownloads.get(key) || null;
+  const record = entry && isPlausibleOfflineAudio(entry.bytes,entry.durationSeconds) ? entry : null;
   const job = state.offlineJobs.get(key) || null;
   if (record) return { key, record, job:null, status:'saved', cls:'offline-saved', label:currentLanguage()==='he'?'הסר שמירה לא מקוונת':'Remove Offline' };
   if (job) {
@@ -460,12 +466,18 @@ function refreshOfflineButtonsForKey(key = '') {
 }
 
 async function saveOffline(kind, id) {
+  state.offlineSaveLastError = '';
   const normalizedKind = kind === 'audio' ? 'audio' : 'video';
   const key = offlineKeyFor(normalizedKind, id);
   if (state.offlineDownloads.has(key)) {
-    const confirmed = confirm(currentLanguage() === 'he' ? 'להסיר את העותק השמור להאזנה ללא אינטרנט?' : 'Remove the saved offline copy?');
-    if (confirmed) await deleteOffline(key, { stayHere:true });
-    return;
+    const stored = state.offlineDownloads.get(key);
+    if (isPlausibleOfflineAudio(stored?.bytes, stored?.durationSeconds)) {
+      const confirmed = confirm(currentLanguage() === 'he' ? 'להסיר את העותק השמור להאזנה ללא אינטרנט?' : 'Remove the saved offline copy?');
+      if (confirmed) await deleteOffline(key, { stayHere:true });
+      return;
+    }
+    // Corrupt downloads are not usable or 'saved'. Remove them and retry.
+    await deleteOffline(key, { stayHere:true });
   }
   if (state.offlineJobs.has(key)) {
     setToast(currentLanguage() === 'he' ? 'ההורדה כבר מתבצעת.' : 'This shiur is already downloading.');
@@ -484,7 +496,7 @@ async function saveOffline(kind, id) {
   usageAnalytics.event('offline_listen_started', { shiurId:String(id || ''), mediaType:'audio', dedupeKey:`offline:${normalizedKind}:${id}`, cooldownMs:3000 });
   const rawId = normalizedKind === 'audio' ? rawAudioId(item) : videoId(item);
   const sourceId = normalizedKind === 'audio' ? rawId : mediaApiId(item, rawId);
-  const url = `${API}/download/${encodeURIComponent(sourceId)}?type=audio`;
+  const url = API + audioDownloadPath(sourceId);
   const title = itemTitle({ ...item, _kind: normalizedKind === 'audio' ? 'audio' : 'video' });
   const subtitle = itemSubtitle({ ...item, _kind: normalizedKind === 'audio' ? 'audio' : 'video' });
   const safe = key.replace(/[^A-Za-z0-9_-]+/g, '_');
@@ -493,6 +505,7 @@ async function saveOffline(kind, id) {
   refreshOfflineButtonsForKey(key);
   if (state.screen === 'library' && state.librarySection === 'downloads') render();
   let listener = null;
+  let expectedBytes = 0;
   try {
     await Filesystem.mkdir({ directory: Directory.Data, path:'irgun-offline', recursive:true }).catch(() => {});
     const fileInfo = await Filesystem.getUri({ directory: Directory.Data, path });
@@ -500,19 +513,48 @@ async function saveOffline(kind, id) {
       if (String(progress?.url || '') !== url) return;
       const total = Number(progress?.contentLength) || 0;
       const bytes = Number(progress?.bytes) || 0;
+      if (Number.isFinite(total) && total > 0) expectedBytes = total;
       const percent = total > 0 ? Math.max(0, Math.min(100, Math.round(bytes / total * 100))) : 0;
-      state.offlineJobs.set(key, { percent, bytes, total, title });
+      state.offlineJobs.set(key, { ...state.offlineJobs.get(key), percent, bytes, total, title });
       const node = document.querySelector(`[data-offline-progress="${CSS.escape(key)}"]`);
       if (node) node.textContent = total > 0 ? `${percent}%` : (currentLanguage() === 'he' ? 'שומר…' : 'Saving…');
       refreshOfflineButtonsForKey(key);
     });
     const headers = { 'X-Irgun-App':'1' };
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
-    await FileTransfer.downloadFile({ url, path:fileInfo.uri, headers, progress:true });
+    const transferOptions = { url, path:fileInfo.uri, headers, progress:true };
+    const transfer = Capacitor.getPlatform() === 'android'
+      ? await downloadOfflineAudio(transferOptions, {
+          download:options => FileTransfer.downloadFile(options),
+          removePartial:async () => {
+            try { await Filesystem.deleteFile({ directory:Directory.Data, path }); }
+            catch (error) {
+              if (String(error?.code || '') !== 'OS-PLUG-FILE-0008') throw error;
+            }
+          },
+          onRetry:({ attempt, code }) => {
+            console.warn('Offline connection interrupted; restarting download', { attempt, code,
+              bytes:Number(state.offlineJobs.get(key)?.bytes) || 0 });
+            expectedBytes = 0;
+            state.offlineJobs.set(key, { percent:0, bytes:0, total:0, title, attempt });
+            refreshOfflineButtonsForKey(key);
+          }
+        })
+      : (await FileTransfer.downloadFile(transferOptions), { attempts:1 });
     const stat = await Filesystem.stat({ directory:Directory.Data, path }).catch(() => ({}));
+    // Check actual on-device bytes, not the network progress total.
+    const verifiedBytes = Number(stat?.size) || 0;
+    const durationSeconds = Math.max(0,Number(item.duration)||0);
+    if (expectedBytes > 0 && verifiedBytes !== expectedBytes) {
+      throw new Error('Incomplete audio download: '+verifiedBytes+' of '+expectedBytes+' bytes');
+    }
+    if (!isPlausibleOfflineAudio(verifiedBytes,durationSeconds)) {
+      throw new Error('Incomplete or non-audio download: '+verifiedBytes+' bytes; expected at least '+
+        minimumOfflineAudioBytes(durationSeconds)+' bytes for this lecture');
+    }
     state.offlineDownloads.set(key, {
       key, kind:normalizedKind, id:rawId, sourceId, title, subtitle,
-      uri:fileInfo.uri, path, bytes:Number(stat?.size) || Number(state.offlineJobs.get(key)?.total) || 0,
+      uri:fileInfo.uri, path, bytes:verifiedBytes, durationSeconds, downloadAttempts:transfer.attempts,
       savedAt:Date.now()
     });
     state.offlineJobs.delete(key);
@@ -520,7 +562,15 @@ async function saveOffline(kind, id) {
     setToast(currentLanguage() === 'he' ? 'נשמר להאזנה ללא אינטרנט.' : 'Saved for offline listening.');
     if (state.screen === 'library' && state.librarySection === 'downloads') render(); else { refreshInteractiveUi(); refreshOfflineButtonsForKey(key); }
   } catch (error) {
+    // Expose the real error for QA and diagnostics. A failed 2 KB HTML
+    // response must never be mistaken for a downloaded hour-long MP3.
+    state.offlineSaveLastError = ((error?.code ? String(error.code)+': ' : '')+
+      String(error?.message || error || 'Unknown download error')).slice(0,350);
     console.warn('Offline save failed', error);
+    // Do not leave an invalid partial file in storage for a later retry.
+    await Filesystem.deleteFile({ directory:Directory.Data, path }).catch(() => {});
+    state.offlineDownloads.delete(key);
+    persistOfflineDownloads();
     state.offlineJobs.delete(key);
     setToast(currentLanguage() === 'he' ? 'לא היה אפשר לשמור את השיעור.' : 'Could not save this shiur offline.');
     if (state.screen === 'library' && state.librarySection === 'downloads') render(); else refreshOfflineButtonsForKey(key);
@@ -544,6 +594,10 @@ async function playOfflineRecord(key) {
   resetWatchPresentationForStandaloneAudio();
   const record = state.offlineDownloads.get(String(key || ''));
   if (!record) return;
+  if (!isPlausibleOfflineAudio(record.bytes,record.durationSeconds)) {
+    setToast(currentLanguage()==='he'?'ההורדה אינה שלמה. יש להוריד מחדש.':'The saved audio is incomplete. Please download it again.');
+    return;
+  }
   const url = offlineFileUrl(record);
   if (!url) return;
   state.queueStarting = false;
@@ -1680,7 +1734,9 @@ function audioUrl(id) {
 }
 
 function prewarmVideoAudioMetadata(video, id) {
-  if (!video || !video.hasAudio || state.watchAudioToVideoHandoff) return;
+  if (!video || !video.hasAudio || state.watchAudioToVideoHandoff || state.watchMode !== 'video' ||
+      (usesNativeUnifiedAudio() && state.nativePlayback?.mode === 'AUDIO' &&
+       String(state.nativePlayback.lectureId || '') === String(id))) return;
   const base = videoAudioPlaybackItem(video, id);
   if (!base || !base.url) return;
   const offlineRecord = offlineRecordForAudioItem(base);
@@ -2216,11 +2272,14 @@ async function hydrateInitialCatalogCache() {
   try {
     await loadMetadata();
     const keys = [
-      '/video-map', '/audio-map', '/trending?period=week&limit=2500',
+      '/video-map?driveLibrary=1', '/audio-map', '/trending?period=week&limit=2500',
       '/trending?period=month&limit=2500', '/trending?period=all&limit=2500',
       '/shiur-view-count', '/like-counts'
     ];
     const cached = await Promise.all(keys.map(path => offlineCacheGet(`bootstrap:${path}`)));
+    // Read the same catalog key written by bootstrapJson. Keep older installs'
+    // pre-Drive cache available until their first complete catalog refresh.
+    if (!Array.isArray(cached[0]?.data)) cached[0] = await offlineCacheGet('bootstrap:/video-map');
     const videoCache = cached[0];
     if (!videoCache || !Array.isArray(videoCache.data)) return false;
     const videos = videoCache.data;
@@ -2290,8 +2349,15 @@ async function bootstrap(options = {}) {
     state.likeCounts = likeCounts || {};
     state.error = '';
 
+    // The catalog is complete. Account restoration and secondary feeds must
+    // not hold the whole app behind its initial loading screen.
+    state.loading = false;
+    render();
     await restoreSession();
-    await Promise.all([loadSponsorRibbon(), loadScheduleData(), loadLiveStatus()]);
+    render();
+    Promise.all([loadSponsorRibbon(), loadScheduleData(), loadLiveStatus()])
+      .then(() => { if (['home','schedule','live','live-boro','live-flatbush'].includes(state.screen)) render(); })
+      .catch(error => console.warn('Secondary startup feeds unavailable', error));
     await handleAppReturn();
   } catch (error) {
     console.error(error);
@@ -2589,6 +2655,9 @@ async function logout() {
   resetUserState();
   state.accountSection = 'profile';
   render();
+  // Logout replaces the scrolled profile with a taller sign-in form. Start at
+  // its email/password fields rather than retaining the profile's scroll offset.
+  if (state.screen === 'account') window.scrollTo({ top:0, left:0, behavior:'instant' });
 }
 
 async function updateProfile(name, password) {
@@ -4638,7 +4707,7 @@ function authHtml() {
   return `<div class="page-title"><h1>${registerMode ? 'Create Account' : 'Login'}</h1><p>${registerMode ? 'Create your Irgun Shiurai Torah account.' : 'Sign in to access your account.'}</p></div>
     <div class="account-card auth-card">
       ${state.authMessage ? `<div class="form-message">${esc(state.authMessage)}</div>` : ''}
-      <form id="authForm" class="form-stack">
+      <form id="authForm" class="form-stack" data-auth-draft-mode="${esc(state.authMode)}">
         ${registerMode ? '<label>Name<input id="authName" autocomplete="name" required></label>' : ''}
         <label>Email<input id="authEmail" type="email" autocomplete="email" required></label>
         <label>Password<input id="authPassword" type="password" autocomplete="current-password" minlength="6" required></label>
@@ -4726,6 +4795,56 @@ async function setVimeoHandoffMuted(player, muted) {
   } catch (_) {}
 }
 
+
+async function confirmVideoAudibleAfterAuthority(player, timeoutMs = 6500) {
+  const deadline = Date.now() + timeoutMs;
+  // An Android focus transaction can briefly unmute the WebView and then
+  // re-mute it a fraction of a second later. Require stable audible playback.
+  let audibleSince = 0;
+  while (Date.now() < deadline) {
+    const element = player?.getVideoElement?.();
+    if (element) {
+      // Modern Android WebView can re-mute or suspend the media element during
+      // the Media3 focus transaction. Never accept a silent VIDEO owner.
+      if (element.muted || element.volume <= 0) await setVimeoHandoffMuted(player, false);
+      if (element.paused && element.readyState >= 2) {
+        await Promise.race([
+          Promise.resolve(player.play()).catch(() => {}),
+          new Promise(resolve => setTimeout(resolve, 350))
+        ]);
+      }
+      if (!element.paused && element.readyState >= 2 && element.videoWidth > 0 &&
+          !element.muted && element.volume > 0) {
+        if (!audibleSince) audibleSince = Date.now();
+        if (Date.now() - audibleSince >= 1250) return true;
+      } else {
+        audibleSince = 0;
+      }
+    } else if (player) {
+      // Vimeo iframe path: use the actual player API; a resolved setter is not
+      // proof that the iframe became audible on this WebView version.
+      await setVimeoHandoffMuted(player, false);
+      const inspect = (fn, fallback) => Promise.race([
+        Promise.resolve(fn?.()).catch(() => fallback),
+        new Promise(resolve => setTimeout(() => resolve(fallback), 350))
+      ]);
+      const [paused, muted, volume] = await Promise.all([
+        inspect(player.getPaused?.bind(player), true),
+        inspect(player.getMuted?.bind(player), null),
+        inspect(player.getVolume?.bind(player), 0)
+      ]);
+      if (!paused && muted === false && Number(volume) > 0) {
+        if (!audibleSince) audibleSince = Date.now();
+        if (Date.now() - audibleSince >= 1250) return true;
+      } else {
+        audibleSince = 0;
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 180));
+  }
+  return false;
+}
+
 async function finishAudioToVideoHandoff(videoKey, player = state.watchVimeo) {
   const key = String(videoKey || '');
   // Vimeo's play event and the readiness waiter can hit this simultaneously. If
@@ -4751,6 +4870,9 @@ async function finishAudioToVideoHandoff(videoKey, player = state.watchVimeo) {
         // can safely restore Audio mode without ever producing double audio.
         await PlaybackController.switchAuthorityToVideo(position, duration, true);
         await setVimeoHandoffMuted(player, false);
+        if (!await confirmVideoAudibleAfterAuthority(player)) {
+          throw new Error('Native VIDEO authority was confirmed but the picture is paused or muted');
+        }
       } else {
         // Web/iOS has no native authority transaction to confirm. Make the already-
         // synchronized Vimeo audible first, then pause HTML audio to avoid a gap.
@@ -4799,6 +4921,13 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
     return position >= source - tolerance && position <= source + lead;
   };
   let lastPosition = null;
+  // A parked HLS stream may take time to fetch a distant segment. Repeatedly
+  // setting currentTime every 90ms aborts the previous MSE seek and prevents
+  // any new frame from decoding. Android can also clear seeking briefly before
+  // the keyframe plays. Require actual motion before correcting another drift.
+  let lastSeekCorrectionAt = Number.NEGATIVE_INFINITY;
+  let catchupElement = null;
+  try {
   while (Date.now() < deadline) {
     if (!state.watchAudioToVideoHandoff || String(state.watchAudioToVideoHandoffId || '') !== String(videoKey || '')) {
       if (usesNativeUnifiedAudio()) return null;
@@ -4812,15 +4941,8 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
       Promise.resolve(player?.getPaused?.()).catch(()=>true),
       Promise.resolve(player?.getCurrentTime?.()).catch(()=>null)
     ]);
-    let videoNow = Number(current);
-    if (Number.isFinite(videoNow) && !synchronized(videoNow, sourceNow, 0.75)) {
-      const corrected = await Promise.race([
-        Promise.resolve(player.setCurrentTime(sourceNow)).catch(()=>null),
-        new Promise(resolve=>setTimeout(()=>resolve(null),900))
-      ]);
-      if (corrected != null && Number.isFinite(Number(corrected))) videoNow = Number(corrected);
-    }
-    if (!paused && Number.isFinite(videoNow) && synchronized(videoNow, sourceNow, 0.75)) {
+    const videoNow = Number(current);
+    if (!paused && Number.isFinite(videoNow)) {
       // Confirm the destination clock is live, not merely a resolved play() call.
       const element = player?.getVideoElement?.();
       const frameCount = () => {
@@ -4844,8 +4966,27 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
           if (element.buffered.start(i) <= again && element.buffered.end(i) >= again + required) bufferedAhead = true;
         }
       }
-      if (Number.isFinite(again) && again > videoNow + 0.05 && synchronized(again, stillSource, 0.85) && movingPicture && bufferedAhead) {
-        return again;
+      if (Number.isFinite(again) && again > videoNow + 0.05 && movingPicture && bufferedAhead) {
+        if (synchronized(again, stillSource, 1.8)) return again;
+        // Let the first seek decode and actually play before chasing Audio's
+        // advancing clock. Seeking as soon as metadata/currentTime resolve
+        // repeatedly discards the destination's pending keyframe on API 35.
+        if (player?.getSourceType?.() === 'hls' && element) {
+          // The initial HLS seek can take seconds to decode a keyframe. Another
+          // seek discards that progress. Catch up while its decoded picture
+          // keeps moving, then restore the requested speed before committing.
+          const requestedRate = Number(state.playbackSpeed) || 1;
+          catchupElement = element;
+          element.playbackRate = again < stillSource
+            ? Math.min(4, Math.max(requestedRate * 2, requestedRate + 1))
+            : Math.max(.25, requestedRate / 2);
+        } else if (!element?.seeking && Date.now() - lastSeekCorrectionAt >= 1500) {
+          lastSeekCorrectionAt = Date.now();
+          await Promise.race([
+            Promise.resolve(player.setCurrentTime(stillSource)).catch(()=>null),
+            new Promise(resolve=>setTimeout(()=>resolve(null),900))
+          ]);
+        }
       }
       lastPosition = again;
     } else {
@@ -4855,6 +4996,9 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
   }
   console.warn('[Playback] Vimeo destination did not become synchronized before timeout', lastPosition);
   return null;
+  } finally {
+    if (catchupElement) catchupElement.playbackRate = Number(state.playbackSpeed) || 1;
+  }
 }
 
 function videoAudioPlaybackItem(video, id) {
@@ -5159,7 +5303,10 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
         // A WebView play promise may stay pending during a long-distance seek.
         // Keep Audio authoritative while actual clocks/frames establish readiness.
         Promise.resolve(player.play()).catch(error => console.debug('[Playback] destination play pending/failed', error));
-        const readyPosition = await waitForVimeoHandoffReady(player, id, player?.getSourceType?.() === 'mp4' ? 15000 : 8000);
+        // A distant HLS seek may decode only after the old eight-second budget.
+        // Keep Audio audible for the same bounded readiness window as MP4;
+        // advancing frames and a synchronized live clock are still mandatory.
+        const readyPosition = await waitForVimeoHandoffReady(player, id, 15000);
         if (readyPosition == null || !Number.isFinite(Number(readyPosition))) throw new Error('Vimeo did not become ready at the synchronized position');
         current = Number(readyPosition);
         const finished = await finishAudioToVideoHandoff(id, player);
@@ -5183,17 +5330,47 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
       state.watchAudioToVideoHandoff = false;
       state.watchAudioToVideoHandoffId = '';
       state.watchAudioToVideoTargetSeconds = 0;
+      // Fence queued source events before pausing the failed destination. Its
+      // asynchronous pause callback must not overwrite the Audio rollback.
+      setPlaybackAuthorityFence('AUDIO', id, 5000);
       await setVimeoHandoffMuted(player, true);
       try { await player.pause(); } catch (_) {}
       // Native authority may have changed before a commit error. Restore the
       // audible source and its live shadow clock, rather than rendering Audio
       // over a silent VIDEO owner with a cleared current item.
       state.current = audioItem || videoAudioPlaybackItem(video, id);
-      setPlaybackAuthorityFence('AUDIO', id, 5000);
-      const snapshot = await Promise.resolve(nativeMediaPlugin().getState()).catch(()=>state.nativePlayback);
-      if (String(snapshot?.mode || '') === 'VIDEO' || (String(snapshot?.mode || '') === 'AUDIO' && shouldPlay && !snapshot?.audioPlayWhenReady)) {
-        const livePosition = Math.max(0, Number(snapshot.audioPositionMs) || Number(snapshot.currentPositionMs) || 0) / 1000;
-        await PlaybackController.startAudioAt(livePosition, shouldPlay, { volume:1, commit:true }).catch(error => console.warn('[Playback] Audio rollback failed', error));
+      const native = nativeMediaPlugin();
+      let snapshot = await Promise.resolve(native.getState()).catch(()=>state.nativePlayback);
+      const keepPlaying = !shouldPlay || Boolean(snapshot?.audioIsPlaying || snapshot?.audioPlayWhenReady);
+      if (String(snapshot?.mode || '') !== 'AUDIO' || !keepPlaying) {
+        const livePosition = Math.max(
+          0, Number(snapshot?.audioPositionMs) || 0,
+          Number(snapshot?.currentPositionMs) || 0,
+          Number(state.watchResumeSeconds || 0) * 1000
+        ) / 1000;
+        let rollbackError = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            // If Media3 did not accept the first authority rollback, recreate
+            // only its audio source on the second attempt. Do not destroy the
+            // parked video; it can be retried on the user's next tap.
+            if (attempt) await PlaybackController.loadLecture(state.current, livePosition, true);
+            await PlaybackController.startAudioAt(livePosition, shouldPlay, { volume:1, commit:true });
+          } catch (failure) { rollbackError = failure; }
+          snapshot = await Promise.resolve(native.getState()).catch(()=>state.nativePlayback);
+          if (String(snapshot?.mode || '') === 'AUDIO' &&
+              (!shouldPlay || snapshot?.audioIsPlaying || snapshot?.audioPlayWhenReady)) break;
+        }
+        if (String(snapshot?.mode || '') !== 'AUDIO' ||
+            (shouldPlay && !snapshot?.audioIsPlaying && !snapshot?.audioPlayWhenReady)) {
+          console.error('[Playback] AUDIO rollback could not regain audible Media3 authority', rollbackError);
+          setToast(currentLanguage()==='he'
+            ? 'הווידאו לא היה מוכן; השמע לא חזר אוטומטית. נסו להפעיל שוב.'
+            : 'Video was not ready and audio could not resume automatically. Please retry playback.');
+        }
+      }
+      if (snapshot && String(snapshot.mode || '') === 'AUDIO') {
+        state.nativePlayback = { ...state.nativePlayback, ...snapshot, connected:true };
       }
       return false;
     }
@@ -5853,6 +6030,31 @@ function analyticsScreenLabel() {
   return names[String(state.screen || '')] || String(state.screen || 'Home');
 }
 
+function preserveAuthFormDraft() {
+  // Keep an in-progress form in the DOM only. Never put credentials in state,
+  // storage, markup or logs. A login attempt or mode change clears the draft.
+  const form = document.getElementById('authForm');
+  if (!form || state.user || state.authBusy || form.dataset.authDraftMode !== state.authMode) return () => {};
+  const fields = ['authName','authEmail','authPassword'].map(id => {
+    const element = document.getElementById(id);
+    return element ? { id, value:element.value, focused:document.activeElement === element,
+      start:element.selectionStart, end:element.selectionEnd } : null;
+  }).filter(Boolean);
+  return () => {
+    const replacement = document.getElementById('authForm');
+    if (!replacement || state.user || state.authBusy || replacement.dataset.authDraftMode !== state.authMode) return;
+    for (const field of fields) {
+      const element = document.getElementById(field.id);
+      if (!element) continue;
+      element.value = field.value;
+      if (field.focused) {
+        element.focus({preventScroll:true});
+        try { element.setSelectionRange(field.start, field.end); } catch (_) {}
+      }
+    }
+  };
+}
+
 function render() {
   if (tabSwipeRenderGate.shouldDefer()) return;
   usageAnalytics.setScreen(analyticsScreenLabel());
@@ -5882,8 +6084,10 @@ function render() {
     : state.screen === 'privacy' ? privacyHtml()
     : state.screen === 'library' ? libraryHtml()
     : accountHtml();
+  const restoreAuthDraft = preserveAuthFormDraft();
   app.innerHTML = shell(content + playlistPickerHtml());
   bind();
+  restoreAuthDraft();
   syncLivePlaybackAnalytics();
   updatePlayerUi();
   refreshOfflineButtonsForKey();
@@ -6382,10 +6586,23 @@ function bind() {
     toggleWatchLater(el.dataset.save);
   }));
 
-  document.querySelectorAll('[data-follow-type]').forEach(el => el.addEventListener('click', async () => {
-    await preserveWatchTime();
-    toggleFollow(el.dataset.followType, el.dataset.followKey, el.dataset.followLabel);
-  }));
+  document.querySelectorAll('[data-follow-type]').forEach(el => {
+    // The persistent watch video lives outside #app. Renders for Save/Watch
+    // Later must not rebind this same DOM element and POST twice to /follows.
+    if (el.dataset.followBound === '1') return;
+    el.dataset.followBound = '1';
+    el.addEventListener('click', async event => {
+      event.stopPropagation();
+      if (el.dataset.followBusy === '1') return;
+      el.dataset.followBusy = '1';
+      try {
+        await preserveWatchTime();
+        await toggleFollow(el.dataset.followType, el.dataset.followKey, el.dataset.followLabel);
+      } finally {
+        delete el.dataset.followBusy;
+      }
+    });
+  });
 
   document.querySelectorAll('[data-share-kind]').forEach(el => el.addEventListener('click', () => shareItem(el.dataset.shareKind, el.dataset.shareId)));
   document.querySelectorAll('[data-download-kind]').forEach(el => el.addEventListener('click', () => downloadItem(el.dataset.downloadKind, el.dataset.downloadId)));
@@ -6810,7 +7027,7 @@ async function nativeDownload(info, choice) {
   const type = isVideo ? 'drive-video' : 'audio';
   const extension = isVideo ? 'mp4' : 'mp3';
   const filename = sanitizeDownloadFilename(info.title, extension);
-  const url = `${API}/download/${encodeURIComponent(identifier)}?type=${type}`;
+  const url = isVideo ? `${API}/download/${encodeURIComponent(identifier)}?type=${type}` : API + audioDownloadPath(identifier);
   const jobId = `ist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const job = { id: jobId, title: `${info.title} · ${isVideo ? 'Video' : 'Audio'}`, filename, status: 'queued', percent: 0 };
   state.downloadJobs.set(jobId, job);
@@ -7092,8 +7309,15 @@ async function startAudio(item, resumeAt = 0) {
 }
 
 function togglePlay() {
+  if (!state.current && state.watchVideo && state.watchMode === 'audio') {
+    state.current = videoAudioPlaybackItem(state.watchVideo, videoId(state.watchVideo));
+  }
   if (!state.current && !(state.watchVideo && state.watchMode === 'video')) return;
-  if (playbackIsPaused()) PlaybackController.play().catch(()=>{}); else PlaybackController.pause().catch(()=>{});
+  const action = playbackIsPaused() ? PlaybackController.play() : PlaybackController.pause();
+  Promise.resolve(action).catch(error => {
+    console.warn('[Playback] Play/Pause failed', error);
+    setToast(currentLanguage()==='he'?'לא היה אפשר להפעיל את השיעור. נסו שוב.':'Playback could not start. Please try again.');
+  });
   updatePlayerUi();
 }
 
@@ -7422,9 +7646,19 @@ function setPlaybackAuthorityFence(mode, lectureId = '', ttlMs = 3500) {
 }
 
 function nativeSnapshotConflicts(snapshot) {
-  if (state.watchAudioToVideoHandoff && String(snapshot?.mode || '') === 'AUDIO' &&
-      String(snapshot.lectureId || '') === String(state.watchAudioToVideoHandoffId || '')) return false;
   const fence = state.playbackAuthorityFence;
+  if (state.watchMode === 'audio' && state.watchVideo && String(snapshot?.mode || '') === 'VIDEO' &&
+      String(snapshot.lectureId || '') === videoId(state.watchVideo) && !state.watchAudioToVideoHandoff) {
+    // A queued Video snapshot cannot replace an already selected Audio view,
+    // even after a short transaction fence expires during notification reopening.
+    return true;
+  }
+  if (state.watchAudioToVideoHandoff && String(snapshot?.mode || '') === 'AUDIO' &&
+      String(snapshot.lectureId || '') === String(state.watchAudioToVideoHandoffId || '')) {
+    // Follow the live Audio clock during preparation, then reject queued AUDIO
+    // snapshots as soon as native VIDEO authority has actually been confirmed.
+    return state.nativePlayback?.mode === 'VIDEO' && fence?.mode === 'VIDEO';
+  }
   if (!fence) return false;
   if (Date.now() > Number(fence.expiresAt || 0)) {
     state.playbackAuthorityFence = null;
@@ -7544,6 +7778,11 @@ function reconcileNativeWatchAudio(snapshot) {
   state.nativeBackgroundHandoff = false;
   state.watchMode = 'audio';
   state.watchVideoPlaying = false;
+  // Change ownership before pause emits callbacks, and cancel old recovery.
+  if (state.watchVimeo) {
+    setVimeoHandoffMuted(state.watchVimeo, true).catch(() => {});
+    Promise.resolve(state.watchVimeo.pause()).catch(() => {});
+  }
   state.watchResumeSeconds = Math.max(0, Number(snapshot.currentPositionMs) || Number(snapshot.audioPositionMs) || 0) / 1000;
   parkHostedVideoForAudio();
   // Home can finish the native handoff after WebView events were suspended. On
@@ -7663,7 +7902,27 @@ const PlaybackController = {
   async play() {
     if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo) return state.watchVimeo.play();
     if (usesNativeUnifiedAudio()) {
-      const result = await nativeMediaPlugin().play();
+      const plugin = nativeMediaPlugin();
+      // The old play() bridge resolved even when Media3 still owned VIDEO or
+      // had no audio MediaItem. The Audio screen must establish AUDIO authority.
+      if (state.watchVideo && state.watchMode === 'audio') {
+        const id = videoId(state.watchVideo);
+        const item = state.current?.id === id ? state.current : videoAudioPlaybackItem(state.watchVideo, id);
+        const snapshot = await plugin.getState().catch(() => null);
+        const hasSource = snapshot?.mode === 'AUDIO' &&
+          String(snapshot.lectureId || '') === String(id) && Boolean(snapshot.hasAudioSource);
+        if (item && (!hasSource || !snapshot.audioPlayWhenReady)) {
+          const position = Math.max(0, Number(snapshot?.audioPositionMs || 0) / 1000, Number(state.watchResumeSeconds) || 0);
+          state.current = item;
+          setPlaybackAuthorityFence('AUDIO', id, 5000);
+          await this.loadLecture(item, position, true);
+          const started = await this.startAudioAt(position, true, { volume:1, commit:true });
+          await this.refreshFromNative();
+          return started;
+        }
+      }
+      const result = await plugin.play();
+      await this.refreshFromNative();
       return result;
     }
     return audio.play();
@@ -7817,7 +8076,8 @@ async function syncNativeMediaSession(item, playing = true, position = 0, durati
     // VIDEO -> AUDIO is moving toward Media3, ignore late Vimeo events. While
     // AUDIO -> VIDEO is waiting for explicit native confirmation, keep Media3 in
     // AUDIO until finishAudioToVideoHandoff() commits successfully.
-    if (state.watchVideoToAudioHandoff || state.watchAudioToVideoHandoff || state.watchMode !== 'video') return;
+    if (state.watchVideoToAudioHandoff || state.watchAudioToVideoHandoff || state.watchMode !== 'video' ||
+        state.playbackAuthorityFence?.mode === 'AUDIO') return;
     await PlaybackController.setVideoState(item, playing, position, duration, !state.nativeBackgroundHandoff);
   }
 }
@@ -8086,7 +8346,11 @@ async function closeWatch(save = true) {
     await saveHistory(videoId(state.watchVideo), 'video', state.watchResumeSeconds || 0, duration, false, { reconcile:true });
   } else if (state.watchMode === 'audio' && save) {
     const snapshot = captureCurrentAudioHistorySnapshot(videoId(state.watchVideo));
-    if (snapshot) await saveAudioHistorySnapshot(snapshot, false, { reconcile:true });
+    // Do not block the Back button on a slow network history write. The
+    // in-memory snapshot is captured first and the queued write finishes
+    // independently while the UI closes and native audio keeps playing.
+    if (snapshot) saveAudioHistorySnapshot(snapshot, false, { reconcile:true }).catch(error =>
+      console.warn('Could not save Audio history after closing Watch', error));
   }
   try { if (state.watchVimeo) await state.watchVimeo.destroy(); } catch (_) {}
   if (state.watchMode === 'video') {
@@ -8302,6 +8566,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
           videoId: videoKey,
           iframe: frame,
           resumeSeconds: Math.max(0, Number(state.watchResumeSeconds) || 0),
+          isPictureInPicture: () => state.systemPipActive,
           onMinimize: () => {
             if (generation === state.watchVimeoGeneration && state.watchMode === 'video' && !state.systemPipActive && !state.watchMinimized && videoId(state.watchVideo) === videoKey) {
               void minimizeWatchToPersistent();
@@ -8378,6 +8643,13 @@ async function initWatchVimeoOnce(userInitiated = false) {
     });
     player.on('play', async () => {
       if (generation !== state.watchVimeoGeneration) return;
+      if (state.watchMode !== 'video' || (document.hidden && !state.systemPipActive) || state.nativeBackgroundHandoff) {
+        // A play event queued before Home can arrive after Audio owns playback.
+        // It must not prewarm at the stale Video clock or claim audio focus.
+        setVimeoHandoffMuted(player, true).catch(() => {});
+        Promise.resolve(player.pause()).catch(() => {});
+        return;
+      }
       state.watchVideoPlaying = true;
       usageAnalytics.setMedia({isPlaying:true,mediaType:'video',playerState:'playing',shiurId:String(videoKey)});
       usageAnalytics.event('video_start',{shiurId:String(videoKey),mediaType:'video',dedupeKey:`video-start:${videoKey}`,cooldownMs:10000});
@@ -8606,10 +8878,14 @@ async function editComment(commentId) {
   if (!comment) return;
   state.editingCommentId = String(commentId);
   refreshCommentsUi();
-  setTimeout(() => {
-    const field = document.getElementById(`editCommentText-${commentId}`);
-    if (field) { field.focus(); field.setSelectionRange(field.value.length, field.value.length); }
-  }, 0);
+  // Keep focus in the original Edit button click. Android WebView suppresses
+  // IME activation for programmatic focus deferred to a timer, leaving the
+  // textarea apparently editable but with no usable keyboard.
+  const field = document.getElementById(`editCommentText-${commentId}`);
+  if (field) {
+    field.focus();
+    field.setSelectionRange(field.value.length, field.value.length);
+  }
 }
 
 async function saveEditedComment(commentId) {

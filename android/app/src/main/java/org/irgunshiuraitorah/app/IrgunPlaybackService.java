@@ -44,6 +44,8 @@ public class IrgunPlaybackService extends MediaSessionService {
     public static final long SEEK_INCREMENT_MS = 15_000L;
     private static final long DRIFT_LIMIT_MS = 750L;
     private static final long VIDEO_SHADOW_DRIFT_LIMIT_MS = 1800L;
+    private final AudioSeekGuard audioSeekGuard = new AudioSeekGuard();
+    private final PlaybackAuthorityGuard authorityGuard = new PlaybackAuthorityGuard();
 
     public enum PlaybackMode { VIDEO, AUDIO }
     public enum PresentationMode { FULL, MINI, PIP }
@@ -278,6 +280,7 @@ public class IrgunPlaybackService extends MediaSessionService {
                 @Override
                 public void onPlaybackStateChanged(int state) {
                     if (state == Player.STATE_READY) {
+                        if (verifyAudioSeekInternal()) return;
                         Log.d(TAG, "[Playback] Audio READY");
                         IrgunPlaybackPlugin.handleAudioReady(snapshot());
                         if (pendingBackgroundHandoff) continueBackgroundHandoffIfReady();
@@ -302,6 +305,7 @@ public class IrgunPlaybackService extends MediaSessionService {
 
                 @Override
                 public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
+                    Log.d(TAG, "[Playback] play intent=" + playWhenReady + " reason=" + reason + " mode=" + playbackMode);
                     if (playbackMode == PlaybackMode.VIDEO && videoMirrorCallbackAllowed()) {
                         // Notification/lock-screen/headset controls change the shadow
                         // player's playWhenReady. Treat that as the user's logical VIDEO
@@ -338,6 +342,7 @@ public class IrgunPlaybackService extends MediaSessionService {
 
                 @Override
                 public void onPlayerError(PlaybackException error) {
+                    audioSeekGuard.clear();
                     Log.w(TAG, "[Playback] native audio error: " + error.getErrorCodeName());
                     pendingBackgroundHandoff = false;
                     backgroundPauseRequested = false;
@@ -523,6 +528,10 @@ public class IrgunPlaybackService extends MediaSessionService {
     ) {
         boolean sameLecture = cleanStatic(lectureId).equals(this.lectureId);
         boolean sameAudio = cleanStatic(audioUrl).equals(this.audioUrl);
+        if (!sameLecture || !sameAudio) {
+            audioSeekGuard.clear();
+            authorityGuard.allowVideo();
+        }
 
         this.lectureId = cleanStatic(lectureId);
         this.vimeoId = cleanStatic(vimeoId);
@@ -574,9 +583,12 @@ public class IrgunPlaybackService extends MediaSessionService {
                 syncingVideoShadow = false;
             }
             Log.d(TAG, "[Playback] lecture loaded; native audio source staged");
-        } else if (playbackMode == PlaybackMode.AUDIO && player.getMediaItemCount() > 0 && startPositionMs > 0L && Math.abs(player.getCurrentPosition() - startPositionMs) > DRIFT_LIMIT_MS) {
-            player.seekTo(startPositionMs);
         }
+
+        // Loading metadata for the same source is not a seek request. A delayed
+        // WebView play/prewarm event after Home can still carry its old Video
+        // clock; never rewind the Audio owner to it. Explicit seeks and handoff
+        // preparation use seekToInternal/prepareAudioAtInternal/startAudioAtInternal.
 
         // V15.1.3 accepted prepareAudio from JS but never used it. That left Vimeo
         // playback with an empty Media3 playlist, so Android had no media notification
@@ -657,6 +669,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private void startAudioAtInternal(long positionMs, boolean shouldPlay, float speed, float volume, boolean commit) {
+        audioSeekGuard.clear();
         if (player == null || audioUrl.isEmpty()) {
             IrgunPlaybackPlugin.handlePlaybackError("This lecture has no native audio source.");
             return;
@@ -672,6 +685,7 @@ public class IrgunPlaybackService extends MediaSessionService {
             if (Math.abs(player.getCurrentPosition() - target) > DRIFT_LIMIT_MS) player.seekTo(target);
             if (player.getPlaybackState() == Player.STATE_IDLE) player.prepare();
             if (commit) {
+                authorityGuard.commitAudio();
                 playbackMode = PlaybackMode.AUDIO;
                 externalVideoPlaying = false;
             }
@@ -688,6 +702,7 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     private void commitAudioHandoffInternal(float volume) {
         if (player == null) return;
+        authorityGuard.commitAudio();
         logicalVolume = clamp01(volume);
         playbackMode = PlaybackMode.AUDIO;
         externalVideoPlaying = false;
@@ -743,7 +758,12 @@ public class IrgunPlaybackService extends MediaSessionService {
             return;
         }
 
-        if (authoritative) playbackMode = PlaybackMode.VIDEO;
+        if (authorityGuard.acceptsVideoUpdate(authoritative)) {
+            audioSeekGuard.clear();
+            playbackMode = PlaybackMode.VIDEO;
+        } else if (authoritative && playbackMode == PlaybackMode.AUDIO) {
+            Log.d(TAG, "[Playback] ignored delayed Video authority update after Audio committed");
+        }
 
         // Mirror Vimeo into the ONE Media3 player silently. This intentionally keeps
         // one lightweight audio stream synchronized while video is playing. Benefits:
@@ -803,6 +823,8 @@ public class IrgunPlaybackService extends MediaSessionService {
             Log.w(TAG, "[Playback] ignored stale AUDIO -> VIDEO authority request for " + requestedId + "; active=" + lectureId);
             return;
         }
+        audioSeekGuard.clear();
+        authorityGuard.allowVideo();
         // A foreground Audio -> Video request supersedes any delayed Home-handoff
         // timeout or confirmation still queued from the previous presentation.
         pendingBackgroundHandoff = false;
@@ -856,11 +878,56 @@ public class IrgunPlaybackService extends MediaSessionService {
     private void seekToInternal(long positionMs) {
         long target = Math.max(0L, positionMs);
         if (playbackMode == PlaybackMode.AUDIO && player != null) {
+            long duration = player.getDuration();
+            if (duration != C.TIME_UNSET && duration > 0L) target = Math.min(target, duration);
+            audioSeekGuard.begin(target, android.os.SystemClock.elapsedRealtime());
+            Log.d(TAG, "[Playback] native Audio seek requested at " + target + "ms");
+            player.setVolume(logicalVolume);
             player.seekTo(target);
+            // An in-buffer seek is already ready. Do not retain a target that
+            // could later interfere with an unrelated network buffer.
+            if (player.getPlaybackState() == Player.STATE_READY) audioSeekGuard.clear();
         } else {
             externalVideoPositionMs = target;
         }
         publishNativeState();
+    }
+
+    private boolean verifyAudioSeekInternal() {
+        if (player == null || playbackMode != PlaybackMode.AUDIO || pendingBackgroundHandoff) {
+            audioSeekGuard.clear();
+            return false;
+        }
+        long target = audioSeekGuard.targetMs();
+        long actual = Math.max(0L, player.getCurrentPosition());
+        AudioSeekGuard.Decision decision = audioSeekGuard.verify(actual, android.os.SystemClock.elapsedRealtime());
+        if (decision == AudioSeekGuard.Decision.RELOAD) {
+            // The extractor can resume a re-used MP3 stream far from the seek
+            // target. Recreate its source once in this same Media3 player; do
+            // not compensate by lying about position or starting another player.
+            MediaItem item = player.getCurrentMediaItem();
+            if (item != null) {
+                boolean wanted = player.getPlayWhenReady();
+                Log.w(TAG, "[Playback] Audio seek resumed at " + actual + "ms instead of " + target + "ms; reloading source once");
+                player.setVolume(0f);
+                player.setMediaItem(item, target);
+                player.prepare();
+                player.setPlayWhenReady(wanted);
+                return true;
+            }
+            audioSeekGuard.clear();
+            decision = AudioSeekGuard.Decision.FAIL;
+        }
+        if (decision == AudioSeekGuard.Decision.FAIL) {
+            player.pause();
+            player.setVolume(logicalVolume);
+            Log.w(TAG, "[Playback] Audio source could not reach requested seek position");
+            IrgunPlaybackPlugin.handlePlaybackError("Audio could not reach the requested position. Please try again.");
+        } else if (decision == AudioSeekGuard.Decision.ACCEPT) {
+            player.setVolume(logicalVolume);
+            Log.d(TAG, "[Playback] native Audio seek verified at " + actual + "ms");
+        }
+        return false;
     }
 
     private void seekByInternal(long deltaMs) {
@@ -881,6 +948,8 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private void stopAudioInternal(boolean clearLecture) {
+        audioSeekGuard.clear();
+        authorityGuard.commitAudio();
         pendingBackgroundHandoff = false;
         backgroundPauseRequested = false;
         if (player != null) {
@@ -988,6 +1057,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         if (!pendingBackgroundHandoff || player == null) return;
         pendingBackgroundHandoff = false;
         backgroundPauseRequested = false;
+        authorityGuard.commitAudio();
         playbackMode = PlaybackMode.AUDIO;
         externalVideoPlaying = false;
         setCandidateAudioFocus(true);

@@ -1,12 +1,13 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
+import {observedAdb} from './android-adb-observer.mjs';
 
 // Read the real WebView through CDP, but perform every navigation gesture with
 // Android input events. No DOM clicks or synthetic touch events stand in for UI.
-const adb = (...args) => execFileSync('adb', args, { encoding: 'utf8' }).trim();
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const report = { gestures: [], checks: [] };
+const adb = observedAdb(report);
 let ws;
 try {
   const pid = adb('shell', 'pidof', 'org.irgunshiuraitorah.app').split(/\s+/)[0];
@@ -23,7 +24,20 @@ try {
   let sequence = 0;
   const pending = new Map();
   ws.addEventListener('message', event => {
-    const message = JSON.parse(event.data), request = pending.get(message.id);
+    const message = JSON.parse(event.data);
+    if(message.method==='Runtime.consoleAPICalled') {
+      const msg=(message.params?.args||[]).map(x=>String(x.value??x.description??'')).join(' ').slice(0,1200);
+      if(/\[Playback\]|HLS|MP4|Vimeo|CORS|fetch/i.test(msg)) {
+        (report.webConsole||=[]).push({type:message.params.type,message:msg});
+        if(report.webConsole.length>200)report.webConsole.shift();
+      }
+      return;
+    }
+    if(message.method==='Runtime.exceptionThrown') {
+      (report.webExceptions||=[]).push(message.params.exceptionDetails);
+      return;
+    }
+    const request = pending.get(message.id);
     if (!request) return;
     pending.delete(message.id); clearTimeout(request.timer);
     if (message.error || message.result?.exceptionDetails) request.reject(new Error(JSON.stringify(message)));
@@ -35,9 +49,24 @@ try {
     pending.set(id, { resolve, reject, timer });
     ws.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, returnByValue: true, awaitPromise: true } }));
   });
-  const catalog = await (await fetch('https://api.irgunshiuraitorah.com/video-map?driveLibrary=1', {
-    headers:{Origin:'https://localhost','X-Irgun-App':'1'}, signal:AbortSignal.timeout(30000)
-  })).json();
+  // Read-only transaction diagnostics; every UI action still uses Android input.
+  ws.send(JSON.stringify({id:++sequence,method:'Runtime.enable'}));
+  let catalog;
+  const catalogUrl='https://api.irgunshiuraitorah.com/video-map?driveLibrary=1';
+  for(let attempt=1;attempt<=3;attempt++){
+    try{
+      const response=await fetch(catalogUrl,{
+        headers:{Origin:'https://localhost','X-Irgun-App':'1'},signal:AbortSignal.timeout(30000)
+      });
+      assert.equal(response.status,200,'Actual video catalog must return HTTP 200');
+      catalog=await response.json();
+      break;
+    }catch(error){
+      (report.catalogRetries||=[]).push({attempt,error:String(error.message||error).slice(0,180)});
+      if(attempt===3)throw error;
+      await delay(650*attempt);
+    }
+  }
   const candidates = catalog.filter(v => /פריזנט/.test(v.title||'') && /עצות להצלחה/.test(v.title||''));
   const target = candidates.find(v => Number(v.duration) === 3663 &&
     [v.lectureDate,v.created].some(d=>String(d||'').startsWith('2026-10-06')));
@@ -56,6 +85,8 @@ try {
     const v=document.querySelector('#watchDirectHlsVideo');
     const r=v?.getBoundingClientRect(),stage=v?.closest('.watch-hls-stage')?.getBoundingClientRect();
     return {title:document.querySelector('.watch-overlay')?.innerText?.slice(0,900),
+      sourceType:window.ISTReleaseQA?.snapshot?.()?.sourceType||null,
+      handoff:window.ISTReleaseQA?.snapshot?.()?.handoff||null,
       iframeSrc:document.querySelector('#watchVimeoFrame')?.getAttribute('src'),
       video:v?{src:v.currentSrc||v.src,time:v.currentTime,paused:v.paused,ready:v.readyState,width:v.videoWidth,muted:v.muted,volume:v.volume,
         frames:v.getVideoPlaybackQuality?.().totalVideoFrames??v.webkitDecodedFrameCount,error:v.error?.code,
@@ -71,20 +102,27 @@ try {
   })())`));
   const read = async () => {
     const dom = await readDOM();
-    dom.native = await evaluate("window.Capacitor.nativePromise('IrgunPlayback','getState',{})");
+    dom.native = await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaPlaybackSnapshot',{})");
     return dom;
   };
   const wait = async predicate => {
     let state;
-    for(let i=0;i<120;i++) {state=await read();if(predicate(state))return state;await delay(500);}
+    for(let i=0;i<120;i++) {
+      state=await read();
+      if(report.handoffAttempts && !report.videoHandoff)report.handoffAttempts.push({
+        elapsedMs:Date.now()-report.handoffStartedAt,mode:state.activeMode,
+        video:state.video,handoff:state.handoff,native:state.native
+      });
+      if(predicate(state))return state;await delay(500);
+    }
     throw new Error(`Video did not settle: ${JSON.stringify(state)}`);
   };
-  adb('shell','uiautomator','dump','/sdcard/irgun-mp4.xml');
-  const xml=adb('shell','cat','/sdcard/irgun-mp4.xml');
-  const bounds=xml.match(/<node\b[^>]*class="android\.webkit\.WebView"[^>]*>/)?.[0]
-    .match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
-  assert.ok(bounds,'Native WebView bounds required');
-  const [left,top,right,bottom]=bounds.slice(1).map(Number);
+  const geometry=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+  assert.equal(geometry.focused,true,'Native app window must be foreground before media taps');
+  const {left,top,right,bottom}=geometry;
+  assert.ok([left,top,right,bottom].every(Number.isFinite)&&right>left&&bottom>top,
+    'Fresh native WebView bounds required');
+  report.nativeBounds=[left,top,right,bottom];
   const nativePoint=p=>[Math.round(left+p.x*(right-left)/p.width),Math.round(top+p.y*(bottom-top)/p.height)];
   const visiblePoint=async selector=>JSON.parse(await evaluate(`JSON.stringify((()=>{
     // A card has several Watch targets. Its cover center can be obscured by
@@ -104,10 +142,13 @@ try {
   // Navigate through the real Home search with native taps, typing and scrolling.
   // CDP only reads hit-tested coordinates and media state.
   let search;
-  for(let i=0;i<8;i++) {
+  for(let i=0;i<90;i++) {
     search=await visiblePoint('#homeLibrarySearch');if(search)break;
-    adb('shell','input','swipe',String(right-40),String(bottom-130),String(right-40),String(top+190),'450');
-    await delay(400);
+    // Real Android 14–16 emulators can initialize the WebView before the
+    // asynchronous lecture catalog finishes loading. Wait for the actual UI
+    // instead of treating a loading screen as a missing search control.
+    if(i%5===0)adb('shell','input','swipe',String(right-40),String(bottom-130),String(right-40),String(top+190),'450');
+    await delay(650);
   }
   assert.ok(search,'Home search must be visible');
   await tapVisible('#homeLibrarySearch');
@@ -163,7 +204,7 @@ try {
   // Reproduce the user's sequence with physical Android input, not media setters.
   const screenshot = name => writeFileSync(`emulator-report/${name}.png`,execFileSync('adb',['exec-out','screencap','-p']));
   const audioPlaying = s => s.activeMode==='audio' && s.native?.mode==='AUDIO' && s.native.audioIsPlaying;
-  const videoPlaying = s => s.activeMode==='video' && s.native?.mode==='VIDEO' && s.video && !s.video.paused && s.video.ready>=2;
+  const videoPlaying = s => s.activeMode==='video' && s.native?.mode==='VIDEO' && s.video && !s.video.paused && s.video.ready>=2 && !s.video.muted && s.video.volume>0;
   const oneAudible = (s,mode) => {
     assert.equal(s.diagnostic,false,'Internal fallback banner must stay absent');
     assert.ok(s.webAudio.every(a=>a.paused||a.muted||a.volume===0),'Browser audio must not overlap native playback');
@@ -221,6 +262,7 @@ try {
   report.checks.push({label:'Native range seek to 10 minutes preserves playing Audio',before:a,after:b});
 
   const audioBeforeVideo=await read(),switchStarted=Date.now();
+  report.handoffStartedAt=switchStarted;report.handoffAttempts=[];
   await tapVisible('[data-watch-mode="video"]');
   await wait(videoPlaying);
   const videoAtSwitch=await read();oneAudible(videoAtSwitch,'video');
