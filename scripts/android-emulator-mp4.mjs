@@ -105,10 +105,13 @@ try {
   // Navigate through the real Home search with native taps, typing and scrolling.
   // CDP only reads hit-tested coordinates and media state.
   let search;
-  for(let i=0;i<8;i++) {
+  for(let i=0;i<90;i++) {
     search=await visiblePoint('#homeLibrarySearch');if(search)break;
-    adb('shell','input','swipe',String(right-40),String(bottom-130),String(right-40),String(top+190),'450');
-    await delay(400);
+    // Real Android 14–16 emulators can initialize the WebView before the
+    // asynchronous lecture catalog finishes loading. Wait for the actual UI
+    // instead of treating a loading screen as a missing search control.
+    if(i%5===0)adb('shell','input','swipe',String(right-40),String(bottom-130),String(right-40),String(top+190),'450');
+    await delay(650);
   }
   assert.ok(search,'Home search must be visible');
   await tapVisible('#homeLibrarySearch');
