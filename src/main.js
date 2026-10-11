@@ -8768,10 +8768,14 @@ async function editComment(commentId) {
   if (!comment) return;
   state.editingCommentId = String(commentId);
   refreshCommentsUi();
-  setTimeout(() => {
-    const field = document.getElementById(`editCommentText-${commentId}`);
-    if (field) { field.focus(); field.setSelectionRange(field.value.length, field.value.length); }
-  }, 0);
+  // Keep focus in the original Edit button click. Android WebView suppresses
+  // IME activation for programmatic focus deferred to a timer, leaving the
+  // textarea apparently editable but with no usable keyboard.
+  const field = document.getElementById(`editCommentText-${commentId}`);
+  if (field) {
+    field.focus();
+    field.setSelectionRange(field.value.length, field.value.length);
+  }
 }
 
 async function saveEditedComment(commentId) {
