@@ -232,12 +232,12 @@ test('Follow binding must not double-submit after a persistent video overlay sur
   assert.equal(handlers.length, 1, 'A persistent Follow button must have only one click handler');
   const evt = { stopPropagation() {} };
   const first = handlers[0](evt), second = handlers[0](evt); // Two fast taps.
-  await Promise.resolve();
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(followCalls, 1, 'A second tap while waiting must not issue a second request');
   resolvers.shift()();
   await Promise.all([first, second]);
   const third = handlers[0](evt);
-  await Promise.resolve();
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(followCalls, 2, 'The Follow button must work again once the request resolves');
   resolvers.shift()();
   await third;
