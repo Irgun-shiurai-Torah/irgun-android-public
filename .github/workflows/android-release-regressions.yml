@@ -19,8 +19,13 @@ permissions:
 
 jobs:
   media-and-device:
+    name: Native media Android API ${{ matrix.api-level }}
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 58
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [30, 34, 35, 36]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
@@ -68,7 +73,7 @@ jobs:
       - name: Test Android 11 media, PiP, Home, notification, Wi-Fi, offline, speed and narrow screen
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 30
+          api-level: ${{ matrix.api-level }}
           target: google_apis
           arch: x86_64
           script: |
@@ -85,7 +90,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: android-release-media-${{ github.run_id }}
+          name: android-release-media-api-${{ matrix.api-level }}-${{ github.run_id }}
           path: emulator-report/
           if-no-files-found: warn
           retention-days: 14
