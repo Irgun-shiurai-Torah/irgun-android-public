@@ -1,6 +1,15 @@
 // Read-only observations appended to disposable debug builds; no credentials or UI setters.
 window.ISTAccountTest = { snapshot() {
+  const qaComment = state.watchComments?.find(c =>
+    String(c.user_id) === String(state.user?.id) && String(c.text || '').startsWith('IRGUN-QA-')
+  ) || null;
+  const qaCommentId = qaComment ? String(qaComment.id) : '';
   const queries = {
+    commentText:'#commentText', postComment:'#commentForm button[type="submit"]',
+    editQaComment:qaCommentId ? '[data-edit-comment="'+qaCommentId+'"]' : '#irgun-qa-comment-unavailable',
+    editedQaText:qaCommentId ? '#editCommentText-'+qaCommentId : '#irgun-qa-comment-unavailable',
+    saveQaComment:qaCommentId ? '[data-save-comment="'+qaCommentId+'"]' : '#irgun-qa-comment-unavailable',
+    deleteQaComment:qaCommentId ? '[data-delete-comment="'+qaCommentId+'"]' : '#irgun-qa-comment-unavailable',
     account: '.bottom-nav [data-nav="account"]', shiurim: '.bottom-nav [data-nav="shiurim"]',
     library: '.bottom-nav [data-nav="library"]', email: '#authEmail', password: '#authPassword',
     login: '#authForm button[type="submit"]', logout: '[data-logout]',
@@ -37,7 +46,10 @@ window.ISTAccountTest = { snapshot() {
     : null;
   return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,libraryTabStrip,
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
-    name:state.user?.name||'',accountEmail:state.user?.email||'',screen:state.screen,likes:[...state.myLikes],later:[...state.watchLater],
+    name:state.user?.name||'',profileShownName:document.querySelector('.profile-line span')?.textContent||'',
+    accountEmail:state.user?.email||'',screen:state.screen,
+    comments:(state.watchComments||[]).map(c=>({id:String(c.id),text:String(c.text),mine:String(c.user_id)===String(state.user?.id)})),
+    likes:[...state.myLikes],later:[...state.watchLater],
     follows:[...state.follows.keys()],history:state.history.map(x=>String(x.id||x.vimeoId||'')),
     playlists:state.playlists.map(x=>({id:x.id,name:x.name,items:x.items.length})),
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
