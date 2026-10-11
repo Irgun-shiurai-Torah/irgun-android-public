@@ -204,7 +204,10 @@ async function audioReady(){
   return await wait(s=>s.watchMode==='audio'&&s.native.mode==='AUDIO'&&s.native.audioIsPlaying,'Native audio did not return',65000);
 }
 async function closePlayer(){
-  if((await read()).playerOpen)await tap('[data-close-player]');
+  if((await read()).playerOpen) {
+    await tapWithScroll('[data-close-player]');
+    await wait(s=>!s.playerOpen,'Closing the full native player did not restore its compact view',14000);
+  }
 }
 async function setOnline(online){
   adb('shell','svc','wifi',online?'enable':'disable');
@@ -312,6 +315,19 @@ try{
     adb('shell','input','keyevent','KEYCODE_MEDIA_PLAY');
     const resumed=await wait(s=>s.native.audioIsPlaying,'Media notification/session Play action not respected',17000);
     assert.ok(resumed.native.audioPositionMs/1000>=beforePosition,'Reopening must not reset the timer');
+    // Exercise Android's real media key dispatch to the registered MediaSession.
+    // These are OS media commands, not JavaScript setters or fake snapshots.
+    const originalMs=Number(resumed.native.audioPositionMs);
+    adb('shell','input','keyevent','KEYCODE_MEDIA_FAST_FORWARD');
+    const forward=await wait(s=>s.native.audioIsPlaying&&
+      Number(s.native.audioPositionMs)>=originalMs+12000,
+      'MediaSession forward command did not seek by 15 seconds',19000);
+    adb('shell','input','keyevent','KEYCODE_MEDIA_REWIND');
+    const rewind=await wait(s=>s.native.audioIsPlaying&&
+      Number(s.native.audioPositionMs)<=Number(forward.native.audioPositionMs)-11000,
+      'MediaSession rewind command did not seek back by 15 seconds',19000);
+    assert.ok(Number(rewind.native.audioPositionMs)>0,'Media notification timer returned to 0:00');
+    checks('Android MediaSession Play, Pause, +15s, -15s and timer after reopening');
   });
 
   await section('Actual offline download plays native audio without Wi-Fi or mobile data',async()=>{
@@ -406,35 +422,50 @@ try{
     assert.ok(Math.abs(restored.speed-1.5)<0.01,'1.5x playback speed preference was lost after relaunch');
   });
   await section('Small-screen English/Hebrew layouts retain usable navigation',async()=>{
+    const originalSize=adb('shell','wm','size');
     try{
-      adb('shell','wm','size','240x320');
-      await delay(1400);
-      bounds=await nativeBounds();
       if((await read()).watchId){
         await tap('[data-close-watch]');
         await wait(s=>!s.watchId,'Watch overlay must close before checking main navigation');
       }
-      let snap=await read();
-      assert.ok(snap.ready&&snap.screen,'App must still render on a 240x320 screen');
-      const screen=JSON.parse(await evaluate('JSON.stringify({w:innerWidth,h:innerHeight,nav:[...document.querySelectorAll(".bottom-nav [data-nav]")].map(x=>{let r=x.getBoundingClientRect();return {key:x.dataset.nav,width:r.width,left:r.left,right:r.right,bottom:r.bottom}})})'));
-      const actualSize=adb('shell','wm','size');
-      assert.match(actualSize,/Override size:\s*240x320/,
-        'Emulator must physically resize to 240x320');
-      assert.ok(screen.w>0&&screen.w<500,'WebView width must remain bounded at physical 240px');
-      assert.ok(screen.nav.length>=3,'Small screen needs its main navigation');
-      assert.ok(screen.nav.every(n=>n.width>=25&&n.left>=-4&&n.right<=screen.w+4),'Navigation is clipped on small screens');
-      const locale=await hit('[data-language-toggle]');
-      assert.ok(locale,'Language toggle must be accessible at small size');
+      const english=await wait(s=>s.ready&&s.lang==='en','English app must render before narrow layout');
+      assert.ok(english.ready);
+      adb('shell','wm','size','240x320');
+      await delay(1400);
+      const readLayout=async()=>JSON.parse(await evaluate('JSON.stringify({w:innerWidth,h:innerHeight,lang:document.documentElement.lang,dir:document.documentElement.dir,nav:[...document.querySelectorAll(".bottom-nav [data-nav]")].map(x=>{let r=x.getBoundingClientRect();return {key:x.dataset.nav,width:r.width,left:r.left,right:r.right,bottom:r.bottom}})})'));
+      const englishScreen=await readLayout();
+      assert.match(adb('shell','wm','size'),/Override size:\s*240x320/,
+        'Android must actually use a 240x320 screen');
+      assert.ok(englishScreen.w>0&&englishScreen.w<500,'Narrow Android WebView width must be bounded');
+      assert.equal(englishScreen.lang,'en','English interface changed unexpectedly');
+      assert.ok(englishScreen.nav.length>=3,'English narrow layout needs main navigation');
+      assert.ok(englishScreen.nav.every(n=>n.width>=25&&n.left>=-4&&n.right<=englishScreen.w+4),
+        'English navigation is clipped on small screens');
+      screenshot('small-screen-english');
+
+      // Restore actual Android resolution before another physical tap, because
+      // the UI hierarchy cannot expose accurate WebView hit-boxes after wm resize.
+      // Both reduced-width layouts below are still rendered by the real emulator.
+      adb('shell','wm','size','reset');
+      await delay(1100);
+      bounds=await nativeBounds();
       await tap('[data-language-toggle]');
-      const he=await wait(s=>s.lang==='he' || s.lang==='he-IL','Hebrew interface did not activate');
-      assert.ok(he.ready,'Hebrew screen failed to render at narrow width');
-      assert.ok((await hit('.bottom-nav [data-nav="home"]')),'Hebrew navigation Home must remain tappable');
-      report.smallScreen={width:screen.w,height:screen.h,navItems:screen.nav.length,lang:he.lang};
+      await wait(s=>s.lang==='he'||s.lang==='he-IL','Real language button did not activate Hebrew');
+      adb('shell','wm','size','240x320');
+      await delay(1100);
+      const hebrewScreen=await readLayout();
+      assert.ok(/^he/.test(hebrewScreen.lang),'Hebrew interface did not survive narrow-screen resize');
+      assert.ok(hebrewScreen.dir==='rtl',
+        'Hebrew document must be explicitly right-to-left');
+      assert.ok(hebrewScreen.nav.length>=3,'Hebrew narrow layout needs main navigation');
+      assert.ok(hebrewScreen.nav.every(n=>n.width>=25&&n.left>=-4&&n.right<=hebrewScreen.w+4),
+        'Hebrew navigation is clipped on small screens');
+      screenshot('small-screen-hebrew');
+      report.smallScreen={english:englishScreen,hebrew:hebrewScreen,actualSize:adb('shell','wm','size')};
     }finally{
       adb('shell','wm','size','reset');await delay(900);
     }
   });
-
 
 
 } catch(e){
