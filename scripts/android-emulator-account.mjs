@@ -81,7 +81,10 @@ async function tap(key) {
    await delay(500);
    continue;
   }
-  adb('shell','input','swipe',String((bounds[0]+bounds[2])/2),String(bounds[3]-170),String((bounds[0]+bounds[2])/2),String(bounds[1]+170),'400');
+  // Find real controls by scrolling in the direction their screen position requires.
+  const returnToTop=['closeWatch','login','settings'].includes(key);
+  if(returnToTop)adb('shell','input','swipe',String((bounds[0]+bounds[2])/2),String(bounds[1]+180),String((bounds[0]+bounds[2])/2),String(bounds[3]-170),'400');
+  else adb('shell','input','swipe',String((bounds[0]+bounds[2])/2),String(bounds[3]-170),String((bounds[0]+bounds[2])/2),String(bounds[1]+170),'400');
   await delay(500);
  }
  throw new Error(`Visible control missing: ${key}`);
@@ -98,7 +101,7 @@ async function acceptDeleteConfirmation(){
  adb('shell','input','tap',String(Math.floor((b[0]+b[2])/2)),String(Math.floor((b[1]+b[3])/2)));
 }
 async function cleanupQaComment(){
- if(!qaCommentId)return;
+ if(!qaCommentMarker||!report.commentVideoId)return;
  const origin='https://localhost',h={'Content-Type':'application/json','X-Irgun-App':'1',Origin:origin};
  const login=await fetch('https://api.irgunshiuraitorah.com/login',{method:'POST',headers:h,body:JSON.stringify({email,password}),signal:AbortSignal.timeout(16000)});
  assert.equal(login.status,200,'QA comment cleanup login failed');
@@ -108,14 +111,14 @@ async function cleanupQaComment(){
  const list=await fetch('https://api.irgunshiuraitorah.com/comments?videoId='+encodeURIComponent(report.commentVideoId),{headers:protectedHeaders,signal:AbortSignal.timeout(16000)});
  assert.equal(list.status,200,'Comment cleanup cannot list real comments');
  const comments=(await list.json()).comments||[];
- const owned=comments.find(c=>String(c.id)===qaCommentId&&String(c.user_id)===String(body.user?.id)&&String(c.text||'').startsWith(qaCommentMarker));
+ const owned=comments.find(c=>(!qaCommentId||String(c.id)===qaCommentId)&&String(c.user_id)===String(body.user?.id)&&String(c.text||'').startsWith(qaCommentMarker));
  if(owned){
-  const del=await fetch('https://api.irgunshiuraitorah.com/comments/delete',{method:'POST',headers:protectedHeaders,body:JSON.stringify({commentId:qaCommentId}),signal:AbortSignal.timeout(16000)});
+  const del=await fetch('https://api.irgunshiuraitorah.com/comments/delete',{method:'POST',headers:protectedHeaders,body:JSON.stringify({commentId:String(owned.id)}),signal:AbortSignal.timeout(16000)});
   assert.equal(del.status,200,'Temporary owned QA comment deletion failed');
  }
  const check=await fetch('https://api.irgunshiuraitorah.com/comments?videoId='+encodeURIComponent(report.commentVideoId),{headers:protectedHeaders,signal:AbortSignal.timeout(16000)});
  assert.equal(check.status,200);
- assert.ok(!(await check.json()).comments.some(c=>String(c.id)===qaCommentId),'Temporary QA comment was not removed');
+ assert.ok(!(await check.json()).comments.some(c=>String(c.user_id)===String(body.user?.id)&&String(c.text||'').startsWith(qaCommentMarker)),'Temporary QA comment was not removed');
  report.qaCommentCleanedUp=true;qaCommentId='';
  await fetch('https://api.irgunshiuraitorah.com/logout',{method:'POST',headers:protectedHeaders}).catch(()=>{});
 }
