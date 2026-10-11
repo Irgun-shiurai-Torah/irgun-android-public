@@ -13,6 +13,7 @@ on:
       - 'scripts/android-website-account-sync.mjs'
       - 'scripts/android-comments-qa.mjs'
       - 'scripts/android-hls-delivery-probe.mjs'
+      - 'scripts/android-audio-download-probe.mjs'
       - 'scripts/android-emulator-hls.mjs'
       - 'src/**'
       - 'android/**'
@@ -149,7 +150,11 @@ jobs:
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
             adb shell am start -n org.irgunshiuraitorah.app/.SplashActivity
             node scripts/android-emulator-inspect.mjs > emulator-report/startup-soak.json
-            node scripts/android-emulator-audio-start.mjs > emulator-report/audio-start-soak.json
+            # Start actual Audio using the real media test instead of the
+            # older audio-start script that hung until the job was cancelled.
+            # This still requires true 15-minute wall-clock soak assertions.
+            timeout --signal=TERM --kill-after=10s 8m node scripts/android-emulator-mp4.mjs > emulator-report/handoff-soak.json
+            test -s emulator-report/handoff-soak.json
             node scripts/android-emulator-soak.mjs
       - name: Upload 15-minute observation logs
         if: always()
@@ -157,6 +162,26 @@ jobs:
         with:
           name: android-soak-${{ github.run_id }}
           path: emulator-report/
+          if-no-files-found: error
+          retention-days: 14
+
+  android-offline-source:
+    name: Real Android downloadable audio response
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify downloaded MP3 has real playable audio bytes
+        run: node scripts/android-audio-download-probe.mjs
+      - name: Save HTTP status and payload evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-offline-source-${{ github.run_id }}
+          path: emulator-report/android-audio-download.json
           if-no-files-found: error
           retention-days: 14
 
