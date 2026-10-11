@@ -8,7 +8,7 @@ import { FileTransfer } from '@capacitor/file-transfer';
 import { Share } from '@capacitor/share';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { createAndroidHlsPlayer } from './android-hls-video.js';
-import { isPlausibleOfflineAudio, minimumOfflineAudioBytes } from './offline-validation.js';
+import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } from './offline-validation.js';
 import { vimeoEmbedSource } from './vimeoEmbed.js';
 import { AppleSignIn, SignInScope } from '@capawesome/capacitor-apple-sign-in';
 
@@ -495,7 +495,7 @@ async function saveOffline(kind, id) {
   usageAnalytics.event('offline_listen_started', { shiurId:String(id || ''), mediaType:'audio', dedupeKey:`offline:${normalizedKind}:${id}`, cooldownMs:3000 });
   const rawId = normalizedKind === 'audio' ? rawAudioId(item) : videoId(item);
   const sourceId = normalizedKind === 'audio' ? rawId : mediaApiId(item, rawId);
-  const url = `${API}/download/${encodeURIComponent(sourceId)}?type=audio`;
+  const url = API + audioDownloadPath(sourceId);
   const title = itemTitle({ ...item, _kind: normalizedKind === 'audio' ? 'audio' : 'video' });
   const subtitle = itemSubtitle({ ...item, _kind: normalizedKind === 'audio' ? 'audio' : 'video' });
   const safe = key.replace(/[^A-Za-z0-9_-]+/g, '_');
@@ -6941,7 +6941,7 @@ async function nativeDownload(info, choice) {
   const type = isVideo ? 'drive-video' : 'audio';
   const extension = isVideo ? 'mp4' : 'mp3';
   const filename = sanitizeDownloadFilename(info.title, extension);
-  const url = `${API}/download/${encodeURIComponent(identifier)}?type=${type}`;
+  const url = isVideo ? `${API}/download/${encodeURIComponent(identifier)}?type=${type}` : API + audioDownloadPath(identifier);
   const jobId = `ist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const job = { id: jobId, title: `${info.title} · ${isVideo ? 'Video' : 'Audio'}`, filename, status: 'queued', percent: 0 };
   state.downloadJobs.set(jobId, job);

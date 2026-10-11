@@ -129,6 +129,20 @@ async function type(key,value){assert.match(value,/^[a-zA-Z0-9@._+!-]+$/,'Dedica
  const ime=adb('shell','dumpsys','input_method');
  if(/(?:mInputShown|isInputViewShown)=true/.test(ime))adb('shell','input','keyevent','4');
  await delay(500);}
+async function dismissKeyboardBeforeSave(){
+ const shown=()=>/(?:mInputShown|isInputViewShown)=true/.test(adb('shell','dumpsys','input_method'));
+ if(shown()){
+  adb('shell','input','keyevent','KEYCODE_BACK');
+  const deadline=Date.now()+7000;
+  while(shown()&&Date.now()<deadline)await delay(250);
+  assert.equal(shown(),false,'The actual Android keyboard must close before tapping comment Save');
+  await delay(500);
+ }
+ // IME resizing changes the mapping between DOM points and native pixels.
+ // Re-measure the actual window after dismissal; retain all saved-text assertions.
+ bounds=await readNativeBounds();
+ report.commentSaveKeyboardDismissed=true;
+}
 async function acceptDeleteConfirmation(){
  adb('shell','uiautomator','dump','--compressed','/sdcard/account-confirm.xml');
  const xml=adb('shell','cat','/sdcard/account-confirm.xml');
@@ -253,6 +267,8 @@ try{
  const editedInput=await wait(s=>s.qaEditor?.value===qaCommentMarker+'-EDITED',
    'Android keyboard did not append the QA edit to the comment textarea');
  assert.equal(editedInput.qaEditor.value,qaCommentMarker+'-EDITED','Edit textarea must preserve the original comment');
+ await dismissKeyboardBeforeSave();
+ assert.equal((await read()).qaEditor?.value,qaCommentMarker+'-EDITED','Closing the keyboard must preserve the edited comment');
  await tap('saveQaComment');
  await wait(s=>s.comments.some(c=>c.id===qaCommentId&&c.text===qaCommentMarker+'-EDITED'),'Edited comment was not saved');
  report.checks.push('Native UI edit comment persisted');

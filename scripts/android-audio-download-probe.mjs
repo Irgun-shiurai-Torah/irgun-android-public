@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import {mkdirSync,writeFileSync} from 'node:fs';
+import {audioDownloadPath} from '../src/offline-validation.js';
 
 // Verify the actual file consumed by Android FileTransfer.saveOffline.
 // Check real response status and bytes rather than accepting a successful fetch
 // or a download progress event as proof that the MP3 is playable.
 const id=String(process.env.IRGUN_AUDIO_TEST_ID||'1233236785:585d5d53db');
-const path='/download/'+encodeURIComponent(id)+'?type=audio';
+const path=audioDownloadPath(id);
 const report={id,path,origin:'https://localhost',startedAt:new Date().toISOString()};
 let response;
 try {

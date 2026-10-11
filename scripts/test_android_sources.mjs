@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAndroidHlsPlayer } from '../src/android-hls-video.js';
-import { isPlausibleOfflineAudio, minimumOfflineAudioBytes } from '../src/offline-validation.js';
+import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } from '../src/offline-validation.js';
 
 class Element extends EventTarget {
   constructor(tag) {
@@ -30,11 +30,15 @@ async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {n
   globalThis.window = {Hls:{isSupported:()=>false}};
   globalThis.fetch = async url => {calls.push(url);return {ok:true,json:async()=>descriptor};};
   const iframe = new Element('iframe'); new Element('div').appendChild(iframe);
+  let player;
   try {
-    const player = await createAndroidHlsPlayer({apiBase:'https://api.example.test',platform:'android',videoId,iframe,resumeSeconds});
+    player = await createAndroidHlsPlayer({apiBase:'https://api.example.test',platform:'android',videoId,iframe,resumeSeconds});
     await player.ready();
     return { source:player.getSourceType(), url:player.getVideoElement().src, position:await player.getCurrentTime(), paused:await player.getPaused(), calls };
   } finally {
+    // Dispose the real player's watchdog before restoring the mocked DOM.
+    // Leaving it alive prevents node --test from exiting and blocks the APK jobs.
+    await player?.destroy();
     Object.assign(globalThis,original);
   }
 }
@@ -243,6 +247,10 @@ test('Follow binding must not double-submit after a persistent video overlay sur
   await third;
 });
 
+test('audio downloads use the validated audio stream and preserve unlisted source identity', () => {
+  assert.equal(audioDownloadPath('1233236785:585d5d53db'),'/audio/1233236785%3A585d5d53db');
+  assert.equal(audioDownloadPath('drivev-example'),'/audio/drivev-example');
+});
 test('offline audio rejects 2,407-byte HTML/error page previously saved as one-hour MP3', () => {
   assert.ok(minimumOfflineAudioBytes(3663)>1_000_000);
   assert.equal(isPlausibleOfflineAudio(2407,3663),false);
