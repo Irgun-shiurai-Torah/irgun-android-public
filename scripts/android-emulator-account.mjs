@@ -232,7 +232,10 @@ try{
  report.checks.push('Native UI posted a comment, stored with correct author');
  await tap('editQaComment');
  await wait(s=>s.qaEditor?.value===qaCommentMarker,'Edit form did not display the existing QA comment');
- await type('editedQaText','-EDITED');
+ await tap('editedQaText');
+ await wait(s=>s.qaEditor?.focused===true,'Android did not focus the actual comment textarea');
+ adb('shell','input','keyevent','KEYCODE_MOVE_END');
+ adb('shell','input','text','-EDITED');
  const editedInput=await wait(s=>s.qaEditor?.value===qaCommentMarker+'-EDITED',
    'Android keyboard did not append the QA edit to the comment textarea');
  assert.equal(editedInput.qaEditor.value,qaCommentMarker+'-EDITED','Edit textarea must preserve the original comment');
