@@ -58,7 +58,7 @@ try {
     return {title:document.querySelector('.watch-overlay')?.innerText?.slice(0,900),
       iframeSrc:document.querySelector('#watchVimeoFrame')?.getAttribute('src'),
       iframeHidden:getComputedStyle(document.querySelector('#watchVimeoFrame')).visibility==='hidden',
-      sourceType:state.watchVimeo?.getSourceType?.()||null,
+      sourceType:window.ISTReleaseQA?.snapshot?.()?.sourceType||null,
       quality:(()=>{const e=document.querySelector('[data-hls-quality]');return e?{value:e.value,hidden:e.hidden,options:Array.from(e.options).map(o=>({value:o.value,label:o.textContent}))}:null})(),
       video:v?{src:v.currentSrc||v.src,time:v.currentTime,paused:v.paused,ready:v.readyState,width:v.videoWidth,muted:v.muted,volume:v.volume,
         frames:v.getVideoPlaybackQuality?.().totalVideoFrames??v.webkitDecodedFrameCount,error:v.error?.code,
