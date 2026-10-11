@@ -60,7 +60,31 @@ async function readNativeBounds() {
 
 let bounds;
 function native(p,s){return [Math.round(bounds[0]+p.x*(bounds[2]-bounds[0])/s.width),Math.round(bounds[1]+p.y*(bounds[3]-bounds[1])/s.height)];}
-async function tap(key){report.stage='Native tap: '+key;for(let i=0;i<6;i++){const s=await read(),p=s.controls[key];if(p){adb('shell','input','tap',...native(p,s).map(String));await delay(700);return;}adb('shell','input','swipe',String((bounds[0]+bounds[2])/2),String(bounds[3]-170),String((bounds[0]+bounds[2])/2),String(bounds[1]+170),'400');await delay(500);}throw new Error(`Visible control missing: ${key}`);}
+async function tap(key) {
+ report.stage='Native tap: '+key;
+ for(let i=0;i<9;i++) {
+  const s=await read(),p=s.controls[key];
+  if(p) {
+   adb('shell','input','tap',...native(p,s).map(String));
+   await delay(700);
+   return;
+  }
+  if(key==='playlists' && s.screen==='library' && s.libraryTabStrip) {
+   const strip=s.libraryTabStrip;
+   assert.ok(strip.scrollWidth>strip.clientWidth, 'Library tabs must be horizontally scrollable');
+   const y=strip.y+strip.height/2;
+   const from=native({x:strip.x+strip.width*0.84,y},s);
+   const to=native({x:strip.x+strip.width*0.16,y},s);
+   adb('shell','input','swipe',...from.map(String),...to.map(String),'420');
+   report.libraryTabSwipes=(report.libraryTabSwipes||0)+1;
+   await delay(500);
+   continue;
+  }
+  adb('shell','input','swipe',String((bounds[0]+bounds[2])/2),String(bounds[3]-170),String((bounds[0]+bounds[2])/2),String(bounds[1]+170),'400');
+  await delay(500);
+ }
+ throw new Error(`Visible control missing: ${key}`);
+}
 async function type(key,value){assert.match(value,/^[a-zA-Z0-9@._+!-]+$/,'Dedicated credentials must use characters supported by native adb text input');await tap(key);adb('shell','input','text',value);adb('shell','input','keyevent','4');await delay(500);}
 try{
  readSnapshot=await connect();await wait(s=>s.ready,'Library unavailable');
