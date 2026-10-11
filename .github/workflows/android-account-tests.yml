@@ -46,9 +46,9 @@ jobs:
       - run: npm run build
       - run: npx cap sync android
       - name: Add emulator-only native volume observation
-        run: python3 scripts/android-emulator-prepare.py
+        run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon assembleDebug
+      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
       - name: Enable KVM
         run: |

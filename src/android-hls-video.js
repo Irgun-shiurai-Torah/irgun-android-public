@@ -172,6 +172,13 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let pointerStart = null;
   let ignoreClickUntil = 0;
   let visualCheck = 0;
+  let playbackIntent = 0;
+  const pausePlayback = () => {
+    ++playbackIntent;
+    ++visualCheck;
+    video.pause();
+    return Promise.resolve();
+  };
   let hasVisibleFrame = false;
   let destroyed = false;
   let recoveryInProgress = false;
@@ -260,7 +267,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   video.addEventListener('canplay', () => { if (hasVisibleFrame) loading.hidden = true; });
   video.addEventListener('volumechange', updateVolumeIcon);
   updateVolumeIcon();
-  const togglePlayback = () => video.paused ? video.play().catch(() => {}) : video.pause();
+  const togglePlayback = () => video.paused ? video.play().catch(() => {}) : pausePlayback();
   playButton.addEventListener('click', togglePlayback);
   video.addEventListener('pointerdown', event => {
     if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
@@ -359,10 +366,12 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   const hasVimeoFallback = !String(videoId).startsWith('drivev-');
   const checkVisualPlayback = async () => {
     let check = ++visualCheck;
+    const intent = playbackIntent;
+    const cancelled = () => destroyed || intent !== playbackIntent || document.hidden;
     hasVisibleFrame = false;
     loading.hidden = false;
     let visible = await waitForVideoFrame();
-    if (destroyed || check !== visualCheck || video.paused || document.hidden) return;
+    if (cancelled() || check !== visualCheck || video.paused) return;
     if (!visible && video.videoWidth > 0 &&
         typeof video.requestVideoFrameCallback !== 'function' && decodedFrames() === null && video.readyState >= 2) {
       // Older WebViews expose neither frame callback nor decoded-frame count.
@@ -376,6 +385,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       recoveryInProgress = true;
       try {
         for (let attempt = 1; attempt <= 2 && !visible && !destroyed; attempt++) {
+          if (cancelled() || check !== visualCheck || video.paused) return;
           const position = Math.max(0, Number(video.currentTime) || initialPosition);
           video.dataset.hlsRecoveryAttempts = String(attempt);
           hls.stopLoad();
@@ -383,11 +393,13 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
           hls.startLoad(position);
           console.warn('[Playback] Retrying HLS video decoding', {attempt, position, reason:lastHlsFailure});
           visible = await waitForVideoFrame(attempt === 1 ? 8500 : 10000);
+          if (cancelled() || check !== visualCheck || video.paused) return;
         }
       } catch (error) {
         console.warn('[Playback] HLS visual recovery failed', error);
       } finally { recoveryInProgress = false; }
     }
+    if (cancelled() || check !== visualCheck || video.paused) return;
     if (!visible && activeSource === sources.hls && sources.mp4) {
       const position = Math.max(0, Number(video.currentTime) || initialPosition);
       video.dataset.hlsFallbackReason = lastHlsFailure || 'No moving decoded frames after HLS retry';
@@ -395,7 +407,9 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       recoveryInProgress = true;
       try {
         await attachSource(sources.mp4, false);
-        if (destroyed) return;
+        // Source attachment pauses internally. Only the original play intent
+        // may restart it; Audio handoff or a user pause cancels this recovery.
+        if (cancelled()) return;
         check = visualCheck;
         if (position > 0) {
           const duration = Number(video.duration) || 0;
@@ -405,12 +419,12 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
         visible = await waitForVideoFrame();
       } catch (error) {
         console.warn('[Playback] MP4 visual recovery failed', error);
-        if (!destroyed) adapter.reportError(error, position, true);
+        if (!cancelled()) adapter.reportError(error, position, true);
         return;
       }
       finally { recoveryInProgress = false; }
     }
-    if (destroyed || check !== visualCheck || document.hidden) return;
+    if (cancelled() || check !== visualCheck || video.paused) return;
     if (visible) {
       hasVisibleFrame = true;
       loading.hidden = true;
@@ -561,6 +575,8 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     failed = true;
     const position = Math.max(0, Number(video.currentTime) || initialPosition);
     const shouldPlay = !video.paused;
+    const intent = playbackIntent;
+    const cancelled = () => destroyed || intent !== playbackIntent || document.hidden;
     if (sources.mp4) {
       try {
         if (hls) { hls.destroy(); hls = null; }
@@ -577,11 +593,12 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
           video.addEventListener('error', error, {once:true});
           video.load();
         });
+        if (cancelled()) return;
         if (Number(video.duration) > 0) video.currentTime = Math.min(position, Math.max(0, Number(video.duration) - .25));
         if (shouldPlay) await video.play().catch(() => {});
         return;
       } catch (error) {
-        adapter.reportError(error, position, shouldPlay);
+        if (!cancelled()) adapter.reportError(error, position, shouldPlay);
       }
     } else {
       adapter.reportError(new Error(`HLS playback failed: ${info?.details || 'fatal error'}`), position, shouldPlay);
@@ -604,6 +621,13 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     }
   })();
   const adapter = makePlayerAdapter(video, stage, () => hls, readyPromise);
+  adapter.pause = pausePlayback;
+  adapter.play = () => {
+    const intent = playbackIntent;
+    return readyPromise.then(() => {
+      if (!destroyed && intent === playbackIntent) return video.play();
+    });
+  };
   // Keep the adapter's reference to the HLS instance current after attachment and recovery.
   adapter.destroy = () => { destroyed = true; clearInterval(stalledPlaybackWatchdog); ++visualCheck; clearTimeout(singleTapTimer); clearTimeout(seekHintTimer); document.removeEventListener('visibilitychange', onVisibilityChange); try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
   adapter.on('error', detail => {

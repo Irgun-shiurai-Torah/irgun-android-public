@@ -6,6 +6,10 @@ on:
     branches: [main, test/android-release-regressions]
     paths:
       - '.github/release-tests/**'
+      - '.github/android-native-observer/**'
+      - 'scripts/android-native-hierarchy.mjs'
+      - 'scripts/android-emulator-prepare.py'
+      - 'scripts/android-emulator-mp4.mjs'
       - '.github/workflows/android-release-regressions.yml'
       - 'scripts/android-regression-extensions.mjs'
       - 'scripts/android-emulator-soak.mjs'
@@ -69,9 +73,9 @@ jobs:
       - name: Generate Android launcher resources
         run: bash scripts/prepare_android_icons.sh
       - name: Add emulator-only native output volume observation
-        run: python3 scripts/android-emulator-prepare.py
+        run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon assembleDebug
+      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
       - name: Enable KVM
         run: |
@@ -87,6 +91,7 @@ jobs:
           script: |
             set -e
             mkdir -p emulator-report
+            adb install -r android/qa-native-observer/build/outputs/apk/debug/qa-native-observer-debug.apk
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
             adb logcat -c
             adb shell am force-stop org.irgunshiuraitorah.app || true
@@ -254,9 +259,9 @@ jobs:
       - run: npm run build
       - run: npx cap sync android
       - run: bash scripts/prepare_android_icons.sh
-      - run: python3 scripts/android-emulator-prepare.py
+      - run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon assembleDebug
+      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
       - name: Enable KVM for real Android 11 emulator
         run: |

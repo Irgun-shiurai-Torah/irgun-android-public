@@ -7677,6 +7677,9 @@ function reconcileNativeWatchAudio(snapshot) {
   // AUDIO remains the owner while the foreground destination seeks/buffers.
   // Its position callbacks must not park that destination or replace its view.
   if (state.watchAudioToVideoHandoff && String(state.watchAudioToVideoHandoffId || '') === String(snapshot.lectureId || '')) return;
+  // A Home handoff can complete while WebView recovery is still pending.
+  // Cancel that work and pause the parked player when native Audio owns media.
+  if (state.watchVimeo) Promise.resolve(state.watchVimeo.pause()).catch(() => {});
   const wasVideo = state.watchMode === 'video';
   ensureNativeAudioCurrentForWatch(snapshot);
   state.nativeBackgroundHandoff = false;

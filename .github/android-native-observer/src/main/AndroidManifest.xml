@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="Irgun QA window observer" />
+    <instrumentation android:name=".WindowObserver"
+        android:targetPackage="org.irgunshiuraitorah.qa"
+        android:functionalTest="true" />
+</manifest>

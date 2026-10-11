@@ -8,6 +8,7 @@ capture() {
 }
 trap capture EXIT
 
+adb install -r android/qa-native-observer/build/outputs/apk/debug/qa-native-observer-debug.apk
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 adb logcat -c
 adb shell am force-stop org.irgunshiuraitorah.app || true

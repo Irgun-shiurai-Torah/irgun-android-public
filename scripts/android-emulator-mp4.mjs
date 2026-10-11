@@ -92,12 +92,11 @@ try {
     for(let i=0;i<120;i++) {state=await read();if(predicate(state))return state;await delay(500);}
     throw new Error(`Video did not settle: ${JSON.stringify(state)}`);
   };
-  adb('shell','uiautomator','dump','/sdcard/irgun-mp4.xml');
-  const xml=adb('shell','cat','/sdcard/irgun-mp4.xml');
-  const bounds=xml.match(/<node\b[^>]*class="android\.webkit\.WebView"[^>]*>/)?.[0]
-    .match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
-  assert.ok(bounds,'Native WebView bounds required');
-  const [left,top,right,bottom]=bounds.slice(1).map(Number);
+  const geometry=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+  assert.equal(geometry.focused,true,'Native app window must be foreground before media taps');
+  const {left,top,right,bottom}=geometry;
+  assert.ok([left,top,right,bottom].every(Number.isFinite)&&right>left&&bottom>top,
+    'Fresh native WebView bounds required');
   report.nativeBounds=[left,top,right,bottom];
   const nativePoint=p=>[Math.round(left+p.x*(right-left)/p.width),Math.round(top+p.y*(bottom-top)/p.height)];
   const visiblePoint=async selector=>JSON.parse(await evaluate(`JSON.stringify((()=>{

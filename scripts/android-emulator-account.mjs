@@ -1,6 +1,7 @@
 import {execFileSync} from 'node:child_process';
 import {writeFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
+import {nativeHierarchy} from './android-native-hierarchy.mjs';
 const email=process.env.IRGUN_TEST_EMAIL,password=process.env.IRGUN_TEST_PASSWORD;
 assert.ok(email&&password,'Configure dedicated verified account secrets IRGUN_TEST_EMAIL and IRGUN_TEST_PASSWORD');
 const adb=(...a)=>execFileSync('adb',a,{encoding:'utf8'}).trim();
@@ -32,7 +33,7 @@ async function connect(){
  const socket=ws;let id=0;const pending=new Map();
  socket.addEventListener('close',()=>{for(const p of pending.values()){clearTimeout(p.timer);p.reject(new Error('Observation connection closed'));}pending.clear();});
  socket.addEventListener('message',e=>{const m=JSON.parse(e.data),p=pending.get(m.id);if(!p)return;pending.delete(m.id);clearTimeout(p.timer);m.error||m.result.exceptionDetails?p.reject(new Error('Observation failed')):p.resolve(m.result.result.value);});
- return ()=>new Promise((resolve,reject)=>{const n=++id;const timer=setTimeout(()=>{pending.delete(n);reject(new Error('Observation timeout'));},10000);pending.set(n,{resolve,reject,timer});socket.send(JSON.stringify({id:n,method:'Runtime.evaluate',params:{expression:'JSON.stringify(window.ISTAccountTest ? window.ISTAccountTest.snapshot() : {ready:false,observerReady:false})',returnByValue:true}}));}).then(JSON.parse);
+ return (expression='JSON.stringify(window.ISTAccountTest ? window.ISTAccountTest.snapshot() : {ready:false,observerReady:false})')=>new Promise((resolve,reject)=>{const n=++id;const timer=setTimeout(()=>{pending.delete(n);reject(new Error('Observation timeout'));},10000);pending.set(n,{resolve,reject,timer});socket.send(JSON.stringify({id:n,method:'Runtime.evaluate',params:{expression,returnByValue:true,awaitPromise:true}}));}).then(JSON.parse);
 }
 let readSnapshot;
 async function read(){
@@ -50,29 +51,13 @@ async function closeSavePicker(){if((await read()).playlistPickerOpen)await tap(
 async function wait(test,message){report.stage=message;let s;const deadline=Date.now()+30000;while(Date.now()<deadline){s=await read();if(test(s))return s;await delay(300);}throw new Error(message);}
 
 async function readNativeBounds() {
- for(let attempt=1;attempt<=4;attempt++){
-  // Do not reuse an older hierarchy if this capture fails during startup.
-  adb('shell','rm','-f','/sdcard/account-bounds.xml');
-  try {
-   adb('shell','uiautomator','dump','--compressed','/sdcard/account-bounds.xml');
-   const xml=adb('shell','cat','/sdcard/account-bounds.xml');
-   const node=xml.match(/<node\b[^>]*class="android\.webkit\.WebView"[^>]*>/)?.[0];
-   const match=node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
-   if(match){
-    const value=match.slice(1).map(Number);
-    if(value[2]>value[0]&&value[3]>value[1]){
-     report.nativeBoundsAttempts=attempt;
-     report.nativeBounds=value;
-     return value;
-    }
-   }
-  } catch {
-   // Android may return a null root while WebView is still rendering.
-   // Retry the native hierarchy; never substitute guessed screen coordinates.
-  }
-  await delay(700);
- }
- throw new Error('Native WebView hierarchy unavailable after four fresh captures');
+ const window=await readSnapshot("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{}).then(JSON.stringify)");
+ assert.equal(window.focused,true,'Irgun must own the actual foreground window before an app tap');
+ const value=[window.left,window.top,window.right,window.bottom];
+ assert.ok(value.every(Number.isFinite)&&value[2]>value[0]&&value[3]>value[1],
+   'Fresh native WebView geometry must have a nonzero size');
+ report.nativeBounds=value;
+ return value;
 }
 
 let bounds;
@@ -80,6 +65,7 @@ function native(p,s){return [Math.round(bounds[0]+p.x*(bounds[2]-bounds[0])/s.wi
 async function tap(key) {
  report.stage='Native tap: '+key;
  for(let i=0;i<9;i++) {
+  bounds=await readNativeBounds();
   const s=await read(),p=s.controls[key];
   if(p) {
    adb('shell','input','tap',...native(p,s).map(String));
@@ -144,8 +130,7 @@ async function dismissKeyboardBeforeSave(){
  report.commentSaveKeyboardDismissed=true;
 }
 async function acceptDeleteConfirmation(){
- adb('shell','uiautomator','dump','--compressed','/sdcard/account-confirm.xml');
- const xml=adb('shell','cat','/sdcard/account-confirm.xml');
+ const xml=nativeHierarchy('emulator-report/account-confirm.xml');
  const nodes=xml.match(/<node\b[^>]*>/g)||[];
  const positive=nodes.find(n=>/text="(OK|Yes|Delete)"/i.test(n)&&/clickable="true"/.test(n));
  assert.ok(positive,'Actual Android native confirm button must be shown');

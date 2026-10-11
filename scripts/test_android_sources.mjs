@@ -5,12 +5,13 @@ import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } 
 
 class Element extends EventTarget {
   constructor(tag) {
-    super(); this.tagName = tag; this.children = []; this.nodes = new Map();
+    super(); this.tagName = tag; this.children = []; this.nodes = new Map(); this.dataset = {};
     this.classList = { add(){}, remove(){}, contains(){return false;}, toggle(){} };
     this.style = { setProperty(){}, removeProperty(){} };
     this.readyState = 1; this.duration = 3663; this.currentTime = 0; this.paused = true; this.volume = 1;
   }
   setAttribute(){} removeAttribute(){} load(){} pause(){this.paused = true;}
+  add(){}
   play(){this.paused = false; return Promise.resolve();}
   canPlayType(){return 'maybe';}
   appendChild(child){child.parentElement = this; this.children.push(child);}
@@ -18,8 +19,8 @@ class Element extends EventTarget {
   querySelector(selector){if(!this.nodes.has(selector)) this.nodes.set(selector, new Element('button')); return this.nodes.get(selector);}
   replaceWith(child){child.parentElement = this.parentElement;}
 }
-async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {nativeHls = true} = {}) {
-  const original = { document:globalThis.document, window:globalThis.window, fetch:globalThis.fetch };
+async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {nativeHls = true, Hls, onReady} = {}) {
+  const original = { document:globalThis.document, window:globalThis.window, fetch:globalThis.fetch, Option:globalThis.Option };
   const calls = [];
   const doc = new EventTarget(); doc.createElement = tag => {
     const element = new Element(tag);
@@ -27,13 +28,15 @@ async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {n
     return element;
   }; doc.body = new Element('body');
   globalThis.document = doc;
-  globalThis.window = {Hls:{isSupported:()=>false}};
+  globalThis.window = {Hls:Hls || {isSupported:()=>false}};
+  globalThis.Option = class {};
   globalThis.fetch = async url => {calls.push(url);return {ok:true,json:async()=>descriptor};};
   const iframe = new Element('iframe'); new Element('div').appendChild(iframe);
   let player;
   try {
     player = await createAndroidHlsPlayer({apiBase:'https://api.example.test',platform:'android',videoId,iframe,resumeSeconds});
     await player.ready();
+    if (onReady) await onReady(player);
     return { source:player.getSourceType(), url:player.getVideoElement().src, position:await player.getCurrentTime(), paused:await player.getPaused(), calls };
   } finally {
     // Dispose the real player's watchdog before restoring the mocked DOM.
@@ -57,6 +60,53 @@ test('unplayable HLS uses the direct MP4 before Vimeo fallback',async()=>{
 });
 test('no direct source still rejects so the existing Vimeo fallback can run',async()=>{
   await assert.rejects(fixture({video:{hls:null,mp4:null}}),/No HLS or MP4 source is ready/);
+});
+
+class RecoveringHls {
+  static Events = {MANIFEST_PARSED:'manifest',ERROR:'error'};
+  static ErrorTypes = {MEDIA_ERROR:'media',NETWORK_ERROR:'network'};
+  static isSupported(){return true;}
+  constructor(){RecoveringHls.current=this;this.levels=[];this.listeners=new Map();this.starts=0;}
+  attachMedia(){} loadSource(){} stopLoad(){} destroy(){}
+  startLoad(){this.starts++;}
+  on(name,callback){this.listeners.set(name,callback);if(name==='manifest')queueMicrotask(callback);}
+  emitError(){this.listeners.get('error')?.('error',{fatal:true,type:'other',details:'test decoder failure'});}
+}
+const settleRecovery = async () => {for(let i=0;i<8;i++)await Promise.resolve();};
+const recoverySources = {video:{hls:'https://media.example.test/master.m3u8',mp4:'https://media.example.test/video.mp4'}};
+test('pausing during an HLS visual retry cannot restart parked video or select MP4',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','setInterval','Date']});
+  await fixture(recoverySources,'1233236785:585d5d53db',0,{Hls:RecoveringHls,onReady:async player=>{
+    const video=player.getVideoElement();video.videoWidth=640;video.readyState=2;
+    video.getVideoPlaybackQuality=()=>({totalVideoFrames:0});
+    let plays=0;video.play=()=>{plays++;video.paused=false;return Promise.resolve();};
+    await player.play();video.dispatchEvent(new Event('playing'));
+    t.mock.timers.tick(12000);await settleRecovery();
+    assert.equal(RecoveringHls.current.starts,1,'The test must reach a real pending visual retry');
+    await player.pause();
+    t.mock.timers.tick(8500);await settleRecovery();
+    t.mock.timers.tick(10000);await settleRecovery();
+    t.mock.timers.tick(12000);await settleRecovery();
+    assert.equal(plays,1,'Cancelled HLS recovery must never replay video');
+    assert.equal(video.paused,true);
+    assert.equal(player.getSourceType(),'hls','A cancelled visual retry must not attach fallback media');
+    assert.equal(RecoveringHls.current.starts,1,'Cancelled recovery must not load another HLS retry');
+  }});
+});
+test('pausing while a fatal HLS fallback loads metadata cannot autoplay that fallback',async()=>{
+  await fixture(recoverySources,'1233236785:585d5d53db',0,{Hls:RecoveringHls,onReady:async player=>{
+    const video=player.getVideoElement();let plays=0;
+    video.play=()=>{plays++;video.paused=false;return Promise.resolve();};
+    await player.play();
+    video.readyState=0;
+    RecoveringHls.current.emitError();
+    assert.equal(player.getSourceType(),'mp4','The test must reach the pending fatal-error fallback');
+    await player.pause();
+    video.readyState=1;video.dispatchEvent(new Event('loadedmetadata'));
+    await settleRecovery();
+    assert.equal(plays,1,'An old play intent must not restart video after an Audio handoff');
+    assert.equal(video.paused,true);
+  }});
 });
 
 const {vimeoEmbedSource} = await import('../src/vimeoEmbed.js');
