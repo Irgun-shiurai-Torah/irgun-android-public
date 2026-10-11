@@ -86,9 +86,12 @@ async function tap(key) {
   const commentAction=['commentText','postComment','editQaComment','editedQaText','saveQaComment','deleteQaComment'].includes(key);
   // The video player and action buttons swallow drags in the middle of the
   // viewport. Drag over the lower white comments/details scroll surface instead.
-  const x=commentAction ? Math.round((bounds[0]+bounds[2])/2) : Math.round(bounds[2]-25);
-  const yStart=commentAction ? bounds[3]-72 : bounds[3]-150;
-  const yEnd=bounds[1]+135;
+  const x=commentAction ? Math.round(bounds[2]-34) : Math.round(bounds[2]-25);
+  // Watch comments live in .watch-scroll BELOW the HLS frame. Swiping toward
+  // the frame hits the touch-action:none video rather than scrolling content.
+  // Keep the entire real finger swipe in the white watch-details viewport.
+  const yStart=commentAction ? Math.round(bounds[3]-57) : Math.round(bounds[3]-150);
+  const yEnd=commentAction ? Math.max(bounds[1]+305, bounds[3]-285) : bounds[1]+135;
   if(returnToTop)adb('shell','input','swipe',String(x),String(yEnd),String(x),String(yStart),'480');
   else adb('shell','input','swipe',String(x),String(yStart),String(x),String(yEnd),'480');
   await delay(500);
