@@ -465,6 +465,7 @@ function refreshOfflineButtonsForKey(key = '') {
 }
 
 async function saveOffline(kind, id) {
+  state.offlineSaveLastError = '';
   const normalizedKind = kind === 'audio' ? 'audio' : 'video';
   const key = offlineKeyFor(normalizedKind, id);
   if (state.offlineDownloads.has(key)) {
@@ -537,6 +538,9 @@ async function saveOffline(kind, id) {
     setToast(currentLanguage() === 'he' ? 'נשמר להאזנה ללא אינטרנט.' : 'Saved for offline listening.');
     if (state.screen === 'library' && state.librarySection === 'downloads') render(); else { refreshInteractiveUi(); refreshOfflineButtonsForKey(key); }
   } catch (error) {
+    // Expose the real error for QA and diagnostics. A failed 2 KB HTML
+    // response must never be mistaken for a downloaded hour-long MP3.
+    state.offlineSaveLastError = String(error?.message || error || 'Unknown download error').slice(0,350);
     console.warn('Offline save failed', error);
     // Do not leave an invalid partial file in storage for a later retry.
     await Filesystem.deleteFile({ directory:Directory.Data, path }).catch(() => {});
