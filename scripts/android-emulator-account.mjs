@@ -81,17 +81,26 @@ async function tap(key) {
    await delay(500);
    continue;
   }
-  // Find real controls by scrolling in the direction their screen position requires.
-  const returnToTop=['closeWatch','login','settings'].includes(key);
   const commentAction=['commentText','postComment','editQaComment','editedQaText','saveQaComment','deleteQaComment'].includes(key);
-  // The video player and action buttons swallow drags in the middle of the
-  // viewport. Drag over the lower white comments/details scroll surface instead.
-  const x=commentAction ? Math.round(bounds[2]-34) : Math.round(bounds[2]-25);
-  // Watch comments live in .watch-scroll BELOW the HLS frame. Swiping toward
-  // the frame hits the touch-action:none video rather than scrolling content.
-  // Keep the entire real finger swipe in the white watch-details viewport.
-  const yStart=commentAction ? Math.round(bounds[3]-57) : Math.round(bounds[3]-150);
-  const yEnd=commentAction ? Math.max(bounds[1]+305, bounds[3]-285) : bounds[1]+135;
+  if(commentAction && s.watchScroll) {
+    const sc=s.watchScroll;
+    assert.ok(sc.heightTotal>sc.visibleHeight+20,
+      'Comment editor below the fold, but actual Watch scroll container is not scrollable');
+    const start=native({x:sc.x+sc.width*.70,y:sc.y+sc.height*.86},s);
+    const finish=native({x:sc.x+sc.width*.70,y:sc.y+sc.height*.16},s);
+    adb('shell','input','swipe',...start.map(String),...finish.map(String),'520');
+    await delay(600);
+    const after=await read();
+    report.commentScrollGestures=report.commentScrollGestures||[];
+    report.commentScrollGestures.push({key,beforeTop:sc.top,afterTop:Number(after.watchScroll?.top||0),
+      heightTotal:sc.heightTotal,visibleHeight:sc.visibleHeight,start,finish});
+    if(i>=3 && Number(after.watchScroll?.top||0)<=sc.top+1)throw new Error(
+      'Native swipe inside measured Watch scroll did not move comments: '+
+      JSON.stringify(report.commentScrollGestures.slice(-4)));
+    continue;
+  }
+  const returnToTop=['closeWatch','login','settings'].includes(key);
+  const x=Math.round(bounds[2]-25),yStart=bounds[3]-150,yEnd=bounds[1]+135;
   if(returnToTop)adb('shell','input','swipe',String(x),String(yEnd),String(x),String(yStart),'480');
   else adb('shell','input','swipe',String(x),String(yStart),String(x),String(yEnd),'480');
   await delay(500);

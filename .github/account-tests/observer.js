@@ -24,6 +24,11 @@ window.ISTAccountTest = { snapshot() {
     history: '[data-library-section="history"]', likes: '[data-library-section="likes"]',
     saved: '[data-library-section="later"]', following: '[data-library-section="following"]'
   };
+  const scroll=document.querySelector('.watch-overlay .watch-scroll');
+  const watchScroll=scroll ? (()=>{const r=scroll.getBoundingClientRect();
+    return {x:r.x,y:r.y,width:r.width,height:r.height,top:scroll.scrollTop,
+      heightTotal:scroll.scrollHeight,visibleHeight:scroll.clientHeight,
+      touchAction:getComputedStyle(scroll).touchAction};})() : null;
   const video = state.watchVimeo?.getVideoElement?.()
     || document.querySelector('#watchDirectHlsVideo')
     || state.watchVimeo?.video
@@ -44,7 +49,7 @@ window.ISTAccountTest = { snapshot() {
     ? { x:stripRect.x, y:stripRect.y, width:stripRect.width, height:stripRect.height,
         scrollLeft:libraryStrip.scrollLeft, scrollWidth:libraryStrip.scrollWidth, clientWidth:libraryStrip.clientWidth }
     : null;
-  return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,libraryTabStrip,
+  return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,libraryTabStrip,watchScroll,
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
     name:state.user?.name||'',profileShownName:document.querySelector('.profile-line span')?.textContent||'',
     accountEmail:state.user?.email||'',screen:state.screen,
