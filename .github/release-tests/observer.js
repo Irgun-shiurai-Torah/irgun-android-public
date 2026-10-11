@@ -37,6 +37,8 @@ window.ISTReleaseQA = { snapshot() {
     offlineJobs: [...state.offlineJobs.entries()].map(([key, job]) => ({
       key: String(key), percent: Number(job.percent || 0)
     })),
+    currentOffline: !!state.current?.offline,
+    currentId: String(state.current?.id || ''),
     isLoggedIn: !!state.user
   };
 }};
