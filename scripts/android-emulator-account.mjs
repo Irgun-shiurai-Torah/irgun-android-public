@@ -8,10 +8,26 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const report={checks:[],credentialsRecorded:false,startedAt:new Date().toISOString()};let ws;
 let qaCommentId='',qaCommentMarker='',accountDisplayName='';
 async function connect(){
- const pid=adb('shell','pidof','org.irgunshiuraitorah.app').split(/\s+/)[0];
- adb('forward','tcp:9222',`localabstract:webview_devtools_remote_${pid}`);
- const pages=await(await fetch('http://127.0.0.1:9222/json/list')).json();
- ws=new WebSocket(pages.find(p=>p.type==='page'&&/localhost/.test(p.url)).webSocketDebuggerUrl);
+ // The WebView CDP target can briefly disappear during IME/dialog lifecycle.
+ // Retry discovery against the ACTUAL running app process. Never manufacture a
+ // snapshot or restart a crashed app and pretend its ongoing test succeeded.
+ let page=null, lastDiscoveryError='';
+ for(let attempt=1;attempt<=12;attempt++){
+  const pid=adb('shell','pidof','org.irgunshiuraitorah.app').trim().split(/\s+/)[0];
+  if(!/^\d+$/.test(pid))throw new Error('Android app process disappeared while opening the QA WebView observer at '+String(report.stage||'startup'));
+  try{
+   adb('forward','tcp:9222',`localabstract:webview_devtools_remote_${pid}`);
+   const response=await fetch('http://127.0.0.1:9222/json/list',{signal:AbortSignal.timeout(2500),cache:'no-store'});
+   if(!response.ok)throw new Error('CDP target discovery HTTP '+response.status);
+   const pages=await response.json();
+   page=pages.find(p=>p.type==='page'&&/localhost/.test(p.url)&&p.webSocketDebuggerUrl);
+   if(page)break;
+   lastDiscoveryError='No live localhost WebView page among '+pages.length+' CDP targets';
+  }catch(error){lastDiscoveryError=String(error.message||error).slice(0,240);}
+  await delay(650);
+ }
+ if(!page)throw new Error('App WebView inspection target remained unavailable at '+String(report.stage||'startup')+': '+lastDiscoveryError);
+ ws=new WebSocket(page.webSocketDebuggerUrl);
  await new Promise((r,j)=>{ws.addEventListener('open',r,{once:true});ws.addEventListener('error',j,{once:true});});
  const socket=ws;let id=0;const pending=new Map();
  socket.addEventListener('close',()=>{for(const p of pending.values()){clearTimeout(p.timer);p.reject(new Error('Observation connection closed'));}pending.clear();});
@@ -107,7 +123,12 @@ async function tap(key) {
  }
  throw new Error(`Visible control missing: ${key}`);
 }
-async function type(key,value){assert.match(value,/^[a-zA-Z0-9@._+!-]+$/,'Dedicated credentials must use characters supported by native adb text input');await tap(key);adb('shell','input','text',value);adb('shell','input','keyevent','4');await delay(500);}
+async function type(key,value){assert.match(value,/^[a-zA-Z0-9@._+!-]+$/,'Dedicated credentials must use characters supported by native adb text input');await tap(key);adb('shell','input','text',value);
+ // BACK without a visible IME can dismiss the edit dialog or navigate out of
+ // the app. Dismiss ONLY the actual keyboard (never invent a screen tap).
+ const ime=adb('shell','dumpsys','input_method');
+ if(/(?:mInputShown|isInputViewShown)=true/.test(ime))adb('shell','input','keyevent','4');
+ await delay(500);}
 async function acceptDeleteConfirmation(){
  adb('shell','uiautomator','dump','--compressed','/sdcard/account-confirm.xml');
  const xml=adb('shell','cat','/sdcard/account-confirm.xml');
@@ -260,7 +281,13 @@ try{
  await tap('logout');await wait(s=>!s.loggedIn,'Second native logout failed');
  report.checks.push('Subsequent logout successful');
  report.accountMutationsFinishedAt=new Date().toISOString();report.status='passed';
-}catch(e){if(report.checks.includes('Native email/password login and profile')){try{const s=await read();report.failurePlayback={watchMode:s.watchMode,audioPlaying:s.audioPlaying,audioTime:s.audioTime,currentId:s.currentId,nativeAudio:s.nativeAudio};}catch(_){}try{adb('shell','screencap','-p','/sdcard/account-failure.png');adb('pull','/sdcard/account-failure.png','emulator-report/account-failure.png');report.failureScreenshotCredentialsAbsent=true;}catch{}}report.status='failed';report.error=String(e.message).replaceAll(email,'[email]').replaceAll(password,'[password]');process.exitCode=1; }finally{
+}catch(e){if(report.checks.includes('Native email/password login and profile')){
+ try{report.appPidAtFailure=adb('shell','pidof','org.irgunshiuraitorah.app')||'';}catch(_){}
+ try{report.foregroundAtFailure=adb('shell','dumpsys','activity','activities').split('\n').filter(line=>/mResumedActivity|topResumedActivity|ResumedActivity/.test(line)).slice(0,8);}catch(_){}
+ try{const diagnostics=execFileSync('adb',['logcat','-d','-t','3000','-s','AndroidRuntime:E','chromium:E','cr_AwContents:E','IrgunPlayback:D','ActivityTaskManager:W','*:S'],{encoding:'utf8'});
+  writeFileSync('emulator-report/account-android-errors.log',diagnostics.replaceAll(email,'[email]').replaceAll(password,'[password]'));}catch(_){}
+ try{const s=await read();report.failurePlayback={watchMode:s.watchMode,audioPlaying:s.audioPlaying,audioTime:s.audioTime,currentId:s.currentId,nativeAudio:s.nativeAudio};}catch(_){}
+ try{adb('shell','screencap','-p','/sdcard/account-failure.png');adb('pull','/sdcard/account-failure.png','emulator-report/account-failure.png');report.failureScreenshotCredentialsAbsent=true;}catch{}}report.status='failed';report.error=String(e.message).replaceAll(email,'[email]').replaceAll(password,'[password]');process.exitCode=1; }finally{
  try{await cleanupQaComment();}catch(cleanup){report.qaCommentCleanedUp=false;report.cleanupFailure=String(cleanup.message||cleanup).replaceAll(email,'[email]').replaceAll(password,'[password]');report.status='failed';process.exitCode=1;}
  report.finishedAt=new Date().toISOString();ws?.close();try{adb('shell','am','force-stop','org.irgunshiuraitorah.app');adb('shell','am','start','-n','org.irgunshiuraitorah.app/.SplashActivity');await delay(1500);report.evidenceCredentialsCleared=true;}catch{}writeFileSync('emulator-report/account.json',JSON.stringify(report,null,2));}
 
