@@ -238,6 +238,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y imagemagick
           bash scripts/prepare_android_icons.sh
+      - name: Append only read-only HLS source telemetry to this disposable APK
+        run: cat .github/release-tests/observer.js >> src/main.js
       - run: npm run build
       - run: npx cap sync android
       - run: bash scripts/prepare_android_icons.sh
