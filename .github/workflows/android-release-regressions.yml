@@ -9,6 +9,7 @@ on:
       - '.github/workflows/android-release-regressions.yml'
       - 'scripts/android-regression-extensions.mjs'
       - 'scripts/android-emulator-soak.mjs'
+      - 'scripts/android-emulator-audio-start.mjs'
       - 'scripts/android-website-account-sync.mjs'
       - 'scripts/android-comments-qa.mjs'
       - 'scripts/android-hls-delivery-probe.mjs'
@@ -148,7 +149,7 @@ jobs:
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
             adb shell am start -n org.irgunshiuraitorah.app/.SplashActivity
             node scripts/android-emulator-inspect.mjs > emulator-report/startup-soak.json
-            node scripts/android-emulator-mp4.mjs > emulator-report/handoff-soak.json
+            node scripts/android-emulator-audio-start.mjs > emulator-report/audio-start-soak.json
             node scripts/android-emulator-soak.mjs
       - name: Upload 15-minute observation logs
         if: always()
