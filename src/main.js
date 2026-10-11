@@ -8,6 +8,7 @@ import { FileTransfer } from '@capacitor/file-transfer';
 import { Share } from '@capacitor/share';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { createAndroidHlsPlayer } from './android-hls-video.js';
+import { isPlausibleOfflineAudio, minimumOfflineAudioBytes } from './offline-validation.js';
 import { vimeoEmbedSource } from './vimeoEmbed.js';
 import { AppleSignIn, SignInScope } from '@capawesome/capacitor-apple-sign-in';
 
@@ -397,9 +398,12 @@ function offlineKeyFor(kind, id) {
 
 function offlineRecordForAudioItem(item) {
   if (!item) return null;
-  if (item.kind === 'library-audio') return state.offlineDownloads.get(offlineKeyFor('audio', item.id)) || null;
-  if (item.kind === 'video-audio') return state.offlineDownloads.get(offlineKeyFor('video', item.id)) || null;
-  return null;
+  const key = item.kind === 'library-audio'
+    ? offlineKeyFor('audio', item.id)
+    : item.kind === 'video-audio' ? offlineKeyFor('video', item.id) : '';
+  const record = key ? state.offlineDownloads.get(key) : null;
+  // Never redirect playback to a truncated or mislabeled 2 KB download.
+  return record && isPlausibleOfflineAudio(record.bytes, record.durationSeconds) ? record : null;
 }
 
 function offlineRecordForCatalogItem(item) {
@@ -408,7 +412,7 @@ function offlineRecordForCatalogItem(item) {
 }
 
 function offlineFileUrl(record) {
-  if (!record || !record.uri) return '';
+  if (!record?.uri || !isPlausibleOfflineAudio(record.bytes, record.durationSeconds)) return '';
   try { return Capacitor.convertFileSrc(record.uri); } catch (_) { return record.uri; }
 }
 
@@ -423,7 +427,8 @@ function humanBytes(bytes) {
 
 function offlineActionState(kind, id) {
   const key = offlineKeyFor(kind, id);
-  const record = state.offlineDownloads.get(key) || null;
+  const entry = state.offlineDownloads.get(key) || null;
+  const record = entry && isPlausibleOfflineAudio(entry.bytes,entry.durationSeconds) ? entry : null;
   const job = state.offlineJobs.get(key) || null;
   if (record) return { key, record, job:null, status:'saved', cls:'offline-saved', label:currentLanguage()==='he'?'הסר שמירה לא מקוונת':'Remove Offline' };
   if (job) {
@@ -463,9 +468,14 @@ async function saveOffline(kind, id) {
   const normalizedKind = kind === 'audio' ? 'audio' : 'video';
   const key = offlineKeyFor(normalizedKind, id);
   if (state.offlineDownloads.has(key)) {
-    const confirmed = confirm(currentLanguage() === 'he' ? 'להסיר את העותק השמור להאזנה ללא אינטרנט?' : 'Remove the saved offline copy?');
-    if (confirmed) await deleteOffline(key, { stayHere:true });
-    return;
+    const stored = state.offlineDownloads.get(key);
+    if (isPlausibleOfflineAudio(stored?.bytes, stored?.durationSeconds)) {
+      const confirmed = confirm(currentLanguage() === 'he' ? 'להסיר את העותק השמור להאזנה ללא אינטרנט?' : 'Remove the saved offline copy?');
+      if (confirmed) await deleteOffline(key, { stayHere:true });
+      return;
+    }
+    // Corrupt downloads are not usable or 'saved'. Remove them and retry.
+    await deleteOffline(key, { stayHere:true });
   }
   if (state.offlineJobs.has(key)) {
     setToast(currentLanguage() === 'he' ? 'ההורדה כבר מתבצעת.' : 'This shiur is already downloading.');
@@ -510,9 +520,16 @@ async function saveOffline(kind, id) {
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
     await FileTransfer.downloadFile({ url, path:fileInfo.uri, headers, progress:true });
     const stat = await Filesystem.stat({ directory:Directory.Data, path }).catch(() => ({}));
+    // Check actual on-device bytes, not the network progress total.
+    const verifiedBytes = Number(stat?.size) || 0;
+    const durationSeconds = Math.max(0,Number(item.duration)||0);
+    if (!isPlausibleOfflineAudio(verifiedBytes,durationSeconds)) {
+      throw new Error('Incomplete or non-audio download: '+verifiedBytes+' bytes; expected at least '+
+        minimumOfflineAudioBytes(durationSeconds)+' bytes for this lecture');
+    }
     state.offlineDownloads.set(key, {
       key, kind:normalizedKind, id:rawId, sourceId, title, subtitle,
-      uri:fileInfo.uri, path, bytes:Number(stat?.size) || Number(state.offlineJobs.get(key)?.total) || 0,
+      uri:fileInfo.uri, path, bytes:verifiedBytes, durationSeconds,
       savedAt:Date.now()
     });
     state.offlineJobs.delete(key);
@@ -521,6 +538,10 @@ async function saveOffline(kind, id) {
     if (state.screen === 'library' && state.librarySection === 'downloads') render(); else { refreshInteractiveUi(); refreshOfflineButtonsForKey(key); }
   } catch (error) {
     console.warn('Offline save failed', error);
+    // Do not leave an invalid partial file in storage for a later retry.
+    await Filesystem.deleteFile({ directory:Directory.Data, path }).catch(() => {});
+    state.offlineDownloads.delete(key);
+    persistOfflineDownloads();
     state.offlineJobs.delete(key);
     setToast(currentLanguage() === 'he' ? 'לא היה אפשר לשמור את השיעור.' : 'Could not save this shiur offline.');
     if (state.screen === 'library' && state.librarySection === 'downloads') render(); else refreshOfflineButtonsForKey(key);
@@ -544,6 +565,10 @@ async function playOfflineRecord(key) {
   resetWatchPresentationForStandaloneAudio();
   const record = state.offlineDownloads.get(String(key || ''));
   if (!record) return;
+  if (!isPlausibleOfflineAudio(record.bytes,record.durationSeconds)) {
+    setToast(currentLanguage()==='he'?'ההורדה אינה שלמה. יש להוריד מחדש.':'The saved audio is incomplete. Please download it again.');
+    return;
+  }
   const url = offlineFileUrl(record);
   if (!url) return;
   state.queueStarting = false;

@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAndroidHlsPlayer } from '../src/android-hls-video.js';
+import { isPlausibleOfflineAudio, minimumOfflineAudioBytes } from '../src/offline-validation.js';
 
 class Element extends EventTarget {
   constructor(tag) {
@@ -240,4 +241,17 @@ test('Follow binding must not double-submit after a persistent video overlay sur
   assert.equal(followCalls, 2, 'The Follow button must work again once the request resolves');
   resolvers.shift()();
   await third;
+});
+
+test('offline audio rejects 2,407-byte HTML/error page previously saved as one-hour MP3', () => {
+  assert.ok(minimumOfflineAudioBytes(3663)>1_000_000);
+  assert.equal(isPlausibleOfflineAudio(2407,3663),false);
+  assert.equal(isPlausibleOfflineAudio(128_000,3663),false);
+  assert.equal(isPlausibleOfflineAudio(4_000_000,3663),true);
+});
+test('offline audio refuses missing, zero and short downloaded files even without duration metadata', () => {
+  assert.equal(isPlausibleOfflineAudio(0),false);
+  assert.equal(isPlausibleOfflineAudio(null),false);
+  assert.equal(isPlausibleOfflineAudio(8192),false);
+  assert.equal(isPlausibleOfflineAudio(65536),true);
 });
