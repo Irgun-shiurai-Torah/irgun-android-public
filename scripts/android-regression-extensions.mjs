@@ -136,6 +136,30 @@ async function tapWithScroll(selector) {
   }
   throw new Error('Required control was not visible after native scrolling: '+selector);
 }
+async function tapPositiveAndroidDialog(){
+  let failures=[];
+  for(let attempt=1;attempt<=6;attempt++){
+    const xmlPath='/sdcard/irgun-offline-delete-dialog.xml';
+    adb('shell','rm','-f',xmlPath);
+    try{
+      const args=['shell','uiautomator','dump'];
+      if(attempt%2===0)args.push('--compressed');
+      args.push(xmlPath);
+      adb(...args);
+      const xml=adb('shell','cat',xmlPath);
+      const nodes=xml.match(/<node\b[^>]*>/g)||[];
+      const positive=nodes.find(n=>/text="(OK|Yes|Delete|Remove)"/i.test(n)&&/clickable="true"/.test(n));
+      const rect=positive?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
+      if(rect&&rect[2]>rect[0]&&rect[3]>rect[1]){
+        adb('shell','input','tap',String(Math.round((rect[0]+rect[2])/2)),String(Math.round((rect[1]+rect[3])/2)));
+        return;
+      }
+      failures.push('No native positive confirmation in attempt '+attempt);
+    }catch(e){failures.push(String(e.message||e).slice(0,160));}
+    await delay(650);
+  }
+  throw new Error('Could not confirm actual Android offline-file deletion: '+failures.join(' | '));
+}
 function checks(label,details={}) {report.checks.push({label,...details});save();}
 async function section(name,fn){
   report.activeSection=name;save();
@@ -310,6 +334,12 @@ try{
       assert.ok(end.native.audioPositionMs>start.native.audioPositionMs+1400,'Downloaded audio must continue playing without internet');
       checks('Actual downloaded audio played while offline',{bytes:record.bytes});
     }finally{await setOnline(true);}
+    const present=await read();
+    assert.ok(present.offline.some(x=>x.key===record.key&&x.bytes>0),'Downloaded file disappeared before deletion');
+    await tap('[data-save-offline-kind="video"][data-save-offline-id="'+before.watchId+'"]');
+    await tapPositiveAndroidDialog();
+    await wait(s=>!s.offline.some(x=>x.key===record.key),'Offline file was not deleted after user confirmation',25000);
+    checks('Offline download was deleted by physical Android UI with server playback unaffected');
   });
 
   await section('Wi-Fi and mobile-data interruptions recover video at saved position',async()=>{
