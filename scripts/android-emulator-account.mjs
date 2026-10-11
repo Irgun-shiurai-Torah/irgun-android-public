@@ -7,7 +7,7 @@ assert.ok(email&&password,'Configure dedicated verified account secrets IRGUN_TE
 const adb=(...a)=>execFileSync('adb',a,{encoding:'utf8'}).trim();
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const report={checks:[],credentialsRecorded:false,startedAt:new Date().toISOString()};let ws;
-let qaCommentId='',qaCommentMarker='',accountDisplayName='';
+let qaCommentId='',qaCommentMarker='',accountDisplayName='',restartPlaylistName='';
 async function connect(){
  // The WebView CDP target can briefly disappear during IME/dialog lifecycle.
  // Retry discovery against the ACTUAL running app process. Never manufacture a
@@ -263,7 +263,7 @@ try{
  await tap('deleteQaComment');await acceptDeleteConfirmation();
  await wait(s=>!s.comments.some(c=>c.id===qaCommentId),'Native QA comment deletion failed');
  report.checks.push('Native UI deleted its own QA comment');qaCommentId='';
- await tap('closeWatch');await tap('library');await tap('playlists');const name=`Irgun-QA-${Date.now()}`;await type('playlistName',name);await tap('createPlaylist');await wait(s=>s.playlists.some(p=>p.name===name),'Playlist creation failed');
+ await tap('closeWatch');await tap('library');await tap('playlists');const name=`Irgun-QA-${Date.now()}`;restartPlaylistName=name;await type('playlistName',name);await tap('createPlaylist');await wait(s=>s.playlists.some(p=>p.name===name),'Playlist creation failed');
  const changed=await read();
  report.beforeRestart = {
   signedIn:changed.loggedIn,
@@ -313,7 +313,10 @@ try{
  try{report.foregroundAtFailure=adb('shell','dumpsys','activity','activities').split('\n').filter(line=>/mResumedActivity|topResumedActivity|ResumedActivity/.test(line)).slice(0,8);}catch(_){}
  try{const diagnostics=execFileSync('adb',['logcat','-d','-t','3000','-s','AndroidRuntime:E','chromium:E','cr_AwContents:E','IrgunPlayback:D','ActivityTaskManager:W','*:S'],{encoding:'utf8'});
   writeFileSync('emulator-report/account-android-errors.log',diagnostics.replaceAll(email,'[email]').replaceAll(password,'[password]'));}catch(_){}
- try{const s=await read();report.failurePlayback={watchMode:s.watchMode,audioPlaying:s.audioPlaying,audioTime:s.audioTime,currentId:s.currentId,nativeAudio:s.nativeAudio};}catch(_){}
+ try{const s=await read();report.failurePlayback={watchMode:s.watchMode,audioPlaying:s.audioPlaying,audioTime:s.audioTime,currentId:s.currentId,nativeAudio:s.nativeAudio};
+  report.startupAtFailure={libraryReady:s.libraryReady,loading:s.loading,bootstrapInFlight:s.bootstrapInFlight,
+    loggedIn:s.loggedIn,hasStoredSession:s.hasStoredSession,playlistsCount:s.playlists.length,
+    qaPlaylistFound:!!restartPlaylistName&&s.playlists.some(p=>p.name===restartPlaylistName)};}catch(_){}
  try{adb('shell','screencap','-p','/sdcard/account-failure.png');adb('pull','/sdcard/account-failure.png','emulator-report/account-failure.png');report.failureScreenshotCredentialsAbsent=true;}catch{}}report.status='failed';report.error=String(e.message).replaceAll(email,'[email]').replaceAll(password,'[password]');process.exitCode=1; }finally{
  try{await cleanupQaComment();}catch(cleanup){report.qaCommentCleanedUp=false;report.cleanupFailure=String(cleanup.message||cleanup).replaceAll(email,'[email]').replaceAll(password,'[password]');report.status='failed';process.exitCode=1;}
  report.finishedAt=new Date().toISOString();ws?.close();try{adb('shell','am','force-stop','org.irgunshiuraitorah.app');adb('shell','am','start','-n','org.irgunshiuraitorah.app/.SplashActivity');await delay(1500);report.evidenceCredentialsCleared=true;}catch{}writeFileSync('emulator-report/account.json',JSON.stringify(report,null,2));}

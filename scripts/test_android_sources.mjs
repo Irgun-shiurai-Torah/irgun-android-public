@@ -202,6 +202,42 @@ test('Audio handoff rejects a stationary destination and preserves explicit Paus
 test('Audio handoff accepts a synchronized destination only after clocks and frames advance',async()=>{
   const f=handoffFixture();assert.ok(await f.wait(f.player,'lecture',800)>600);
 });
+test('HLS handoff lets a keyframe decode before chasing the advancing Audio clock',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
+  let decodeAt=3000,basePosition=606,position=606,frames=327,decoded=false;
+  const seeks=[];
+  // API 35 briefly reports seeking=false before a keyframe can play. Metadata
+  // and a resolved seek setter are not proof that the decoder has settled.
+  const element={paused:false,seeking:false,readyState:1,videoWidth:640};
+  const advance=()=>{
+    if(Date.now()<decodeAt)return;
+    decoded=true;element.readyState=4;
+    position=basePosition+(Date.now()-decodeAt)/1000;
+    frames=327+Math.floor((Date.now()-decodeAt)/1000*30);
+  };
+  element.getVideoPlaybackQuality=()=>{advance();return {totalVideoFrames:frames};};
+  const player={getPaused:async()=>false,getSourceType:()=> 'hls',getVideoElement:()=>element,
+    getCurrentTime:async()=>{advance();return position;},setCurrentTime:async n=>{
+      seeks.push({at:Date.now(),position:n});position=basePosition=n;
+      decodeAt=Date.now()+(decoded?100:3000);element.readyState=1;return n;
+    }};
+  const state={watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',
+    nativePlayback:{mode:'AUDIO',audioIsPlaying:true,audioPlayWhenReady:true}};
+  const context={state,Date,setTimeout,console:{warn(){}},usesNativeUnifiedAudio:()=>true,
+    playbackPositionSeconds:()=>606+Date.now()/1000};
+  const start=mainSource.indexOf('async function waitForVimeoHandoffReady(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function videoAudioPlaybackItem(',start))+'\nthis.wait=waitForVimeoHandoffReady;',context);
+  let settled=false,result;
+  const transaction=context.wait(player,'lecture',15000).then(value=>{settled=true;result=value;});
+  for(let i=0;i<170&&!settled;i++){
+    t.mock.timers.tick(100);
+    for(let j=0;j<12;j++)await Promise.resolve();
+  }
+  await transaction;
+  assert.ok(result>609,'A buffered HLS destination must become synchronized instead of restarting its pending decode');
+  assert.ok(seeks.every(s=>s.at>=3000),'Do not replace a pending keyframe with another live-clock seek');
+  assert.ok(Math.abs(result-context.playbackPositionSeconds())<=1.8,'The completed transfer must retain the live Audio position');
+});
 test('HLS handoff gives a distant segment time to decode without relaxing frame or position checks',async()=>{
   const early=handoffFixture({framesReadyAfterMs:9000});
   assert.equal(await early.wait(early.player,'lecture',8000),null,'An eight-second wait must reject the still-frozen picture');
@@ -219,6 +255,40 @@ test('logout shows the start of the sign-in form after a scrolled account profil
   runInNewContext(mainSource.slice(start,mainSource.indexOf('async function updateProfile(',start))+'\nthis.logout=logout;',context);
   await context.logout();assert.equal(state.user,null);assert.equal(state.accountSection,'profile');
   assert.equal(scrolled,0,'Email and password must be reachable immediately after logout');
+});
+test('restart restores the exact Drive-inclusive catalog cache and retains legacy caches',async()=>{
+  for(const path of ['/video-map?driveLibrary=1','/video-map']) {
+    const video={id:'drivev-restart',title:'Saved Drive lecture'};
+    const state={counter:1,trends:{}};
+    const cache=new Map([['bootstrap:'+path,{data:[video],savedAt:123}]]);
+    const context={state,Math,Map,console:{warn(){}},loadMetadata:async()=>{},
+      offlineCacheGet:async key=>cache.get(key)||null,enrichVideo:v=>v,enrichAudio:v=>v,
+      itemDate:()=>0,videoId:v=>v.id,rawAudioId:v=>v.id,render(){}};
+    const start=mainSource.indexOf('async function hydrateInitialCatalogCache(');
+    runInNewContext(mainSource.slice(start,mainSource.indexOf('async function bootstrap(',start))+'\nthis.hydrate=hydrateInitialCatalogCache;',context);
+    assert.equal(await context.hydrate(),true,'The saved '+path+' catalog must be usable after process restart');
+    assert.equal(state.loading,false);assert.equal(state.videoById.get(video.id),video);
+  }
+});
+test('ready catalog and restored account remain usable while secondary startup feeds are pending',async()=>{
+  const state={libraryReady:false,loading:true,counter:1,trends:{},screen:'home'};
+  const rendered=[];const stalled=new Promise(()=>{});
+  const context={state,Map,console:{error(){},warn(){}},bootstrapInFlight:false,
+    loadMetadata:async()=>{},initNativeDownloader:async()=>{},
+    bootstrapJson:async()=>[{id:'lecture'}],bootstrapJsonOr:async(_,fallback)=>fallback,
+    enrichVideo:v=>v,enrichAudio:v=>v,itemDate:()=>0,videoId:v=>v.id,rawAudioId:v=>v.id,
+    restoreSession:async()=>{state.user={id:1};state.playlists=[{id:'server-playlist'}];},
+    loadSponsorRibbon:()=>stalled,loadScheduleData:()=>stalled,loadLiveStatus:()=>stalled,
+    handleAppReturn:async()=>{},render(){rendered.push({loading:state.loading,loggedIn:!!state.user});},
+    updateReconnectTimer(){}};
+  const start=mainSource.indexOf('async function bootstrap(options');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('async function restoreSession(',start))+'\nthis.bootstrap=bootstrap;',context);
+  const boot=context.bootstrap({initial:true});
+  for(let i=0;i<24;i++)await Promise.resolve();
+  assert.equal(state.libraryReady,true);assert.equal(state.playlists[0]?.id,'server-playlist');
+  assert.equal(state.loading,false,'Secondary sponsor/schedule/live requests must not retain the loading screen');
+  assert.ok(rendered.some(r=>!r.loading&&r.loggedIn),'The restored account must render before secondary requests complete');
+  await boot;
 });
 test('MP4 handoff waits for the following byte range before transferring sound',async()=>{
   for(const [ahead,expected] of [[1,false],[15,true]]) {

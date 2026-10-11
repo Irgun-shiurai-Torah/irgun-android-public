@@ -2245,11 +2245,14 @@ async function hydrateInitialCatalogCache() {
   try {
     await loadMetadata();
     const keys = [
-      '/video-map', '/audio-map', '/trending?period=week&limit=2500',
+      '/video-map?driveLibrary=1', '/audio-map', '/trending?period=week&limit=2500',
       '/trending?period=month&limit=2500', '/trending?period=all&limit=2500',
       '/shiur-view-count', '/like-counts'
     ];
     const cached = await Promise.all(keys.map(path => offlineCacheGet(`bootstrap:${path}`)));
+    // Read the same catalog key written by bootstrapJson. Keep older installs'
+    // pre-Drive cache available until their first complete catalog refresh.
+    if (!Array.isArray(cached[0]?.data)) cached[0] = await offlineCacheGet('bootstrap:/video-map');
     const videoCache = cached[0];
     if (!videoCache || !Array.isArray(videoCache.data)) return false;
     const videos = videoCache.data;
@@ -2319,8 +2322,15 @@ async function bootstrap(options = {}) {
     state.likeCounts = likeCounts || {};
     state.error = '';
 
+    // The catalog is complete. Account restoration and secondary feeds must
+    // not hold the whole app behind its initial loading screen.
+    state.loading = false;
+    render();
     await restoreSession();
-    await Promise.all([loadSponsorRibbon(), loadScheduleData(), loadLiveStatus()]);
+    render();
+    Promise.all([loadSponsorRibbon(), loadScheduleData(), loadLiveStatus()])
+      .then(() => render())
+      .catch(error => console.warn('Secondary startup feeds unavailable', error));
     await handleAppReturn();
   } catch (error) {
     console.error(error);
@@ -4886,8 +4896,8 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
   let lastPosition = null;
   // A parked HLS stream may take time to fetch a distant segment. Repeatedly
   // setting currentTime every 90ms aborts the previous MSE seek and prevents
-  // any new frame from decoding. Correct large drifts sparingly and never
-  // restart a seek while HTMLMediaElement.seeking is still true.
+  // any new frame from decoding. Android can also clear seeking briefly before
+  // the keyframe plays. Require actual motion before correcting another drift.
   let lastSeekCorrectionAt = Number.NEGATIVE_INFINITY;
   while (Date.now() < deadline) {
     if (!state.watchAudioToVideoHandoff || String(state.watchAudioToVideoHandoffId || '') !== String(videoKey || '')) {
@@ -4902,18 +4912,8 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
       Promise.resolve(player?.getPaused?.()).catch(()=>true),
       Promise.resolve(player?.getCurrentTime?.()).catch(()=>null)
     ]);
-    let videoNow = Number(current);
-    const mediaElement = player?.getVideoElement?.();
-    const needsSeek = Number.isFinite(videoNow) && !synchronized(videoNow, sourceNow, 1.8);
-    if (needsSeek && !mediaElement?.seeking && Date.now() - lastSeekCorrectionAt >= 1500) {
-      lastSeekCorrectionAt = Date.now();
-      const corrected = await Promise.race([
-        Promise.resolve(player.setCurrentTime(sourceNow)).catch(()=>null),
-        new Promise(resolve=>setTimeout(()=>resolve(null),900))
-      ]);
-      if (corrected != null && Number.isFinite(Number(corrected))) videoNow = Number(corrected);
-    }
-    if (!paused && Number.isFinite(videoNow) && synchronized(videoNow, sourceNow, 1.8)) {
+    const videoNow = Number(current);
+    if (!paused && Number.isFinite(videoNow)) {
       // Confirm the destination clock is live, not merely a resolved play() call.
       const element = player?.getVideoElement?.();
       const frameCount = () => {
@@ -4937,8 +4937,18 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
           if (element.buffered.start(i) <= again && element.buffered.end(i) >= again + required) bufferedAhead = true;
         }
       }
-      if (Number.isFinite(again) && again > videoNow + 0.05 && synchronized(again, stillSource, 1.8) && movingPicture && bufferedAhead) {
-        return again;
+      if (Number.isFinite(again) && again > videoNow + 0.05 && movingPicture && bufferedAhead) {
+        if (synchronized(again, stillSource, 1.8)) return again;
+        // Let the first seek decode and actually play before chasing Audio's
+        // advancing clock. Seeking as soon as metadata/currentTime resolve
+        // repeatedly discards the destination's pending keyframe on API 35.
+        if (!element?.seeking && Date.now() - lastSeekCorrectionAt >= 1500) {
+          lastSeekCorrectionAt = Date.now();
+          await Promise.race([
+            Promise.resolve(player.setCurrentTime(stillSource)).catch(()=>null),
+            new Promise(resolve=>setTimeout(()=>resolve(null),900))
+          ]);
+        }
       }
       lastPosition = again;
     } else {
