@@ -9,6 +9,7 @@ import { Share } from '@capacitor/share';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { createAndroidHlsPlayer } from './android-hls-video.js';
 import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } from './offline-validation.js';
+import { downloadOfflineAudio } from './offline-download.js';
 import { vimeoEmbedSource } from './vimeoEmbed.js';
 import { AppleSignIn, SignInScope } from '@capawesome/capacitor-apple-sign-in';
 
@@ -504,6 +505,7 @@ async function saveOffline(kind, id) {
   refreshOfflineButtonsForKey(key);
   if (state.screen === 'library' && state.librarySection === 'downloads') render();
   let listener = null;
+  let expectedBytes = 0;
   try {
     await Filesystem.mkdir({ directory: Directory.Data, path:'irgun-offline', recursive:true }).catch(() => {});
     const fileInfo = await Filesystem.getUri({ directory: Directory.Data, path });
@@ -511,26 +513,48 @@ async function saveOffline(kind, id) {
       if (String(progress?.url || '') !== url) return;
       const total = Number(progress?.contentLength) || 0;
       const bytes = Number(progress?.bytes) || 0;
+      if (Number.isFinite(total) && total > 0) expectedBytes = total;
       const percent = total > 0 ? Math.max(0, Math.min(100, Math.round(bytes / total * 100))) : 0;
-      state.offlineJobs.set(key, { percent, bytes, total, title });
+      state.offlineJobs.set(key, { ...state.offlineJobs.get(key), percent, bytes, total, title });
       const node = document.querySelector(`[data-offline-progress="${CSS.escape(key)}"]`);
       if (node) node.textContent = total > 0 ? `${percent}%` : (currentLanguage() === 'he' ? 'שומר…' : 'Saving…');
       refreshOfflineButtonsForKey(key);
     });
     const headers = { 'X-Irgun-App':'1' };
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
-    await FileTransfer.downloadFile({ url, path:fileInfo.uri, headers, progress:true });
+    const transferOptions = { url, path:fileInfo.uri, headers, progress:true };
+    const transfer = Capacitor.getPlatform() === 'android'
+      ? await downloadOfflineAudio(transferOptions, {
+          download:options => FileTransfer.downloadFile(options),
+          removePartial:async () => {
+            try { await Filesystem.deleteFile({ directory:Directory.Data, path }); }
+            catch (error) {
+              if (String(error?.code || '') !== 'OS-PLUG-FILE-0008') throw error;
+            }
+          },
+          onRetry:({ attempt, code }) => {
+            console.warn('Offline connection interrupted; restarting download', { attempt, code,
+              bytes:Number(state.offlineJobs.get(key)?.bytes) || 0 });
+            expectedBytes = 0;
+            state.offlineJobs.set(key, { percent:0, bytes:0, total:0, title, attempt });
+            refreshOfflineButtonsForKey(key);
+          }
+        })
+      : (await FileTransfer.downloadFile(transferOptions), { attempts:1 });
     const stat = await Filesystem.stat({ directory:Directory.Data, path }).catch(() => ({}));
     // Check actual on-device bytes, not the network progress total.
     const verifiedBytes = Number(stat?.size) || 0;
     const durationSeconds = Math.max(0,Number(item.duration)||0);
+    if (expectedBytes > 0 && verifiedBytes !== expectedBytes) {
+      throw new Error('Incomplete audio download: '+verifiedBytes+' of '+expectedBytes+' bytes');
+    }
     if (!isPlausibleOfflineAudio(verifiedBytes,durationSeconds)) {
       throw new Error('Incomplete or non-audio download: '+verifiedBytes+' bytes; expected at least '+
         minimumOfflineAudioBytes(durationSeconds)+' bytes for this lecture');
     }
     state.offlineDownloads.set(key, {
       key, kind:normalizedKind, id:rawId, sourceId, title, subtitle,
-      uri:fileInfo.uri, path, bytes:verifiedBytes, durationSeconds,
+      uri:fileInfo.uri, path, bytes:verifiedBytes, durationSeconds, downloadAttempts:transfer.attempts,
       savedAt:Date.now()
     });
     state.offlineJobs.delete(key);
@@ -540,7 +564,8 @@ async function saveOffline(kind, id) {
   } catch (error) {
     // Expose the real error for QA and diagnostics. A failed 2 KB HTML
     // response must never be mistaken for a downloaded hour-long MP3.
-    state.offlineSaveLastError = String(error?.message || error || 'Unknown download error').slice(0,350);
+    state.offlineSaveLastError = ((error?.code ? String(error.code)+': ' : '')+
+      String(error?.message || error || 'Unknown download error')).slice(0,350);
     console.warn('Offline save failed', error);
     // Do not leave an invalid partial file in storage for a later retry.
     await Filesystem.deleteFile({ directory:Directory.Data, path }).catch(() => {});

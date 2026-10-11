@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAndroidHlsPlayer } from '../src/android-hls-video.js';
 import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } from '../src/offline-validation.js';
+import { downloadOfflineAudio } from '../src/offline-download.js';
 
 class Element extends EventTarget {
   constructor(tag) {
@@ -230,6 +231,84 @@ test('invalid Vimeo IDs never turn into a different numeric video',()=>{
 const {readFileSync} = await import('node:fs');
 const {runInNewContext} = await import('node:vm');
 const mainSource = readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
+
+test('an interrupted native MP3 GET cleans its partial file before a single bounded retry',async()=>{
+  const events=[];let calls=0;
+  const options={url:'https://api.example.test/audio/lecture',path:'file:///audio.mp3',headers:{'X-Irgun-App':'1'},progress:true};
+  const result=await downloadOfflineAudio(options,{
+    download:async received=>{assert.equal(received,options);events.push('download');if(++calls===1)throw {code:'OS-PLUG-FLTR-0008'};},
+    removePartial:async()=>events.push('cleanup'),onRetry:async info=>events.push('attempt:'+info.attempt),
+    delay:async ms=>{assert.equal(ms,1000);events.push('backoff');}
+  });
+  assert.equal(result.attempts,2);assert.deepEqual(events,['download','cleanup','attempt:2','backoff','download']);
+});
+test('persistent native connection failures stay failed after the bounded retry',async()=>{
+  let calls=0,cleanups=0;
+  const error={code:'OS-PLUG-FLTR-0008',message:'Failed to connect to server.'};
+  await assert.rejects(downloadOfflineAudio({}, {download:async()=>{calls++;throw error;},
+    removePartial:async()=>cleanups++,delay:async()=>{}}),received=>received===error);
+  assert.equal(calls,2);assert.equal(cleanups,1);
+});
+test('HTTP, authentication, permission and unknown download errors are never retried',async()=>{
+  for(const error of [{code:'OS-PLUG-FLTR-0010',data:{httpStatus:503}},
+    {code:'OS-PLUG-FLTR-0010',data:{httpStatus:401}},{code:'OS-PLUG-FLTR-0006'},
+    {code:'OS-PLUG-FLTR-0011'},{code:'OS-PLUG-FLTR-0008',httpStatus:500},
+    new Error('Incomplete or non-audio download')]){
+    let calls=0;
+    await assert.rejects(downloadOfflineAudio({}, {download:async()=>{calls++;throw error;},
+      removePartial:async()=>{throw Error('A non-transport failure must not reach retry cleanup');}}),received=>received===error);
+    assert.equal(calls,1);
+  }
+});
+test('a partial file that cannot be removed prevents another native transfer',async()=>{
+  let calls=0;
+  const error=new Error('Cannot delete partial file');
+  await assert.rejects(downloadOfflineAudio({}, {download:async()=>{calls++;throw {code:'OS-PLUG-FLTR-0008'};},
+    removePartial:async()=>{throw error;}}),received=>received===error);
+  assert.equal(calls,1);
+});
+
+function offlineSaveFixture({failure,actualBytes=60268750}={}) {
+  const id='1233236785:585d5d53db',url='https://api.example.test/audio/'+encodeURIComponent(id),key='video:'+id;
+  const item={id,hasAudio:true,duration:3663};let progress,calls=0,bytes=0,removed=0;
+  const state={offlineDownloads:new Map(),offlineJobs:new Map(),videoById:new Map([[id,item]]),screen:'shiurim',token:''};
+  const events=[];
+  const context={state,API:'https://api.example.test',CSS:{escape:value=>value},Date,console:{warn(){}},
+    Capacitor:{isNativePlatform:()=>true,getPlatform:()=> 'android'},Directory:{Data:'DATA'},
+    Filesystem:{mkdir:async()=>{},getUri:async()=>({uri:'file:///audio.mp3'}),stat:async()=>({size:bytes}),
+      deleteFile:async()=>{events.push('cleanup');bytes=0;removed++;}},
+    FileTransfer:{addListener:async(_,listener)=>{progress=listener;return {remove:async()=>removed++};},
+      downloadFile:async()=>{
+        events.push('download');calls++;
+        if(failure==='connection'&&calls===1){bytes=4301864;progress({url,bytes,contentLength:60268750});throw {code:'OS-PLUG-FLTR-0008'};}
+        if(failure==='persistent'||failure==='http'){
+          bytes=4301864;progress({url,bytes,contentLength:60268750});
+          throw {code:failure==='http'?'OS-PLUG-FLTR-0010':'OS-PLUG-FLTR-0008',message:'Failed download'};
+        }
+        bytes=actualBytes;progress({url,bytes,contentLength:60268750});
+      }},
+    downloadOfflineAudio:(options,deps)=>downloadOfflineAudio(options,{...deps,delay:async()=>{}}),
+    isPlausibleOfflineAudio,minimumOfflineAudioBytes,audioDownloadPath,
+    offlineKeyFor:()=>key,usageAnalytics:{event(){}},videoId:()=>id,mediaApiId:()=>id,
+    itemTitle:()=> 'Shiur',itemSubtitle:()=> 'Speaker',document:{querySelector:()=>null},
+    refreshOfflineButtonsForKey(){},refreshInteractiveUi(){},persistOfflineDownloads(){},setToast(){},currentLanguage:()=> 'en'};
+  const start=mainSource.indexOf('async function saveOffline(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('async function deleteOffline(',start))+'\nthis.save=saveOffline;',context);
+  return {state,events,key,save:()=>context.save('video',id),calls:()=>calls,removed:()=>removed,bytes:()=>bytes};
+}
+test('the actual Offline Save recovers the observed 4.3MB interruption and records only the complete MP3',async()=>{
+  const f=offlineSaveFixture({failure:'connection'});await f.save();
+  assert.equal(f.calls(),2);assert.deepEqual(f.events,['download','cleanup','download']);
+  const record=f.state.offlineDownloads.get(f.key);assert.equal(record.bytes,60268750);assert.equal(record.downloadAttempts,2);
+  assert.equal(f.state.offlineJobs.size,0);assert.equal(f.state.offlineSaveLastError,'');assert.equal(f.removed(),2);
+});
+test('the actual Offline Save never marks a failed, truncated or HTTP-error transfer saved',async()=>{
+  for(const options of [{failure:'persistent'},{failure:'http'},{actualBytes:4301864}]){
+    const f=offlineSaveFixture(options);await f.save();
+    assert.equal(f.state.offlineDownloads.size,0);assert.equal(f.state.offlineJobs.size,0);assert.equal(f.bytes(),0);
+    assert.ok(f.state.offlineSaveLastError);assert.equal(f.calls(),options.failure==='persistent'?2:1);
+  }
+});
 function authRenderFixture({busy=false,mode='login'}={}) {
   const state={screen:'account',authMode:mode,authBusy:busy,user:null};
   const field=id=>({id,value:'',selectionStart:3,selectionEnd:3,focus(){document.activeElement=this;},setSelectionRange(a,b){this.selectionStart=a;this.selectionEnd=b;}});

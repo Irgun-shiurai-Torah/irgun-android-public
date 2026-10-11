@@ -324,7 +324,7 @@ try{
       const start=await read();audibleAudio(start);await delay(3500);
       const end=await read();audibleAudio(end);
       assert.ok(end.native.audioPositionMs>start.native.audioPositionMs+1400,'Downloaded audio must continue playing without internet');
-      checks('Actual downloaded audio played while offline',{bytes:record.bytes});
+      checks('Actual downloaded audio played while offline',{bytes:record.bytes,downloadAttempts:record.downloadAttempts});
     }finally{await setOnline(true);}
     const present=await read();
     assert.ok(present.offline.some(x=>x.key===record.key&&x.bytes>0),'Downloaded file disappeared before deletion');
