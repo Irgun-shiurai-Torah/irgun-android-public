@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 const pkg = 'org.irgunshiuraitorah.app';
 const delay = ms => new Promise(r => setTimeout(r, ms));
 const adb = (...args) => execFileSync('adb', args, { encoding:'utf8', timeout:30000 }).trim();
-const report = {startedAt:new Date().toISOString(),checks:[],failures:[], device:'Android 11 emulator'};
+const report = {startedAt:new Date().toISOString(),checks:[],failures:[], device:'Android emulator'};
 const ensureReport = () => mkdirSync('emulator-report',{recursive:true});
 let ws,seq=0,pending=new Map(),bounds;
 const screenshot = name => {try {writeFileSync('emulator-report/'+name+'.png', execFileSync('adb',['exec-out','screencap','-p'],{timeout:15000}));} catch {}};
@@ -125,6 +125,8 @@ async function tap(selector){
 function checks(label,details={}) {report.checks.push({label,...details});save();}
 async function section(name,fn){
   report.activeSection=name;save();
+  report.device = String(adb('shell','getprop','ro.build.version.release')).trim();
+  report.androidApi = Number(adb('shell','getprop','ro.build.version.sdk'));
   try {await fn();checks(name);console.log('PASS: '+name);}
   catch(e){const error=String(e.stack||e);report.failures.push({name,error});screenshot('failed-'+report.failures.length);console.error('FAIL: '+name+': '+error.slice(0,1400));}
   finally{save();}
@@ -150,7 +152,13 @@ function audibleAudio(s){
 async function videoReady(){
   const current=await read();
   if(current.watchMode!=='video')await tap('[data-watch-mode="video"]');
-  return await wait(s=>s.watchMode==='video'&&s.video&&!s.video.paused&&s.video.ready>=2&&s.native.mode==='VIDEO','Video authority did not return',65000);
+  return await wait(
+    s=>s.watchMode==='video'&&s.video&&!s.video.paused&&s.video.ready>=2&&s.video.width>0&&
+      !s.video.muted&&s.video.volume>0&&s.native.mode==='VIDEO'&&
+      (typeof s.native.audioOutputVolume!=='number'||s.native.audioOutputVolume===0),
+    'Video did not regain moving, audible VIDEO authority without overlapping native audio',
+    65000
+  );
 }
 async function audioReady(){
   const current=await read();
@@ -274,6 +282,9 @@ try{
     const saved=await wait(s=>s.offline.some(x=>x.id===before.watchId&&x.bytes>0),'Audio file was not downloaded to Android local storage',180000);
     const record=saved.offline.find(x=>x.id===before.watchId);
     assert.ok(record?.uri&&record.bytes>0,'Offline download requires a verified local URI and file size');
+    const beforeAudio=await read();
+    assert.ok(beforeAudio.video&&!beforeAudio.video.paused&&beforeAudio.native.mode==='VIDEO',
+      'Downloading an offline file interrupted an actively playing video before switching to Audio');
     const audio=await audioReady();
     assert.equal(audio.currentOffline,true,'Audio playback must select the offline file, not the network URL');
     try{
