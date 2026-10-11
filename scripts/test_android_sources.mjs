@@ -255,3 +255,21 @@ test('offline audio refuses missing, zero and short downloaded files even withou
   assert.equal(isPlausibleOfflineAudio(8192),false);
   assert.equal(isPlausibleOfflineAudio(65536),true);
 });
+
+test('A paused/stalled HLS seek is not restarted continuously while Audio continues playing', async () => {
+  const f=handoffFixture({movingClock:false,movingFrames:false});
+  const player=f.player, element=player.getVideoElement();
+  let attempts=0;
+  const prior=player.setCurrentTime;
+  player.setCurrentTime=async seconds=>{attempts++;return prior(seconds);};
+  const result=await f.wait(player,'lecture',4000);
+  assert.equal(result,null,'Frozen video must not be accepted as a successful handoff');
+  assert.ok(attempts<=3,'Stalled WebView video must not restart HLS seeks every 90ms (got '+attempts+')');
+  element.seeking=true;
+  const f2=handoffFixture({movingClock:false,movingFrames:false});
+  f2.player.getVideoElement().seeking=true;
+  let racing=0;
+  f2.player.setCurrentTime=async n=>{racing++;return n;};
+  assert.equal(await f2.wait(f2.player,'lecture',2800),null);
+  assert.equal(racing,0,'An active media element seek must not be interrupted with a second seek');
+});

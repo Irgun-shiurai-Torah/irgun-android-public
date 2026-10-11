@@ -4881,6 +4881,11 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
     return position >= source - tolerance && position <= source + lead;
   };
   let lastPosition = null;
+  // A parked HLS stream may take time to fetch a distant segment. Repeatedly
+  // setting currentTime every 90ms aborts the previous MSE seek and prevents
+  // any new frame from decoding. Correct large drifts sparingly and never
+  // restart a seek while HTMLMediaElement.seeking is still true.
+  let lastSeekCorrectionAt = Number.NEGATIVE_INFINITY;
   while (Date.now() < deadline) {
     if (!state.watchAudioToVideoHandoff || String(state.watchAudioToVideoHandoffId || '') !== String(videoKey || '')) {
       if (usesNativeUnifiedAudio()) return null;
@@ -4895,14 +4900,17 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
       Promise.resolve(player?.getCurrentTime?.()).catch(()=>null)
     ]);
     let videoNow = Number(current);
-    if (Number.isFinite(videoNow) && !synchronized(videoNow, sourceNow, 0.75)) {
+    const mediaElement = player?.getVideoElement?.();
+    const needsSeek = Number.isFinite(videoNow) && !synchronized(videoNow, sourceNow, 1.8);
+    if (needsSeek && !mediaElement?.seeking && Date.now() - lastSeekCorrectionAt >= 1500) {
+      lastSeekCorrectionAt = Date.now();
       const corrected = await Promise.race([
         Promise.resolve(player.setCurrentTime(sourceNow)).catch(()=>null),
         new Promise(resolve=>setTimeout(()=>resolve(null),900))
       ]);
       if (corrected != null && Number.isFinite(Number(corrected))) videoNow = Number(corrected);
     }
-    if (!paused && Number.isFinite(videoNow) && synchronized(videoNow, sourceNow, 0.75)) {
+    if (!paused && Number.isFinite(videoNow) && synchronized(videoNow, sourceNow, 1.8)) {
       // Confirm the destination clock is live, not merely a resolved play() call.
       const element = player?.getVideoElement?.();
       const frameCount = () => {
@@ -4926,7 +4934,7 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
           if (element.buffered.start(i) <= again && element.buffered.end(i) >= again + required) bufferedAhead = true;
         }
       }
-      if (Number.isFinite(again) && again > videoNow + 0.05 && synchronized(again, stillSource, 0.85) && movingPicture && bufferedAhead) {
+      if (Number.isFinite(again) && again > videoNow + 0.05 && synchronized(again, stillSource, 1.8) && movingPicture && bufferedAhead) {
         return again;
       }
       lastPosition = again;

@@ -246,14 +246,16 @@ try{
 
   await section('Mini player and Picture-in-Picture preserve player, progress and controls',async()=>{
     await closePlayer();const before=await videoReady();audibleVideo(before);
-    await tap('[data-minimize-watch]');
-    const mini=await wait(s=>s.minimized&&s.hostClass.includes('watch-mini-host'),'Video mini player did not open');
-    noDuplicatePlayback(mini);await delay(2100);
-    const miniNext=await read();assert.ok(miniNext.video.time>mini.video.time+0.7,'Mini player video stopped');
-    await tap('[data-expand-watch]');
-    const expanded=await wait(s=>!s.minimized&&s.hostClass.includes('watch-full-host'),'Fullscreen view did not restore');
-    noDuplicatePlayback(expanded);
-    assert.ok(expanded.video.time>=miniNext.video.time-2,'Mini->full transition restarted video');
+    for(let attempt=0;attempt<3;attempt++) {
+      await tap('[data-minimize-watch]');
+      const mini=await wait(s=>s.minimized&&s.hostClass.includes('watch-mini-host'),'Video mini player did not open');
+      noDuplicatePlayback(mini);await delay(2100);
+      const miniNext=await read();assert.ok(miniNext.video.time>mini.video.time+0.7,'Mini player video stopped on cycle '+attempt);
+      await tap('[data-expand-watch]');
+      const expanded=await wait(s=>!s.minimized&&s.hostClass.includes('watch-full-host'),'Fullscreen view did not restore');
+      noDuplicatePlayback(expanded);
+      assert.ok(expanded.video.time>=miniNext.video.time-2,'Mini->full transition restarted video');
+    }
     await tap('[data-video-pip]');
     const pip=await wait(s=>s.pipActive,'Android system PiP was not entered',20000);
     assert.equal(pip.watchMode,'video');
