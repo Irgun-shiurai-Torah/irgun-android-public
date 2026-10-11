@@ -180,7 +180,10 @@ try{
  // start playback through a real Android touch before asserting progress.
  if((await read()).watchMode!=='audio')await tap('audioMode');
  await wait(s=>s.watchMode==='audio','Audio mode did not open for real playback history');
- if(!(await read()).audioPlaying)await tap('audioPlay');
+ const audioStart=await read();
+ // A buffering Media3 source may already have accepted Play. Toggling its
+ // button as it becomes ready would immediately pause the real playback.
+ if(!audioStart.audioPlaying&&!audioStart.audioPlayWhenReady)await tap('audioPlay');
  const playbackObserved=await wait(s=>s.audioPlaying&&s.audioTime>1,'Native Media3 audio must start and advance before history is tested');
  await delay(3500);
  const laterPlayback=await read();

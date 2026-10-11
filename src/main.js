@@ -5273,13 +5273,15 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
       state.watchAudioToVideoHandoff = false;
       state.watchAudioToVideoHandoffId = '';
       state.watchAudioToVideoTargetSeconds = 0;
+      // Fence queued source events before pausing the failed destination. Its
+      // asynchronous pause callback must not overwrite the Audio rollback.
+      setPlaybackAuthorityFence('AUDIO', id, 5000);
       await setVimeoHandoffMuted(player, true);
       try { await player.pause(); } catch (_) {}
       // Native authority may have changed before a commit error. Restore the
       // audible source and its live shadow clock, rather than rendering Audio
       // over a silent VIDEO owner with a cleared current item.
       state.current = audioItem || videoAudioPlaybackItem(video, id);
-      setPlaybackAuthorityFence('AUDIO', id, 5000);
       const native = nativeMediaPlugin();
       let snapshot = await Promise.resolve(native.getState()).catch(()=>state.nativePlayback);
       const keepPlaying = !shouldPlay || Boolean(snapshot?.audioIsPlaying || snapshot?.audioPlayWhenReady);
@@ -7560,9 +7562,13 @@ function setPlaybackAuthorityFence(mode, lectureId = '', ttlMs = 3500) {
 }
 
 function nativeSnapshotConflicts(snapshot) {
-  if (state.watchAudioToVideoHandoff && String(snapshot?.mode || '') === 'AUDIO' &&
-      String(snapshot.lectureId || '') === String(state.watchAudioToVideoHandoffId || '')) return false;
   const fence = state.playbackAuthorityFence;
+  if (state.watchAudioToVideoHandoff && String(snapshot?.mode || '') === 'AUDIO' &&
+      String(snapshot.lectureId || '') === String(state.watchAudioToVideoHandoffId || '')) {
+    // Follow the live Audio clock during preparation, then reject queued AUDIO
+    // snapshots as soon as native VIDEO authority has actually been confirmed.
+    return state.nativePlayback?.mode === 'VIDEO' && fence?.mode === 'VIDEO';
+  }
   if (!fence) return false;
   if (Date.now() > Number(fence.expiresAt || 0)) {
     state.playbackAuthorityFence = null;
@@ -7677,14 +7683,13 @@ function reconcileNativeWatchAudio(snapshot) {
   // AUDIO remains the owner while the foreground destination seeks/buffers.
   // Its position callbacks must not park that destination or replace its view.
   if (state.watchAudioToVideoHandoff && String(state.watchAudioToVideoHandoffId || '') === String(snapshot.lectureId || '')) return;
-  // A Home handoff can complete while WebView recovery is still pending.
-  // Cancel that work and pause the parked player when native Audio owns media.
-  if (state.watchVimeo) Promise.resolve(state.watchVimeo.pause()).catch(() => {});
   const wasVideo = state.watchMode === 'video';
   ensureNativeAudioCurrentForWatch(snapshot);
   state.nativeBackgroundHandoff = false;
   state.watchMode = 'audio';
   state.watchVideoPlaying = false;
+  // Change ownership before pause emits callbacks, and cancel old recovery.
+  if (state.watchVimeo) Promise.resolve(state.watchVimeo.pause()).catch(() => {});
   state.watchResumeSeconds = Math.max(0, Number(snapshot.currentPositionMs) || Number(snapshot.audioPositionMs) || 0) / 1000;
   parkHostedVideoForAudio();
   // Home can finish the native handoff after WebView events were suspended. On
@@ -7978,7 +7983,8 @@ async function syncNativeMediaSession(item, playing = true, position = 0, durati
     // VIDEO -> AUDIO is moving toward Media3, ignore late Vimeo events. While
     // AUDIO -> VIDEO is waiting for explicit native confirmation, keep Media3 in
     // AUDIO until finishAudioToVideoHandoff() commits successfully.
-    if (state.watchVideoToAudioHandoff || state.watchAudioToVideoHandoff || state.watchMode !== 'video') return;
+    if (state.watchVideoToAudioHandoff || state.watchAudioToVideoHandoff || state.watchMode !== 'video' ||
+        state.playbackAuthorityFence?.mode === 'AUDIO') return;
     await PlaybackController.setVideoState(item, playing, position, duration, !state.nativeBackgroundHandoff);
   }
 }

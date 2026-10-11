@@ -6,6 +6,7 @@ on:
     branches: [main, test/android-release-regressions]
     paths:
       - '.github/release-tests/**'
+      - '.github/account-tests/**'
       - '.github/android-native-observer/**'
       - 'scripts/android-native-hierarchy.mjs'
       - 'scripts/android-emulator-prepare.py'
@@ -93,6 +94,7 @@ jobs:
           script: |
             set -e
             mkdir -p emulator-report
+            trap 'adb logcat -d > emulator-report/android-playback.log || true' EXIT
             adb install -r android/qa-native-observer/build/outputs/apk/debug/qa-native-observer-debug.apk
             adb install -r android/app/build/outputs/apk/debug/app-debug.apk
             adb logcat -c

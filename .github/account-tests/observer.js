@@ -60,6 +60,7 @@ window.ISTAccountTest = { snapshot() {
     follows:[...state.follows.keys()],history:state.history.map(x=>historyRowId(x)),
     historyPositions:state.history.map(x=>({id:historyRowId(x),progressSeconds:Number(x.progressSeconds||x.positionSeconds||0),mediaType:String(x.mediaType||'')})),
     watchMode:String(state.watchMode||''),audioPlaying:state.nativePlayback?.mode==='AUDIO'&&Boolean(state.nativePlayback?.audioIsPlaying),
+    audioPlayWhenReady:state.nativePlayback?.mode==='AUDIO'&&Boolean(state.nativePlayback?.audioPlayWhenReady),
     audioTime:Number(state.nativePlayback?.audioPositionMs||0)/1000,
     currentId:String(state.current?.id||''),nativeAudio:{
       mode:String(state.nativePlayback?.mode||''),lectureId:String(state.nativePlayback?.lectureId||''),

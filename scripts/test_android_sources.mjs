@@ -108,6 +108,21 @@ test('pausing while a fatal HLS fallback loads metadata cannot autoplay that fal
     assert.equal(video.paused,true);
   }});
 });
+test('a WebView decoder error which pauses HLS recovers MP4 with the accepted play intent',async()=>{
+  await fixture(recoverySources,'1233236785:585d5d53db',0,{Hls:RecoveringHls,onReady:async player=>{
+    const video=player.getVideoElement();let plays=0;
+    video.play=()=>{plays++;video.paused=false;return Promise.resolve();};
+    await player.play();
+    // Android reported error=3 and paused=true while the user was playing.
+    video.error={code:3};video.paused=true;video.readyState=0;
+    video.dispatchEvent(new Event('error'));
+    assert.equal(player.getSourceType(),'mp4');
+    video.error=null;video.readyState=1;video.dispatchEvent(new Event('loadedmetadata'));
+    await settleRecovery();
+    assert.equal(plays,2,'Recovery must resume the previously playing lecture');
+    assert.equal(video.paused,false);
+  }});
+});
 
 const {vimeoEmbedSource} = await import('../src/vimeoEmbed.js');
 test('actual unlisted Vimeo ID preserves its privacy hash separately',()=>{
@@ -224,6 +239,45 @@ test('live Audio callbacks keep the destination visible while handoff buffers',(
   const snapshot={mode:'AUDIO',lectureId:'lecture',currentPositionMs:601000};
   assert.equal(context.conflicts(snapshot),false);context.reconcile(snapshot);assert.equal(state.watchMode,'video');
 });
+test('queued Audio snapshots cannot overwrite confirmed Video authority during commit',()=>{
+  const state={watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',
+    nativePlayback:{mode:'VIDEO'},playbackAuthorityFence:{mode:'VIDEO',lectureId:'lecture',expiresAt:Date.now()+5000}};
+  const start=mainSource.indexOf('function nativeSnapshotConflicts(');
+  const context={state,Date};
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function nativeAudioPositionSeconds',start))+
+    '\nthis.conflicts=nativeSnapshotConflicts;',context);
+  assert.equal(context.conflicts({mode:'AUDIO',lectureId:'lecture'}),true);
+  assert.equal(context.conflicts({mode:'VIDEO',lectureId:'lecture'}),false);
+  state.nativePlayback.mode='AUDIO';
+  assert.equal(context.conflicts({mode:'AUDIO',lectureId:'lecture'}),false,'Preparation still follows live Audio');
+});
+test('delayed video source events cannot publish VIDEO over an Audio rollback',async()=>{
+  const state={watchMode:'video',playbackAuthorityFence:{mode:'AUDIO'}};
+  const calls=[];
+  const start=mainSource.indexOf('async function syncNativeMediaSession(');
+  const context={state,setNativePipEligibility(){},usesNativeUnifiedAudio:()=>true,
+    PlaybackController:{setVideoState:async(...args)=>calls.push(args)}};
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function clearNativeMediaSession(',start))+
+    '\nthis.publish=syncNativeMediaSession;',context);
+  await context.publish({id:'lecture'},false,613,3663,'video');
+  assert.equal(calls.length,0,'The paused destination must not override the restored Audio owner');
+  state.playbackAuthorityFence.mode='VIDEO';
+  await context.publish({id:'lecture'},true,613,3663,'video');
+  assert.equal(calls.length,1,'An explicit new Video selection still publishes normally');
+});
+test('native Audio reconciliation changes ownership before the parked player emits Pause',()=>{
+  let pauses=0;
+  const state={watchVideo:{id:'lecture'},watchMode:'video',watchVimeo:{pause(){
+    assert.equal(state.watchMode,'audio');pauses++;return Promise.resolve();
+  }}};
+  const start=mainSource.indexOf('function reconcileNativeWatchAudio(');
+  const context={state,videoId:v=>v.id,ensureNativeAudioCurrentForWatch(){},
+    parkHostedVideoForAudio(){},render(){},document:{getElementById(){return {};}}};
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('const PlaybackController =',start))+
+    '\nthis.reconcile=reconcileNativeWatchAudio;',context);
+  context.reconcile({mode:'AUDIO',lectureId:'lecture',currentPositionMs:613000});
+  assert.equal(pauses,1);assert.equal(state.watchResumeSeconds,613);
+});
 
 function resumeFixture({ready=600.35,commitFails=false,focusStopped=false}={}) {
   const item={id:'lecture'};
@@ -255,7 +309,8 @@ test('partial native commit rolls back to audible Audio at its advancing shadow 
   const f=resumeFixture({commitFails:true});assert.equal(await f.resume(),false);
   assert.equal(f.state.current,f.item);assert.equal(f.state.nativePlayback.mode,'AUDIO');
   assert.deepEqual(f.events.find(e=>typeof e==='object'),{position:603,playing:true,volume:1});
-  assert.ok(f.events.lastIndexOf('mute')<f.events.indexOf('AUDIO'));
+  assert.ok(f.events.indexOf('AUDIO')<f.events.indexOf('pause'),
+    'Audio ownership must be fenced before the failed destination emits Pause');
 });
 test('failed preparation restarts Audio if muted WebView playback took its focus',async()=>{
   const f=resumeFixture({ready:null,focusStopped:true});assert.equal(await f.resume(),false);

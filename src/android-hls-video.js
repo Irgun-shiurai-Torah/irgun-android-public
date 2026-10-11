@@ -173,7 +173,10 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let ignoreClickUntil = 0;
   let visualCheck = 0;
   let playbackIntent = 0;
+  let playbackWanted = false;
+  const playVideo = () => { playbackWanted = true; return video.play(); };
   const pausePlayback = () => {
+    playbackWanted = false;
     ++playbackIntent;
     ++visualCheck;
     video.pause();
@@ -267,7 +270,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   video.addEventListener('canplay', () => { if (hasVisibleFrame) loading.hidden = true; });
   video.addEventListener('volumechange', updateVolumeIcon);
   updateVolumeIcon();
-  const togglePlayback = () => video.paused ? video.play().catch(() => {}) : pausePlayback();
+  const togglePlayback = () => video.paused ? playVideo().catch(() => {}) : pausePlayback();
   playButton.addEventListener('click', togglePlayback);
   video.addEventListener('pointerdown', event => {
     if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
@@ -362,6 +365,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let hls = null;
   let activeSource = '';
   let failed = false;
+  let sourceReady = false;
   const initialPosition = Math.max(0, Number(resumeSeconds) || 0);
   const hasVimeoFallback = !String(videoId).startsWith('drivev-');
   const checkVisualPlayback = async () => {
@@ -573,8 +577,11 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   const recoverFromHlsFailure = async (info, Hls) => {
     if (failed || activeSource !== sources.hls) return;
     failed = true;
+    ++visualCheck;
     const position = Math.max(0, Number(video.currentTime) || initialPosition);
-    const shouldPlay = !video.paused;
+    // A decoder failure can set paused=true without a user Pause. Preserve the
+    // accepted play intent; explicit Pause/Audio handoff still cancels recovery.
+    const shouldPlay = playbackWanted;
     const intent = playbackIntent;
     const cancelled = () => destroyed || intent !== playbackIntent || document.hidden;
     if (sources.mp4) {
@@ -605,6 +612,15 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     }
   };
 
+  video.addEventListener('error', () => {
+    if (!sourceReady || destroyed || !video.error || activeSource !== sources.hls) return;
+    // Some WebViews expose MEDIA_ERR_DECODE without a fatal HLS.js event and
+    // pause the element, bypassing the playing-only stall watchdog entirely.
+    lastHlsFailure = `HTML video decoder error ${video.error.code}`;
+    video.dataset.hlsLastError = lastHlsFailure;
+    void recoverFromHlsFailure({details:lastHlsFailure});
+  });
+
   const readyPromise = (async () => {
     try {
       if (sources.hls) {
@@ -614,6 +630,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
           await attachSource(sources.mp4, false);
         }
       } else await attachSource(sources.mp4, false);
+      sourceReady = true;
       return true;
     } catch (error) {
       restoreIframe();
@@ -625,7 +642,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   adapter.play = () => {
     const intent = playbackIntent;
     return readyPromise.then(() => {
-      if (!destroyed && intent === playbackIntent) return video.play();
+      if (!destroyed && intent === playbackIntent) return playVideo();
     });
   };
   // Keep the adapter's reference to the HLS instance current after attachment and recovery.
