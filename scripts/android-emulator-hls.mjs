@@ -125,6 +125,16 @@ try {
       await delay(850);
     }
   }
+  if (!measuredBounds) {
+    const windows=adb('shell','dumpsys','window','windows');
+    const appWindow=windows.split(/Window #/).find(part=>part.includes('org.irgunshiuraitorah.app/') && /mFrame=|Frames:|frame=/.test(part));
+    const rect=appWindow?.match(/mFrame=\[(\d+),(\d+)\]\[(\d+),(\d+)\]/)
+      || appWindow?.match(/frame=\[(\d+),(\d+)\]\[(\d+),(\d+)\]/i);
+    if(rect && Number(rect[3])>Number(rect[1]) && Number(rect[4])>Number(rect[2])){
+      measuredBounds=rect.slice(1).map(Number);
+      report.nativeBoundsSource='actual Android app window frame';
+    }
+  }
   assert.ok(measuredBounds,'Native Android WebView bounds unavailable: '+hierarchyErrors.join(' | '));
   const [left,top,right,bottom]=measuredBounds;
   report.nativeBounds=measuredBounds;
