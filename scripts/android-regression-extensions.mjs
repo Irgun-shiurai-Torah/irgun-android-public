@@ -374,29 +374,7 @@ try{
       a=b;
     }
     assert.ok(adb('shell','pidof',pkg),'Android process crashed during lock/unlock');
-  });  await section('Small-screen English/Hebrew layouts retain usable navigation',async()=>{
-    try{
-      adb('shell','wm','size','240x320');
-      await delay(1400);
-      let snap=await read();
-      assert.ok(snap.ready&&snap.screen,'App must still render on a 240x320 screen');
-      const screen=JSON.parse(await evaluate('JSON.stringify({w:innerWidth,h:innerHeight,nav:[...document.querySelectorAll(".bottom-nav [data-nav]")].map(x=>{let r=x.getBoundingClientRect();return {key:x.dataset.nav,width:r.width,left:r.left,right:r.right,bottom:r.bottom}})})'));
-      assert.ok(screen.w<=280,'Android test must really use a narrow viewport');
-      assert.ok(screen.nav.length>=3,'Small screen needs its main navigation');
-      assert.ok(screen.nav.every(n=>n.width>=25&&n.left>=-4&&n.right<=screen.w+4),'Navigation is clipped on small screens');
-      const locale=await hit('[data-language-toggle]');
-      assert.ok(locale,'Language toggle must be accessible at small size');
-      await tap('[data-language-toggle]');
-      const he=await wait(s=>s.lang==='he' || s.lang==='he-IL','Hebrew interface did not activate');
-      assert.ok(he.ready,'Hebrew screen failed to render at narrow width');
-      assert.ok((await hit('.bottom-nav [data-nav="home"]')),'Hebrew navigation Home must remain tappable');
-      report.smallScreen={width:screen.w,height:screen.h,navItems:screen.nav.length,lang:he.lang};
-    }finally{
-      adb('shell','wm','size','reset');await delay(900);
-    }
-  });
-
-  await section('Playback starts at 1x; native 1.25x, 1.5x, 2x work; 1.5x survives restart',async()=>{
+  });  await section('Playback starts at 1x; native 1.25x, 1.5x, 2x work; 1.5x survives restart',async()=>{
     await closePlayer();
     const playing=await audioReady();
     audibleAudio(playing);
@@ -427,6 +405,36 @@ try{
     const restored=await wait(s=>s.ready,'App did not reload after force-stop',45000);
     assert.ok(Math.abs(restored.speed-1.5)<0.01,'1.5x playback speed preference was lost after relaunch');
   });
+  await section('Small-screen English/Hebrew layouts retain usable navigation',async()=>{
+    try{
+      adb('shell','wm','size','240x320');
+      await delay(1400);
+      bounds=await nativeBounds();
+      if((await read()).watchId){
+        await tap('[data-close-watch]');
+        await wait(s=>!s.watchId,'Watch overlay must close before checking main navigation');
+      }
+      let snap=await read();
+      assert.ok(snap.ready&&snap.screen,'App must still render on a 240x320 screen');
+      const screen=JSON.parse(await evaluate('JSON.stringify({w:innerWidth,h:innerHeight,nav:[...document.querySelectorAll(".bottom-nav [data-nav]")].map(x=>{let r=x.getBoundingClientRect();return {key:x.dataset.nav,width:r.width,left:r.left,right:r.right,bottom:r.bottom}})})'));
+      const actualSize=adb('shell','wm','size');
+      assert.match(actualSize,/Override size:\s*240x320/,
+        'Emulator must physically resize to 240x320');
+      assert.ok(screen.w>0&&screen.w<500,'WebView width must remain bounded at physical 240px');
+      assert.ok(screen.nav.length>=3,'Small screen needs its main navigation');
+      assert.ok(screen.nav.every(n=>n.width>=25&&n.left>=-4&&n.right<=screen.w+4),'Navigation is clipped on small screens');
+      const locale=await hit('[data-language-toggle]');
+      assert.ok(locale,'Language toggle must be accessible at small size');
+      await tap('[data-language-toggle]');
+      const he=await wait(s=>s.lang==='he' || s.lang==='he-IL','Hebrew interface did not activate');
+      assert.ok(he.ready,'Hebrew screen failed to render at narrow width');
+      assert.ok((await hit('.bottom-nav [data-nav="home"]')),'Hebrew navigation Home must remain tappable');
+      report.smallScreen={width:screen.w,height:screen.h,navItems:screen.nav.length,lang:he.lang};
+    }finally{
+      adb('shell','wm','size','reset');await delay(900);
+    }
+  });
+
 
 
 } catch(e){

@@ -23,7 +23,16 @@ try {
   let sequence = 0;
   const pending = new Map();
   ws.addEventListener('message', event => {
-    const message = JSON.parse(event.data), request = pending.get(message.id);
+    const message=JSON.parse(event.data);
+    if(message.method==='Runtime.consoleAPICalled') {
+      const msg=(message.params?.args||[]).map(x=>String(x.value??x.description??'')).join(' ').slice(0,350);
+      if(/HLS|MP4|Playback|Vimeo|CORS|fetch|video/i.test(msg)) {
+        (report.webConsole||=[]).push({type:message.params.type,message:msg});
+        if(report.webConsole.length>70)report.webConsole.shift();
+      }
+      return;
+    }
+    const request=pending.get(message.id);
     if (!request) return;
     pending.delete(message.id); clearTimeout(request.timer);
     if (message.error || message.result?.exceptionDetails) request.reject(new Error(JSON.stringify(message)));
@@ -35,6 +44,8 @@ try {
     pending.set(id, { resolve, reject, timer });
     ws.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, returnByValue: true, awaitPromise: true } }));
   });
+  // Read-only CDP console inspection; Android taps still use real adb input.
+  ws.send(JSON.stringify({id:++sequence,method:'Runtime.enable'}));
   const catalog = await (await fetch('https://api.irgunshiuraitorah.com/video-map?driveLibrary=1', {
     headers:{Origin:'https://localhost','X-Irgun-App':'1'}, signal:AbortSignal.timeout(30000)
   })).json();
@@ -57,7 +68,7 @@ try {
     const r=v?.getBoundingClientRect(),stage=v?.closest('.watch-hls-stage')?.getBoundingClientRect();
     return {title:document.querySelector('.watch-overlay')?.innerText?.slice(0,900),
       iframeSrc:document.querySelector('#watchVimeoFrame')?.getAttribute('src'),
-      iframeHidden:getComputedStyle(document.querySelector('#watchVimeoFrame')).visibility==='hidden',
+      iframeHidden:document.querySelector('#watchVimeoFrame') ? getComputedStyle(document.querySelector('#watchVimeoFrame')).visibility==='hidden' : false,
       sourceType:window.ISTReleaseQA?.snapshot?.()?.sourceType||null,
       quality:(()=>{const e=document.querySelector('[data-hls-quality]');return e?{value:e.value,hidden:e.hidden,options:Array.from(e.options).map(o=>({value:o.value,label:o.textContent}))}:null})(),
       video:v?{src:v.currentSrc||v.src,time:v.currentTime,paused:v.paused,ready:v.readyState,width:v.videoWidth,muted:v.muted,volume:v.volume,

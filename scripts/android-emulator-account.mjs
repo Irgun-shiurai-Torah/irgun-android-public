@@ -141,7 +141,12 @@ try{
  await tap('settings');await wait(s=>s.settingsVisible,'Settings missing');report.checks.push('Account settings displayed');
  await tap('shiurim');await tap('open');await wait(s=>!!s.watchId,'Lecture did not open');const id=(await read()).watchId;
  report.accountMutationsStartedAt=new Date().toISOString();const before=await read();await tap('like');await wait(s=>s.likes.includes(id)!==before.likes.includes(id),'Like toggle failed');report.checks.push('Native Like toggle');
- await tap('save');await tap('later');await wait(s=>s.later.includes(id)!==before.later.includes(id),'Save toggle failed');await closeSavePicker();report.checks.push('Native Watch Later toggle and dialog closure');await tap('follow');await wait(s=>JSON.stringify(s.follows)!==JSON.stringify(before.follows),'Follow toggle failed');report.checks.push('Native speaker follow toggle');await wait(s=>s.videoPlaying&&s.videoTime>1&&s.history.includes(id),'Playback needed to record real history');report.checks.push('Actual playing lecture history recorded');
+ await tap('save');await tap('later');await wait(s=>s.later.includes(id)!==before.later.includes(id),'Save toggle failed');await closeSavePicker();report.checks.push('Native Watch Later toggle and dialog closure');await tap('follow');await wait(s=>JSON.stringify(s.follows)!==JSON.stringify(before.follows),'Follow toggle failed');report.checks.push('Native speaker follow toggle');const playbackObserved=await wait(s=>s.videoPlaying&&s.videoTime>1&&s.history.includes(id),'Playback needed to record real history');
+ await delay(1400);
+ const laterPlayback=await read();
+ assert.ok(laterPlayback.videoPlaying&&laterPlayback.videoTime>playbackObserved.videoTime+0.6,
+   'Actual Android video clock must advance after recording history');
+ report.checks.push('Actual playing lecture history recorded');
  qaCommentMarker='IRGUN-QA-'+Date.now();report.commentVideoId=id;
  await type('commentText',qaCommentMarker);await tap('postComment');
  const withComment=await wait(s=>s.comments.some(c=>c.text===qaCommentMarker&&c.mine),'Native posted QA comment not visible');

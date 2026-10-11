@@ -19,12 +19,30 @@ function headers(client,more={}){
     ...(client==='website'&&webCookie?{Cookie:webCookie}:{}),...more};
 }
 async function api(client,path,{method='GET',body,authenticated=true}={}) {
-  const opts={method,headers:headers(client,body?{'Content-Type':'application/json'}:{}),signal:deadline(35000)};
-  if(!authenticated){delete opts.headers.Authorization;delete opts.headers.Cookie;}
-  if(body)opts.body=JSON.stringify(body);
-  const response=await fetch(base+path,opts);
-  const data=await response.json().catch(()=>({}));
-  return {status:response.status,data,response};
+  const maxAttempts=method==='GET'?3:1;
+  for(let attempt=1;attempt<=maxAttempts;attempt++){
+    try{
+      const opts={method,headers:headers(client,body?{'Content-Type':'application/json'}:{}),signal:deadline(35000)};
+      if(!authenticated){delete opts.headers.Authorization;delete opts.headers.Cookie;}
+      if(body)opts.body=JSON.stringify(body);
+      report.currentOperation=client+' '+method+' '+path;
+      const response=await fetch(base+path,opts);
+      if(method==='GET'&&[429,502,503,504].includes(response.status)&&attempt<maxAttempts){
+        (report.readRetries||=[]).push({operation:report.currentOperation,attempt,http:response.status});
+        await new Promise(resolve=>setTimeout(resolve,400*attempt));
+        continue;
+      }
+      const data=await response.json().catch(()=>({}));
+      return {status:response.status,data,response};
+    }catch(error){
+      const details=String(error.message||error);
+      if(method!=='GET'||attempt===maxAttempts)throw new Error(
+        client+' '+method+' '+path+' failed after '+attempt+' attempt(s): '+details
+      );
+      (report.readRetries||=[]).push({operation:report.currentOperation,attempt,error:details.slice(0,160)});
+      await new Promise(resolve=>setTimeout(resolve,500*attempt));
+    }
+  }
 }
 const ok=(result,label)=>{
   assert.equal(result.status,200,label+' expected HTTP 200, got '+result.status+' ('+String(result.data?.error||'')+')');

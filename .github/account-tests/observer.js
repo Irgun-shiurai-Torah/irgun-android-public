@@ -55,7 +55,9 @@ window.ISTAccountTest = { snapshot() {
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
     settingsVisible:!!document.querySelector('#appEmailToggle'),profileVisible:!!document.querySelector('#profileForm'),
     authError:!!document.querySelector('.auth-card .form-message'),playlistPickerOpen:!!document.querySelector('.playlist-picker-backdrop'),
-    videoTime:Number(video?.currentTime)||0,videoPlaying:!!video&&!video.paused&&video.readyState>=2};
+    videoTime:video ? (Number(video.currentTime)||0) : (Number(state.watchResumeSeconds)||0),
+    videoPlaying:video ? (!video.paused && video.readyState>=2)
+      : Boolean(state.watchVideoPlaying&&state.watchVimeoReady&&state.watchMode==='video')};
 }};
 if(window.ISTSimulator){const original=window.ISTSimulator.snapshot.bind(window.ISTSimulator);window.ISTSimulator.snapshot=()=>({...original(),account:window.ISTAccountTest.snapshot()});}
 

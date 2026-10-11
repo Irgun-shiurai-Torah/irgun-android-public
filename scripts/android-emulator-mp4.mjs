@@ -35,9 +35,22 @@ try {
     pending.set(id, { resolve, reject, timer });
     ws.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, returnByValue: true, awaitPromise: true } }));
   });
-  const catalog = await (await fetch('https://api.irgunshiuraitorah.com/video-map?driveLibrary=1', {
-    headers:{Origin:'https://localhost','X-Irgun-App':'1'}, signal:AbortSignal.timeout(30000)
-  })).json();
+  let catalog;
+  const catalogUrl='https://api.irgunshiuraitorah.com/video-map?driveLibrary=1';
+  for(let attempt=1;attempt<=3;attempt++){
+    try{
+      const response=await fetch(catalogUrl,{
+        headers:{Origin:'https://localhost','X-Irgun-App':'1'},signal:AbortSignal.timeout(30000)
+      });
+      assert.equal(response.status,200,'Actual video catalog must return HTTP 200');
+      catalog=await response.json();
+      break;
+    }catch(error){
+      (report.catalogRetries||=[]).push({attempt,error:String(error.message||error).slice(0,180)});
+      if(attempt===3)throw error;
+      await delay(650*attempt);
+    }
+  }
   const candidates = catalog.filter(v => /פריזנט/.test(v.title||'') && /עצות להצלחה/.test(v.title||''));
   const target = candidates.find(v => Number(v.duration) === 3663 &&
     [v.lectureDate,v.created].some(d=>String(d||'').startsWith('2026-10-06')));

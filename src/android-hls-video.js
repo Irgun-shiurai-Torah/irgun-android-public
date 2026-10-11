@@ -324,7 +324,12 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   });
 
   qualitySelect.addEventListener('change', () => {
-    if (hls) hls.currentLevel = Number(qualitySelect.value);
+    if (hls) {
+      const level=Number(qualitySelect.value);
+      // Unlike currentLevel, loadLevel does not flush the buffered video.
+      // Request the selected quality on upcoming fragments without pausing.
+      if(Number.isInteger(level)&&level>=-1&&level<hls.levels.length)hls.loadLevel=level;
+    }
   });
   const updateQualityOptions = () => {
     if (!hls) return;
