@@ -172,7 +172,7 @@ test('live Audio callbacks keep the destination visible while handoff buffers',(
 
 function resumeFixture({ready=600.35,commitFails=false,focusStopped=false}={}) {
   const item={id:'lecture'};
-  const state={current:item,watchResumeSeconds:600,nativePlayback:{mode:'AUDIO'},playbackSpeed:1};
+  const state={current:item,watchResumeSeconds:600,nativePlayback:{mode:'AUDIO',audioIsPlaying:!focusStopped,audioPlayWhenReady:!focusStopped},playbackSpeed:1};
   const events=[];
   const player={getCurrentTime:async()=>600,setPlaybackRate:async()=>{},play:()=>new Promise(()=>{}),pause:async()=>events.push('pause')};
   state.watchVimeo=player;
@@ -180,9 +180,9 @@ function resumeFixture({ready=600.35,commitFails=false,focusStopped=false}={}) {
     playbackPositionSeconds:()=>600,setVimeoHandoffMuted:async(_,muted)=>events.push(muted?'mute':'unmute'),
     waitForVimeoHandoffReady:async()=>{events.push('verify');return ready;},
     finishAudioToVideoHandoff:async()=>{events.push('commit');state.current=null;state.nativePlayback.mode='VIDEO';if(commitFails)throw Error('native error');return true;},
-    nativeMediaPlugin:()=>({getState:async()=>({...state.nativePlayback,audioPositionMs:603000,audioPlayWhenReady:!focusStopped})}),
+    nativeMediaPlugin:()=>({getState:async()=>({...state.nativePlayback,audioPositionMs:603000})}),
     setPlaybackAuthorityFence:mode=>events.push(mode),
-    PlaybackController:{startAudioAt:async(position,playing,options)=>{events.push({position,playing,volume:options.volume});state.nativePlayback.mode='AUDIO';}},
+    PlaybackController:{startAudioAt:async(position,playing,options)=>{events.push({position,playing,volume:options.volume});Object.assign(state.nativePlayback,{mode:'AUDIO',audioIsPlaying:playing,audioPlayWhenReady:playing});}},
     refreshPersistentMiniVideoChrome(){},videoAudioPlaybackItem:()=>item};
   const start=mainSource.indexOf('async function resumeParkedVideoFromAudio(');
   runInNewContext(mainSource.slice(start,mainSource.indexOf('function watchHtml(',start))+'\nthis.resume=resumeParkedVideoFromAudio;',context);
