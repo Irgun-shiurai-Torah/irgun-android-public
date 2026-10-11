@@ -1,0 +1,139 @@
+name: Android release regression matrix
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/release-tests/**'
+      - '.github/workflows/android-release-regressions.yml'
+      - 'scripts/android-regression-extensions.mjs'
+      - 'scripts/android-website-account-sync.mjs'
+      - 'scripts/android-hls-delivery-probe.mjs'
+      - 'src/**'
+      - 'android/**'
+
+permissions:
+  contents: read
+
+jobs:
+  media-and-device:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Install Android SDK 36
+        run: |
+          SDK_ROOT="${{ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}}"
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - run: npm ci
+      - name: Check real regression scripts can parse
+        run: |
+          node --check scripts/android-regression-extensions.mjs
+          node --check scripts/android-website-account-sync.mjs
+          node --check scripts/android-hls-delivery-probe.mjs
+      - name: Check source and gesture unit regressions
+        run: node --test scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs
+      - name: Prepare selected launcher icon
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+          bash scripts/prepare_android_icons.sh
+      - name: Append read-only QA instrumentation to disposable APK
+        run: cat .github/release-tests/observer.js >> src/main.js
+      - run: npm run build
+      - run: npx cap sync android
+      - name: Generate Android launcher resources
+        run: bash scripts/prepare_android_icons.sh
+      - name: Add emulator-only native output volume observation
+        run: python3 scripts/android-emulator-prepare.py
+      - run: chmod +x android/gradlew
+      - run: ./gradlew --no-daemon assembleDebug
+        working-directory: android
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Test Android 11 media, PiP, Home, notification, Wi-Fi, offline, speed and narrow screen
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          script: |
+            set -e
+            mkdir -p emulator-report
+            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+            adb logcat -c
+            adb shell am force-stop org.irgunshiuraitorah.app || true
+            adb shell am start -W -n org.irgunshiuraitorah.app/.SplashActivity
+            node scripts/android-emulator-inspect.mjs > emulator-report/startup.json
+            node scripts/android-emulator-mp4.mjs > emulator-report/handoff-baseline.json
+            node scripts/android-regression-extensions.mjs
+      - name: Save actual Android emulator evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-release-media-${{ github.run_id }}
+          path: emulator-report/
+          if-no-files-found: warn
+          retention-days: 14
+
+  hls-delivery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify HLS master, variant, proxied JS and byte-range CORS
+        run: node scripts/android-hls-delivery-probe.mjs
+      - name: Upload HTTP probe evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-hls-delivery-${{ github.run_id }}
+          path: emulator-report/hls-delivery.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  website-android-account-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    concurrency:
+      group: irgun-android-logged-in-account-qa
+      cancel-in-progress: false
+    env:
+      IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
+      IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
+    steps:
+      - name: Require dedicated non-admin QA account
+        run: |
+          test -n "$IRGUN_TEST_EMAIL" && test -n "$IRGUN_TEST_PASSWORD" || {
+            echo "Configure the same dedicated account secrets as PR #29"; exit 1;
+          }
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Test two independent authenticated sessions, cross-client sync and logout
+        run: node scripts/android-website-account-sync.mjs
+      - name: Upload safe session verification summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-account-sync-${{ github.run_id }}
+          path: emulator-report/account-cross-device.json
+          if-no-files-found: warn
+          retention-days: 14
