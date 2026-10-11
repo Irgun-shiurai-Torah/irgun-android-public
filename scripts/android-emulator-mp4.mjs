@@ -23,7 +23,20 @@ try {
   let sequence = 0;
   const pending = new Map();
   ws.addEventListener('message', event => {
-    const message = JSON.parse(event.data), request = pending.get(message.id);
+    const message = JSON.parse(event.data);
+    if(message.method==='Runtime.consoleAPICalled') {
+      const msg=(message.params?.args||[]).map(x=>String(x.value??x.description??'')).join(' ').slice(0,1200);
+      if(/\[Playback\]|HLS|MP4|Vimeo|CORS|fetch/i.test(msg)) {
+        (report.webConsole||=[]).push({type:message.params.type,message:msg});
+        if(report.webConsole.length>200)report.webConsole.shift();
+      }
+      return;
+    }
+    if(message.method==='Runtime.exceptionThrown') {
+      (report.webExceptions||=[]).push(message.params.exceptionDetails);
+      return;
+    }
+    const request = pending.get(message.id);
     if (!request) return;
     pending.delete(message.id); clearTimeout(request.timer);
     if (message.error || message.result?.exceptionDetails) request.reject(new Error(JSON.stringify(message)));
@@ -35,6 +48,8 @@ try {
     pending.set(id, { resolve, reject, timer });
     ws.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, returnByValue: true, awaitPromise: true } }));
   });
+  // Read-only transaction diagnostics; every UI action still uses Android input.
+  ws.send(JSON.stringify({id:++sequence,method:'Runtime.enable'}));
   let catalog;
   const catalogUrl='https://api.irgunshiuraitorah.com/video-map?driveLibrary=1';
   for(let attempt=1;attempt<=3;attempt++){
@@ -69,6 +84,8 @@ try {
     const v=document.querySelector('#watchDirectHlsVideo');
     const r=v?.getBoundingClientRect(),stage=v?.closest('.watch-hls-stage')?.getBoundingClientRect();
     return {title:document.querySelector('.watch-overlay')?.innerText?.slice(0,900),
+      sourceType:window.ISTReleaseQA?.snapshot?.()?.sourceType||null,
+      handoff:window.ISTReleaseQA?.snapshot?.()?.handoff||null,
       iframeSrc:document.querySelector('#watchVimeoFrame')?.getAttribute('src'),
       video:v?{src:v.currentSrc||v.src,time:v.currentTime,paused:v.paused,ready:v.readyState,width:v.videoWidth,muted:v.muted,volume:v.volume,
         frames:v.getVideoPlaybackQuality?.().totalVideoFrames??v.webkitDecodedFrameCount,error:v.error?.code,
@@ -89,7 +106,14 @@ try {
   };
   const wait = async predicate => {
     let state;
-    for(let i=0;i<120;i++) {state=await read();if(predicate(state))return state;await delay(500);}
+    for(let i=0;i<120;i++) {
+      state=await read();
+      if(report.handoffAttempts && !report.videoHandoff)report.handoffAttempts.push({
+        elapsedMs:Date.now()-report.handoffStartedAt,mode:state.activeMode,
+        video:state.video,handoff:state.handoff,native:state.native
+      });
+      if(predicate(state))return state;await delay(500);
+    }
     throw new Error(`Video did not settle: ${JSON.stringify(state)}`);
   };
   const geometry=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
@@ -237,6 +261,7 @@ try {
   report.checks.push({label:'Native range seek to 10 minutes preserves playing Audio',before:a,after:b});
 
   const audioBeforeVideo=await read(),switchStarted=Date.now();
+  report.handoffStartedAt=switchStarted;report.handoffAttempts=[];
   await tapVisible('[data-watch-mode="video"]');
   await wait(videoPlaying);
   const videoAtSwitch=await read();oneAudible(videoAtSwitch,'video');

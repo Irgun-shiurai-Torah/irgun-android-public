@@ -2618,6 +2618,9 @@ async function logout() {
   resetUserState();
   state.accountSection = 'profile';
   render();
+  // Logout replaces the scrolled profile with a taller sign-in form. Start at
+  // its email/password fields rather than retaining the profile's scroll offset.
+  if (state.screen === 'account') window.scrollTo({ top:0, left:0, behavior:'instant' });
 }
 
 async function updateProfile(name, password) {
@@ -5249,7 +5252,10 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
         // A WebView play promise may stay pending during a long-distance seek.
         // Keep Audio authoritative while actual clocks/frames establish readiness.
         Promise.resolve(player.play()).catch(error => console.debug('[Playback] destination play pending/failed', error));
-        const readyPosition = await waitForVimeoHandoffReady(player, id, player?.getSourceType?.() === 'mp4' ? 15000 : 8000);
+        // A distant HLS seek may decode only after the old eight-second budget.
+        // Keep Audio audible for the same bounded readiness window as MP4;
+        // advancing frames and a synchronized live clock are still mandatory.
+        const readyPosition = await waitForVimeoHandoffReady(player, id, 15000);
         if (readyPosition == null || !Number.isFinite(Number(readyPosition))) throw new Error('Vimeo did not become ready at the synchronized position');
         current = Number(readyPosition);
         const finished = await finishAudioToVideoHandoff(id, player);

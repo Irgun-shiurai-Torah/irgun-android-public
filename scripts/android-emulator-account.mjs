@@ -101,7 +101,7 @@ async function tap(key) {
       JSON.stringify(report.commentScrollGestures.slice(-4)));
     continue;
   }
-  const returnToTop=['closeWatch','login','settings'].includes(key);
+  const returnToTop=['closeWatch','email','password','login','settings'].includes(key);
   const x=Math.round(bounds[2]-25),yStart=bounds[3]-150,yEnd=bounds[1]+135;
   if(returnToTop)adb('shell','input','swipe',String(x),String(yEnd),String(x),String(yStart),'480');
   else adb('shell','input','swipe',String(x),String(yStart),String(x),String(yEnd),'480');

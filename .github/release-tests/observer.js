@@ -18,6 +18,13 @@ window.ISTReleaseQA = { snapshot() {
     videos: document.querySelectorAll('#watchDirectHlsVideo').length,
     iframes: document.querySelectorAll('#watchVimeoFrame').length,
     sourceType: String(state.watchVimeo?.getSourceType?.() || ''),
+    handoff: {
+      audioToVideo: !!state.watchAudioToVideoHandoff,
+      commitBusy: !!state.watchAudioToVideoCommitBusy,
+      targetSeconds: Number(state.watchAudioToVideoTargetSeconds || 0),
+      videoPlaying: !!state.watchVideoPlaying,
+      authorityFence: state.playbackAuthorityFence ? { ...state.playbackAuthorityFence } : null
+    },
     video: element ? {
       src: String(element.currentSrc || element.src || ''),
       time: Number(element.currentTime || 0),

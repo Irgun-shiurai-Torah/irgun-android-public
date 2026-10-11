@@ -176,7 +176,7 @@ test('old Android WebView clears the persistent host on close',()=>{
   assert.equal(f.mount.children.length,0);assert.equal(f.overlay.parentElement,null);assert.equal(f.state.watchHostedExternally,false);
 });
 
-function handoffFixture({movingClock=true,movingFrames=true,paused=false,focusStopped=false}={}) {
+function handoffFixture({movingClock=true,movingFrames=true,paused=false,focusStopped=false,framesReadyAfterMs=0}={}) {
   let now=0, position=600, frames=100;
   const state={watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',watchMode:'video',
     watchAudioToVideoTargetSeconds:600,watchVideo:{id:'lecture'},
@@ -186,7 +186,7 @@ function handoffFixture({movingClock=true,movingFrames=true,paused=false,focusSt
     setCurrentTime:async n=>{position=n;return n;}};
   const context={state,console:{warn(){}},Date:{now:()=>now},usesNativeUnifiedAudio:()=>true,
     playbackPositionSeconds:()=>600+(focusStopped?0:now/1000),
-    setTimeout:callback=>{now+=350;if(movingClock&&!paused)position+=.35;if(movingFrames&&!paused)frames+=10;callback();}};
+    setTimeout:callback=>{now+=350;if(movingClock&&!paused)position+=.35;if(movingFrames&&!paused&&now>=framesReadyAfterMs)frames+=10;callback();}};
   const start=mainSource.indexOf('async function waitForVimeoHandoffReady(');
   runInNewContext(mainSource.slice(start,mainSource.indexOf('function videoAudioPlaybackItem(',start))+'\nthis.wait=waitForVimeoHandoffReady;',context);
   return {state,player,wait:context.wait};
@@ -201,6 +201,24 @@ test('Audio handoff rejects a stationary destination and preserves explicit Paus
 });
 test('Audio handoff accepts a synchronized destination only after clocks and frames advance',async()=>{
   const f=handoffFixture();assert.ok(await f.wait(f.player,'lecture',800)>600);
+});
+test('HLS handoff gives a distant segment time to decode without relaxing frame or position checks',async()=>{
+  const early=handoffFixture({framesReadyAfterMs:9000});
+  assert.equal(await early.wait(early.player,'lecture',8000),null,'An eight-second wait must reject the still-frozen picture');
+  const f=handoffFixture({framesReadyAfterMs:9000});
+  const transaction=resumeFixture({readyWait:(_,id,budget)=>f.wait(f.player,id,budget)});
+  assert.equal(await transaction.resume(),true,'A synchronized HLS picture decoding after nine seconds must complete the handoff');
+});
+test('logout shows the start of the sign-in form after a scrolled account profile',async()=>{
+  const state={screen:'account',accountSection:'settings',user:{id:1}};
+  let scrolled=480;const events=[];
+  const start=mainSource.indexOf('async function logout(');
+  const context={state,apiJson:async()=>events.push('logout'),setToken:value=>events.push(value),
+    resetUserState(){state.user=null;},render(){events.push('render');},
+    window:{scrollTo(options){assert.equal(events.at(-1),'render');scrolled=options.top;}}};
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('async function updateProfile(',start))+'\nthis.logout=logout;',context);
+  await context.logout();assert.equal(state.user,null);assert.equal(state.accountSection,'profile');
+  assert.equal(scrolled,0,'Email and password must be reachable immediately after logout');
 });
 test('MP4 handoff waits for the following byte range before transferring sound',async()=>{
   for(const [ahead,expected] of [[1,false],[15,true]]) {
@@ -279,7 +297,7 @@ test('native Audio reconciliation changes ownership before the parked player emi
   assert.equal(pauses,1);assert.equal(state.watchResumeSeconds,613);
 });
 
-function resumeFixture({ready=600.35,commitFails=false,focusStopped=false}={}) {
+function resumeFixture({ready=600.35,commitFails=false,focusStopped=false,readyWait}={}) {
   const item={id:'lecture'};
   const state={current:item,watchResumeSeconds:600,nativePlayback:{mode:'AUDIO',audioIsPlaying:!focusStopped,audioPlayWhenReady:!focusStopped},playbackSpeed:1};
   const events=[];
@@ -287,7 +305,7 @@ function resumeFixture({ready=600.35,commitFails=false,focusStopped=false}={}) {
   state.watchVimeo=player;
   const context={state,console:{debug(){},warn(){}},setTimeout(){},usesNativeUnifiedAudio:()=>true,
     playbackPositionSeconds:()=>600,setVimeoHandoffMuted:async(_,muted)=>events.push(muted?'mute':'unmute'),
-    waitForVimeoHandoffReady:async()=>{events.push('verify');return ready;},
+    waitForVimeoHandoffReady:async(...args)=>{events.push('verify');return readyWait?readyWait(...args):ready;},
     finishAudioToVideoHandoff:async()=>{events.push('commit');state.current=null;state.nativePlayback.mode='VIDEO';if(commitFails)throw Error('native error');return true;},
     nativeMediaPlugin:()=>({getState:async()=>({...state.nativePlayback,audioPositionMs:603000})}),
     setPlaybackAuthorityFence:mode=>events.push(mode),

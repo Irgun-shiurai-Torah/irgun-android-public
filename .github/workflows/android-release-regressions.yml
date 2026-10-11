@@ -11,6 +11,7 @@ on:
       - 'scripts/android-native-hierarchy.mjs'
       - 'scripts/android-emulator-prepare.py'
       - 'scripts/android-emulator-mp4.mjs'
+      - 'scripts/android-emulator-media.sh'
       - '.github/workflows/android-release-regressions.yml'
       - 'scripts/android-regression-extensions.mjs'
       - 'scripts/android-emulator-soak.mjs'
@@ -91,18 +92,7 @@ jobs:
           api-level: ${{ matrix.api-level }}
           target: google_apis
           arch: x86_64
-          script: |
-            set -e
-            mkdir -p emulator-report
-            trap 'adb logcat -d > emulator-report/android-playback.log || true' EXIT
-            adb install -r android/qa-native-observer/build/outputs/apk/debug/qa-native-observer-debug.apk
-            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-            adb logcat -c
-            adb shell am force-stop org.irgunshiuraitorah.app || true
-            adb shell am start -W -n org.irgunshiuraitorah.app/.SplashActivity
-            node scripts/android-emulator-inspect.mjs > emulator-report/startup.json
-            node scripts/android-emulator-mp4.mjs > emulator-report/handoff-baseline.json
-            node scripts/android-regression-extensions.mjs
+          script: bash scripts/android-emulator-media.sh
       - name: Save actual Android emulator evidence
         if: always()
         uses: actions/upload-artifact@v7
