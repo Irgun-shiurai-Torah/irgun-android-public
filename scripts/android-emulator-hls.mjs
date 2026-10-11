@@ -82,12 +82,41 @@ try {
     for(let i=0;i<120;i++) {state=await read();if(predicate(state))return state;await delay(500);}
     throw new Error(`Video did not settle: ${JSON.stringify(state)}`);
   };
-  adb('shell','uiautomator','dump','/sdcard/irgun-mp4.xml');
-  const xml=adb('shell','cat','/sdcard/irgun-mp4.xml');
-  const bounds=xml.match(/<node\b[^>]*class="android\.webkit\.WebView"[^>]*>/)?.[0]
-    .match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
-  assert.ok(bounds,'Native WebView bounds required');
-  const [left,top,right,bottom]=bounds.slice(1).map(Number);
+  // Android 14+ may report a null UIAutomator root during WebView startup.
+  // Use fresh native accessibility bounds, never guessed tap coordinates.
+  let measuredBounds=null;
+  const hierarchyErrors=[];
+  for(let attempt=1;attempt<=7 && !measuredBounds;attempt++) {
+    for(const compressed of [false,true]) {
+      adb('shell','rm','-f','/sdcard/irgun-hls-bounds.xml');
+      try {
+        const args=['shell','uiautomator','dump'];
+        if(compressed)args.push('--compressed');
+        args.push('/sdcard/irgun-hls-bounds.xml');
+        adb(...args);
+        const xml=adb('shell','cat','/sdcard/irgun-hls-bounds.xml');
+        const node=xml.match(/<node\b[^>]*class="android\.webkit\.WebView"[^>]*>/)?.[0];
+        const match=node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+        const rect=match?.slice(1).map(Number);
+        if(rect && rect[2]>rect[0] && rect[3]>rect[1]) {
+          measuredBounds=rect;
+          report.nativeBoundsAttempt=attempt;
+          report.nativeBoundsCompressed=compressed;
+          break;
+        }
+        hierarchyErrors.push('Attempt '+attempt+': no real WebView node');
+      } catch(error) {
+        hierarchyErrors.push('Attempt '+attempt+': '+String(error.message||error).slice(0,160));
+      }
+    }
+    if(!measuredBounds) {
+      adb('shell','input','keyevent','KEYCODE_WAKEUP');
+      await delay(850);
+    }
+  }
+  assert.ok(measuredBounds,'Native Android WebView bounds unavailable: '+hierarchyErrors.join(' | '));
+  const [left,top,right,bottom]=measuredBounds;
+  report.nativeBounds=measuredBounds;
   const nativePoint=p=>[Math.round(left+p.x*(right-left)/p.width),Math.round(top+p.y*(bottom-top)/p.height)];
   const visiblePoint=async selector=>JSON.parse(await evaluate(`JSON.stringify((()=>{
     // A card has several Watch targets. Its cover center can be obscured by
