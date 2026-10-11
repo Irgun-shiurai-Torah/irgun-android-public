@@ -107,7 +107,7 @@ async function getAndroidHlsSource(apiBase, videoId) {
   return lookup(false);
 }
 
-export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, poster = '', resumeSeconds = 0, onError, onMinimize } = {}) {
+export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, poster = '', resumeSeconds = 0, onError, onMinimize, isPictureInPicture = () => false } = {}) {
   if (!apiBase || !videoId || !iframe || platform !== 'android') return null;
   const sources = await getAndroidHlsSource(String(apiBase).replace(/\/$/, ''), videoId);
   if (!sources) return null;
@@ -499,6 +499,14 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   // visual deadline only once the browser reports actual playback.
   video.addEventListener('playing', () => { if (!hasVisibleFrame && !recoveryInProgress) void checkVisualPlayback(); });
   const onVisibilityChange = () => {
+    if (document.hidden && !isPictureInPicture() && !destroyed) {
+      // Android may pause the element without cancelling a queued play or HLS
+      // recovery. Cancel that intent before Home suspends JS, so revealing this
+      // WebView cannot steal audio focus back from the native Audio owner.
+      video.muted = true;
+      void pausePlayback();
+      return;
+    }
     if (!document.hidden && !video.paused && !hasVisibleFrame && !recoveryInProgress && !destroyed) void checkVisualPlayback();
   };
   document.addEventListener('visibilitychange', onVisibilityChange);

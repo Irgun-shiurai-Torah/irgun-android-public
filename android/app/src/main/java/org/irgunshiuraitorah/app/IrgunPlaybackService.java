@@ -305,6 +305,7 @@ public class IrgunPlaybackService extends MediaSessionService {
 
                 @Override
                 public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
+                    Log.d(TAG, "[Playback] play intent=" + playWhenReady + " reason=" + reason + " mode=" + playbackMode);
                     if (playbackMode == PlaybackMode.VIDEO && videoMirrorCallbackAllowed()) {
                         // Notification/lock-screen/headset controls change the shadow
                         // player's playWhenReady. Treat that as the user's logical VIDEO
@@ -582,9 +583,12 @@ public class IrgunPlaybackService extends MediaSessionService {
                 syncingVideoShadow = false;
             }
             Log.d(TAG, "[Playback] lecture loaded; native audio source staged");
-        } else if (playbackMode == PlaybackMode.AUDIO && player.getMediaItemCount() > 0 && startPositionMs > 0L && Math.abs(player.getCurrentPosition() - startPositionMs) > DRIFT_LIMIT_MS) {
-            player.seekTo(startPositionMs);
         }
+
+        // Loading metadata for the same source is not a seek request. A delayed
+        // WebView play/prewarm event after Home can still carry its old Video
+        // clock; never rewind the Audio owner to it. Explicit seeks and handoff
+        // preparation use seekToInternal/prepareAudioAtInternal/startAudioAtInternal.
 
         // V15.1.3 accepted prepareAudio from JS but never used it. That left Vimeo
         // playback with an empty Media3 playlist, so Android had no media notification

@@ -283,6 +283,8 @@ try{
     bounds=await nativeBounds();
     const back=await wait(s=>s.native.mode==='AUDIO'&&s.native.audioIsPlaying,'Notification did not reopen playing native Audio',50000);
     assert.ok(back.native.audioPositionMs/1000>=beforePosition+1,'Background handoff lost saved Video progress');
+    assert.ok(back.native.audioPositionMs>=continuing.native.audioPositionMs-750,
+      'Notification reopening must not rewind native Audio to the parked Video clock');
     audibleAudio(back);
     adb('shell','input','keyevent','KEYCODE_MEDIA_PAUSE');
     await wait(s=>s.native.mode==='AUDIO'&&!s.native.audioIsPlaying,'Media notification/session Pause action not respected',17000);

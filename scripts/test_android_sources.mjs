@@ -19,7 +19,7 @@ class Element extends EventTarget {
   querySelector(selector){if(!this.nodes.has(selector)) this.nodes.set(selector, new Element('button')); return this.nodes.get(selector);}
   replaceWith(child){child.parentElement = this.parentElement;}
 }
-async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {nativeHls = true, Hls, onReady} = {}) {
+async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {nativeHls = true, Hls, onReady, isPictureInPicture} = {}) {
   const original = { document:globalThis.document, window:globalThis.window, fetch:globalThis.fetch, Option:globalThis.Option };
   const calls = [];
   const doc = new EventTarget(); doc.createElement = tag => {
@@ -34,7 +34,7 @@ async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {n
   const iframe = new Element('iframe'); new Element('div').appendChild(iframe);
   let player;
   try {
-    player = await createAndroidHlsPlayer({apiBase:'https://api.example.test',platform:'android',videoId,iframe,resumeSeconds});
+    player = await createAndroidHlsPlayer({apiBase:'https://api.example.test',platform:'android',videoId,iframe,resumeSeconds,isPictureInPicture});
     await player.ready();
     if (onReady) await onReady(player);
     return { source:player.getSourceType(), url:player.getVideoElement().src, position:await player.getCurrentTime(), paused:await player.getPaused(), calls };
@@ -121,6 +121,40 @@ test('a WebView decoder error which pauses HLS recovers MP4 with the accepted pl
     await settleRecovery();
     assert.equal(plays,2,'Recovery must resume the previously playing lecture');
     assert.equal(video.paused,false);
+  }});
+});
+
+test('Home cancels a queued WebView Play before a notification can reveal it',async()=>{
+  await fixture(recoverySources,'lecture',0,{onReady:async player=>{
+    const video=player.getVideoElement();await player.play();
+    const queued=player.play();
+    document.hidden=true;document.dispatchEvent(new Event('visibilitychange'));
+    await queued;
+    assert.equal(video.paused,true,'Home must cancel a pending play even if Android itself paused the element');
+    assert.equal(video.muted,true,'The parked video must not retain audible output');
+    document.hidden=false;document.dispatchEvent(new Event('visibilitychange'));await settleRecovery();
+    assert.equal(video.paused,true,'Notification reopening must leave native Audio in charge');
+    await player.setMuted(false);await player.play();
+    assert.equal(video.paused,false,'A later explicit Video transaction may still play');
+  }});
+});
+test('Home cancels a decoder recovery that was waiting for metadata',async()=>{
+  await fixture(recoverySources,'lecture',0,{Hls:RecoveringHls,onReady:async player=>{
+    const video=player.getVideoElement();let plays=0;
+    video.play=()=>{plays++;video.paused=false;return Promise.resolve();};
+    await player.play();video.readyState=0;RecoveringHls.current.emitError();
+    document.hidden=true;document.dispatchEvent(new Event('visibilitychange'));
+    video.readyState=1;video.dispatchEvent(new Event('loadedmetadata'));await settleRecovery();
+    document.hidden=false;document.dispatchEvent(new Event('visibilitychange'));await settleRecovery();
+    assert.equal(plays,1,'A recovery queued before Home must not reclaim WebView audio focus');
+    assert.equal(video.paused,true);assert.equal(video.muted,true);
+  }});
+});
+test('entering actual PiP keeps video playing when the Activity becomes hidden',async()=>{
+  await fixture(recoverySources,'lecture',0,{isPictureInPicture:()=>true,onReady:async player=>{
+    const video=player.getVideoElement();video.muted=false;await player.play();
+    document.hidden=true;document.dispatchEvent(new Event('visibilitychange'));
+    assert.equal(video.paused,false);assert.equal(video.muted,false);
   }});
 });
 
@@ -479,17 +513,41 @@ test('delayed video source events cannot publish VIDEO over an Audio rollback',a
   assert.equal(calls.length,1,'An explicit new Video selection still publishes normally');
 });
 test('native Audio reconciliation changes ownership before the parked player emits Pause',()=>{
-  let pauses=0;
+  let pauses=0,muted=false;
   const state={watchVideo:{id:'lecture'},watchMode:'video',watchVimeo:{pause(){
-    assert.equal(state.watchMode,'audio');pauses++;return Promise.resolve();
+    assert.equal(state.watchMode,'audio');assert.equal(muted,true);pauses++;return Promise.resolve();
   }}};
   const start=mainSource.indexOf('function reconcileNativeWatchAudio(');
   const context={state,videoId:v=>v.id,ensureNativeAudioCurrentForWatch(){},
+    setVimeoHandoffMuted:async(player,value)=>{muted=value;},
     parkHostedVideoForAudio(){},render(){},document:{getElementById(){return {};}}};
   runInNewContext(mainSource.slice(start,mainSource.indexOf('const PlaybackController =',start))+
     '\nthis.reconcile=reconcileNativeWatchAudio;',context);
   context.reconcile({mode:'AUDIO',lectureId:'lecture',currentPositionMs:613000});
   assert.equal(pauses,1);assert.equal(state.watchResumeSeconds,613);
+});
+test('a late Video Play callback cannot prewarm or report playing over the Audio owner',async()=>{
+  const state={watchVimeoGeneration:4,watchMode:'audio',watchVideoPlaying:false};
+  const events=[];
+  const context={state,generation:4,videoKey:'lecture',document:{hidden:false},
+    player:{pause:async()=>events.push('pause')},setVimeoHandoffMuted:async(_,muted)=>events.push('muted:'+muted),
+    usageAnalytics:{setMedia(){throw Error('Late playback must not be reported');}},
+    prewarmVideoAudioMetadata(){throw Error('Late playback must not prewarm');}};
+  const start=mainSource.indexOf("player.on('play', async () => {");
+  const end=mainSource.indexOf("    player.on('pause',",start);
+  runInNewContext(mainSource.slice(start,end).replace("player.on('play', async () => {",'this.onPlay = async () => {').replace(/\}\);\s*$/, '};'),context);
+  await context.onPlay();assert.deepEqual(events,['muted:true','pause']);assert.equal(state.watchVideoPlaying,false);
+});
+test('Video prewarming cannot reload the stale clock while native Audio owns this lecture',()=>{
+  const state={watchMode:'video',watchResumeSeconds:659.235,nativePlayback:{mode:'AUDIO',lectureId:'lecture'}};
+  let loads=0;
+  const context={state,usesNativeUnifiedAudio:()=>true,PlaybackController:{loadLecture:async()=>loads++},
+    videoAudioPlaybackItem:()=>({url:'https://api.example.test/audio/lecture'}),offlineRecordForAudioItem:()=>null,offlineFileUrl:()=>''};
+  const start=mainSource.indexOf('function prewarmVideoAudioMetadata(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function currentLanguage(',start))+'\nthis.prewarm=prewarmVideoAudioMetadata;',context);
+  context.prewarm({hasAudio:true},'lecture');assert.equal(loads,0);
+  state.nativePlayback.mode='VIDEO';context.prewarm({hasAudio:true},'lecture');assert.equal(loads,1);
+  state.watchMode='audio';context.prewarm({hasAudio:true},'lecture');assert.equal(loads,1);
 });
 test('delayed Video snapshots cannot replace the Audio view after its short fence expires',()=>{
   const state={watchVideo:{id:'lecture'},watchMode:'audio',nativePlayback:{mode:'AUDIO'},

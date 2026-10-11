@@ -1709,7 +1709,9 @@ function audioUrl(id) {
 }
 
 function prewarmVideoAudioMetadata(video, id) {
-  if (!video || !video.hasAudio || state.watchAudioToVideoHandoff) return;
+  if (!video || !video.hasAudio || state.watchAudioToVideoHandoff || state.watchMode !== 'video' ||
+      (usesNativeUnifiedAudio() && state.nativePlayback?.mode === 'AUDIO' &&
+       String(state.nativePlayback.lectureId || '') === String(id))) return;
   const base = videoAudioPlaybackItem(video, id);
   if (!base || !base.url) return;
   const offlineRecord = offlineRecordForAudioItem(base);
@@ -7752,7 +7754,10 @@ function reconcileNativeWatchAudio(snapshot) {
   state.watchMode = 'audio';
   state.watchVideoPlaying = false;
   // Change ownership before pause emits callbacks, and cancel old recovery.
-  if (state.watchVimeo) Promise.resolve(state.watchVimeo.pause()).catch(() => {});
+  if (state.watchVimeo) {
+    setVimeoHandoffMuted(state.watchVimeo, true).catch(() => {});
+    Promise.resolve(state.watchVimeo.pause()).catch(() => {});
+  }
   state.watchResumeSeconds = Math.max(0, Number(snapshot.currentPositionMs) || Number(snapshot.audioPositionMs) || 0) / 1000;
   parkHostedVideoForAudio();
   // Home can finish the native handoff after WebView events were suspended. On
@@ -8536,6 +8541,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
           videoId: videoKey,
           iframe: frame,
           resumeSeconds: Math.max(0, Number(state.watchResumeSeconds) || 0),
+          isPictureInPicture: () => state.systemPipActive,
           onMinimize: () => {
             if (generation === state.watchVimeoGeneration && state.watchMode === 'video' && !state.systemPipActive && !state.watchMinimized && videoId(state.watchVideo) === videoKey) {
               void minimizeWatchToPersistent();
@@ -8612,6 +8618,13 @@ async function initWatchVimeoOnce(userInitiated = false) {
     });
     player.on('play', async () => {
       if (generation !== state.watchVimeoGeneration) return;
+      if (state.watchMode !== 'video' || (document.hidden && !state.systemPipActive) || state.nativeBackgroundHandoff) {
+        // A play event queued before Home can arrive after Audio owns playback.
+        // It must not prewarm at the stale Video clock or claim audio focus.
+        setVimeoHandoffMuted(player, true).catch(() => {});
+        Promise.resolve(player.pause()).catch(() => {});
+        return;
+      }
       state.watchVideoPlaying = true;
       usageAnalytics.setMedia({isPlaying:true,mediaType:'video',playerState:'playing',shiurId:String(videoKey)});
       usageAnalytics.event('video_start',{shiurId:String(videoKey),mediaType:'video',dedupeKey:`video-start:${videoKey}`,cooldownMs:10000});
