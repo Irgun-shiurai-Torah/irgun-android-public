@@ -35,6 +35,7 @@ window.ISTReleaseQA = { snapshot() {
       kind: String(row.kind || ''), bytes: Number(row.bytes || 0),
       uri: String(row.uri || '')
     })),
+    offlineSaveError: String(state.offlineSaveLastError || '').slice(0,350),
     offlineJobs: [...state.offlineJobs.entries()].map(([key, job]) => ({
       key: String(key), percent: Number(job.percent || 0)
     })),
