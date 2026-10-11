@@ -8,6 +8,7 @@ on:
       - '.github/release-tests/**'
       - '.github/workflows/android-release-regressions.yml'
       - 'scripts/android-regression-extensions.mjs'
+      - 'scripts/android-emulator-soak.mjs'
       - 'scripts/android-website-account-sync.mjs'
       - 'scripts/android-comments-qa.mjs'
       - 'scripts/android-hls-delivery-probe.mjs'
@@ -94,6 +95,68 @@ jobs:
           name: android-release-media-api-${{ matrix.api-level }}-${{ github.run_id }}
           path: emulator-report/
           if-no-files-found: warn
+          retention-days: 14
+
+
+  fifteen-minute-soak:
+    name: Real 15-minute Android 11 playback reliability
+    runs-on: ubuntu-latest
+    timeout-minutes: 42
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Install Android SDK 36
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - run: npm ci
+      - name: Check soak test syntax
+        run: node --check scripts/android-emulator-soak.mjs
+      - name: Prepare icon
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+          bash scripts/prepare_android_icons.sh
+      - run: npm run build
+      - run: npx cap sync android
+      - run: python3 scripts/android-emulator-prepare.py
+      - run: chmod +x android/gradlew
+      - run: ./gradlew --no-daemon assembleDebug
+        working-directory: android
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Play a real shiur continuously for 15 minutes with screen locks and Home reopening
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          script: |
+            set -e
+            mkdir -p emulator-report
+            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+            adb shell am start -n org.irgunshiuraitorah.app/.SplashActivity
+            node scripts/android-emulator-inspect.mjs > emulator-report/startup-soak.json
+            node scripts/android-emulator-mp4.mjs > emulator-report/handoff-soak.json
+            node scripts/android-emulator-soak.mjs
+      - name: Upload 15-minute observation logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-soak-${{ github.run_id }}
+          path: emulator-report/
+          if-no-files-found: error
           retention-days: 14
 
   hls-delivery:
