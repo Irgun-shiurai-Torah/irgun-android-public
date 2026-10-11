@@ -2329,7 +2329,7 @@ async function bootstrap(options = {}) {
     await restoreSession();
     render();
     Promise.all([loadSponsorRibbon(), loadScheduleData(), loadLiveStatus()])
-      .then(() => render())
+      .then(() => { if (['home','schedule','live','live-boro','live-flatbush'].includes(state.screen)) render(); })
       .catch(error => console.warn('Secondary startup feeds unavailable', error));
     await handleAppReturn();
   } catch (error) {
@@ -4680,7 +4680,7 @@ function authHtml() {
   return `<div class="page-title"><h1>${registerMode ? 'Create Account' : 'Login'}</h1><p>${registerMode ? 'Create your Irgun Shiurai Torah account.' : 'Sign in to access your account.'}</p></div>
     <div class="account-card auth-card">
       ${state.authMessage ? `<div class="form-message">${esc(state.authMessage)}</div>` : ''}
-      <form id="authForm" class="form-stack">
+      <form id="authForm" class="form-stack" data-auth-mode="${esc(state.authMode)}">
         ${registerMode ? '<label>Name<input id="authName" autocomplete="name" required></label>' : ''}
         <label>Email<input id="authEmail" type="email" autocomplete="email" required></label>
         <label>Password<input id="authPassword" type="password" autocomplete="current-password" minlength="6" required></label>
@@ -5989,6 +5989,31 @@ function analyticsScreenLabel() {
   return names[String(state.screen || '')] || String(state.screen || 'Home');
 }
 
+function preserveAuthFormDraft() {
+  // Keep an in-progress form in the DOM only. Never put credentials in state,
+  // storage, markup or logs. A login attempt or mode change clears the draft.
+  const form = document.getElementById('authForm');
+  if (!form || state.user || state.authBusy || form.dataset.authMode !== state.authMode) return () => {};
+  const fields = ['authName','authEmail','authPassword'].map(id => {
+    const element = document.getElementById(id);
+    return element ? { id, value:element.value, focused:document.activeElement === element,
+      start:element.selectionStart, end:element.selectionEnd } : null;
+  }).filter(Boolean);
+  return () => {
+    const replacement = document.getElementById('authForm');
+    if (!replacement || state.user || state.authBusy || replacement.dataset.authMode !== state.authMode) return;
+    for (const field of fields) {
+      const element = document.getElementById(field.id);
+      if (!element) continue;
+      element.value = field.value;
+      if (field.focused) {
+        element.focus({preventScroll:true});
+        try { element.setSelectionRange(field.start, field.end); } catch (_) {}
+      }
+    }
+  };
+}
+
 function render() {
   if (tabSwipeRenderGate.shouldDefer()) return;
   usageAnalytics.setScreen(analyticsScreenLabel());
@@ -6018,8 +6043,10 @@ function render() {
     : state.screen === 'privacy' ? privacyHtml()
     : state.screen === 'library' ? libraryHtml()
     : accountHtml();
+  const restoreAuthDraft = preserveAuthFormDraft();
   app.innerHTML = shell(content + playlistPickerHtml());
   bind();
+  restoreAuthDraft();
   syncLivePlaybackAnalytics();
   updatePlayerUi();
   refreshOfflineButtonsForKey();

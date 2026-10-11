@@ -174,11 +174,15 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let visualCheck = 0;
   let playbackIntent = 0;
   let playbackWanted = false;
+  let qualityMotionTimer = 0;
+  let cancelQualityRecovery = () => {};
   const playVideo = () => { playbackWanted = true; return video.play(); };
   const pausePlayback = () => {
     playbackWanted = false;
     ++playbackIntent;
     ++visualCheck;
+    clearTimeout(qualityMotionTimer);
+    cancelQualityRecovery();
     video.pause();
     return Promise.resolve();
   };
@@ -348,7 +352,10 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       const level=Number(qualitySelect.value);
       // Unlike currentLevel, loadLevel does not flush the buffered video.
       // Request the selected quality on upcoming fragments without pausing.
-      if(Number.isInteger(level)&&level>=-1&&level<hls.levels.length)hls.loadLevel=level;
+      if(Number.isInteger(level)&&level>=-1&&level<hls.levels.length) {
+        hls.loadLevel=level;
+        checkQualityMotion();
+      }
     }
   });
   const updateQualityOptions = () => {
@@ -368,6 +375,57 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let sourceReady = false;
   const initialPosition = Math.max(0, Number(resumeSeconds) || 0);
   const hasVimeoFallback = !String(videoId).startsWith('drivev-');
+  const checkQualityMotion = () => {
+    clearTimeout(qualityMotionTimer);
+    const intent = playbackIntent;
+    const clock = Number(video.currentTime) || 0;
+    const frames = decodedFrames();
+    qualityMotionTimer = setTimeout(() => {
+      if (destroyed || document.hidden || intent !== playbackIntent || !playbackWanted ||
+          video.paused || video.seeking || recoveryInProgress || !hls || activeSource !== sources.hls) return;
+      const position = Number(video.currentTime) || 0;
+      const currentFrames = decodedFrames();
+      if (frames === null || currentFrames === null || currentFrames > frames || position > clock + .1) return;
+      let bufferedAhead = 0;
+      for (let i = 0; i < video.buffered.length; i++) {
+        if (video.buffered.start(i) <= position && video.buffered.end(i) > position)
+          bufferedAhead = video.buffered.end(i) - position;
+      }
+      // A network underrun needs more data. A stationary decoder with seconds
+      // of buffered media needs its MediaSource reattached at this position.
+      if (video.videoWidth <= 0 || video.readyState < 2 || bufferedAhead < 2 ||
+          typeof hls.recoverMediaError !== 'function') return;
+      recoveryInProgress = true;
+      ++visualCheck;
+      hasVisibleFrame = false;
+      loading.hidden = false;
+      video.dataset.hlsQualityRecovery = 'buffered decoder stall';
+      console.warn('[Playback] Recovering buffered HLS decoder after quality selection', {position, frames:currentFrames, bufferedAhead});
+      let metadataTimer;
+      const cleanup = () => {
+        clearTimeout(metadataTimer);
+        video.removeEventListener('loadedmetadata', restored);
+        recoveryInProgress = false;
+        cancelQualityRecovery = () => {};
+      };
+      const restored = () => {
+        cleanup();
+        if (destroyed || intent !== playbackIntent || !playbackWanted || document.hidden) return;
+        try { video.currentTime = position; } catch (_) {}
+        void video.play().catch(() => {});
+      };
+      cancelQualityRecovery = cleanup;
+      video.addEventListener('loadedmetadata', restored, {once:true});
+      metadataTimer = setTimeout(cleanup, 12000);
+      try {
+        hls.recoverMediaError();
+        hls.startLoad(position);
+      } catch (error) {
+        cleanup();
+        console.warn('[Playback] Buffered HLS decoder recovery failed', error);
+      }
+    }, 2000);
+  };
   const checkVisualPlayback = async () => {
     let check = ++visualCheck;
     const intent = playbackIntent;
@@ -525,6 +583,12 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
         });
         hls.attachMedia(video);
         hls.loadSource(url);
+        hls.on(Hls.Events.FRAG_CHANGED, (_event, info) => {
+          if (info?.frag?.type === 'main') video.dataset.hlsCurrentLevel = String(info.frag.level);
+        });
+        hls.on(Hls.Events.FRAG_BUFFERED, (_event, info) => {
+          if (info?.frag?.type === 'main') video.dataset.hlsBufferedLevel = String(info.frag.level);
+        });
         await new Promise((resolve, reject) => {
           let finished = false;
           const timer = setTimeout(() => finish(new Error('HLS playlist timed out')), 15000);
@@ -646,7 +710,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     });
   };
   // Keep the adapter's reference to the HLS instance current after attachment and recovery.
-  adapter.destroy = () => { destroyed = true; clearInterval(stalledPlaybackWatchdog); ++visualCheck; clearTimeout(singleTapTimer); clearTimeout(seekHintTimer); document.removeEventListener('visibilitychange', onVisibilityChange); try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
+  adapter.destroy = () => { destroyed = true; clearInterval(stalledPlaybackWatchdog); ++visualCheck; clearTimeout(qualityMotionTimer); cancelQualityRecovery(); clearTimeout(singleTapTimer); clearTimeout(seekHintTimer); document.removeEventListener('visibilitychange', onVisibilityChange); try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
   adapter.on('error', detail => {
     // A Drive video has no Vimeo source to fall back to. Stop its soundtrack
     // rather than leave the user listening to a black, unresponsive player.

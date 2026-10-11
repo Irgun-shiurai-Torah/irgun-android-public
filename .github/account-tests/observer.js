@@ -53,6 +53,8 @@ window.ISTAccountTest = { snapshot() {
   return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,libraryTabStrip,watchScroll,
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
     libraryReady:!!state.libraryReady,loading:!!state.loading,bootstrapInFlight:!!bootstrapInFlight,hasStoredSession:!!state.token,
+    authBusy:!!state.authBusy,authMode:String(state.authMode||''),
+    authFields:{emailPresent:!!document.getElementById('authEmail')?.value,passwordPresent:!!document.getElementById('authPassword')?.value},
     name:state.user?.name||'',profileShownName:document.querySelector('.profile-line span')?.textContent||'',
     accountEmail:state.user?.email||'',screen:state.screen,
     comments:(state.watchComments||[]).map(c=>({id:String(c.id),text:String(c.text),mine:String(c.user_id)===String(state.user?.id)})),

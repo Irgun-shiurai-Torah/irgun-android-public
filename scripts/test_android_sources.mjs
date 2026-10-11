@@ -124,6 +124,53 @@ test('a WebView decoder error which pauses HLS recovers MP4 with the accepted pl
   }});
 });
 
+class BufferedQualityHls extends RecoveringHls {
+  constructor(){super();this.levels=[{height:360},{height:480}];this.recoveries=0;}
+  attachMedia(video){this.video=video;}
+  recoverMediaError(){this.recoveries++;this.video.readyState=0;this.video.currentTime=0;this.video.paused=true;}
+}
+const chooseQuality = video => {
+  const controls=video.parentElement.children.find(e=>e.className==='watch-hls-controls');
+  const select=controls.querySelector('[data-hls-quality]');
+  select.value='1';select.dispatchEvent(new Event('change'));
+};
+const stalledQualityVideo = video => {
+  video.currentTime=42;video.readyState=2;video.videoWidth=640;
+  video.getVideoPlaybackQuality=()=>({totalVideoFrames:100});
+  video.buffered={length:1,start:()=>36,end:()=>60};
+};
+test('quality selection recovers a stationary buffered HLS decoder at the saved position',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','setInterval','Date']});
+  await fixture(recoverySources,'lecture',0,{Hls:BufferedQualityHls,onReady:async player=>{
+    const video=player.getVideoElement();stalledQualityVideo(video);await player.play();chooseQuality(video);
+    t.mock.timers.tick(2000);await settleRecovery();
+    assert.equal(BufferedQualityHls.current.recoveries,1,'A frozen buffered decoder must receive a bounded HLS recovery');
+    video.readyState=2;video.dispatchEvent(new Event('loadedmetadata'));await settleRecovery();
+    assert.equal(video.currentTime,42,'Reattaching the decoder must preserve lecture position');
+    assert.equal(video.paused,false);assert.equal(player.getSourceType(),'hls');
+  }});
+});
+test('Audio handoff cancels a pending quality recovery without replaying video',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','setInterval','Date']});
+  await fixture(recoverySources,'lecture',0,{Hls:BufferedQualityHls,onReady:async player=>{
+    const video=player.getVideoElement();stalledQualityVideo(video);let plays=0;
+    video.play=()=>{plays++;video.paused=false;return Promise.resolve();};
+    await player.play();chooseQuality(video);t.mock.timers.tick(2000);await settleRecovery();
+    assert.equal(BufferedQualityHls.current.recoveries,1,'Reach a pending metadata recovery before cancelling');
+    await player.pause();video.readyState=2;video.dispatchEvent(new Event('loadedmetadata'));await settleRecovery();
+    assert.equal(plays,1);assert.equal(video.paused,true);assert.equal(player.getSourceType(),'hls');
+  }});
+});
+test('quality selection leaves healthy motion and a network underrun alone',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','setInterval','Date']});
+  for(const healthy of [true,false])await fixture(recoverySources,'lecture',0,{Hls:BufferedQualityHls,onReady:async player=>{
+    const video=player.getVideoElement();stalledQualityVideo(video);await player.play();chooseQuality(video);
+    if(healthy)video.currentTime+=1;
+    else video.buffered={length:1,start:()=>36,end:()=>42.2};
+    t.mock.timers.tick(2000);await settleRecovery();assert.equal(BufferedQualityHls.current.recoveries,0);
+  }});
+});
+
 const {vimeoEmbedSource} = await import('../src/vimeoEmbed.js');
 test('actual unlisted Vimeo ID preserves its privacy hash separately',()=>{
   const url = new URL(vimeoEmbedSource('1233236785:585d5d53db'));
@@ -149,6 +196,33 @@ test('invalid Vimeo IDs never turn into a different numeric video',()=>{
 const {readFileSync} = await import('node:fs');
 const {runInNewContext} = await import('node:vm');
 const mainSource = readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
+function authRenderFixture({busy=false,mode='login'}={}) {
+  const state={screen:'account',authMode:mode,authBusy:busy,user:null};
+  const field=id=>({id,value:'',selectionStart:3,selectionEnd:3,focus(){document.activeElement=this;},setSelectionRange(a,b){this.selectionStart=a;this.selectionEnd=b;}});
+  let fields=new Map(['authEmail','authPassword'].map(id=>[id,field(id)]));
+  const form=()=>({dataset:{authMode:'login'}});
+  const document={activeElement:fields.get('authPassword'),getElementById:id=>id==='authForm'?form():fields.get(id)};
+  fields.get('authEmail').value='qa@example.test';fields.get('authPassword').value='typed-in-dom';
+  const app={set innerHTML(_){fields=new Map(['authEmail','authPassword'].map(id=>[id,field(id)]));document.activeElement=null;}};
+  const context={state,document,app,tabSwipeRenderGate:{shouldDefer:()=>false},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
+    accountHtml:()=>'',shell:x=>x,playlistPickerHtml:()=>'',bind(){},syncLivePlaybackAnalytics(){},updatePlayerUi(){},refreshOfflineButtonsForKey(){}};
+  const start=mainSource.indexOf('function preserveAuthFormDraft(');
+  const renderStart=mainSource.indexOf('function render()');
+  const source=(start>=0?mainSource.slice(start,renderStart):'')+mainSource.slice(renderStart,mainSource.indexOf('function syncOpenFilterChecks(',renderStart));
+  runInNewContext(source+'\nthis.renderApp=render;',context);
+  return {render:context.renderApp,field:id=>fields.get(id),document};
+}
+test('background render preserves sign-in fields and focused selection in the live DOM',()=>{
+  const f=authRenderFixture();f.render();
+  assert.equal(f.field('authEmail').value,'qa@example.test');assert.equal(f.field('authPassword').value,'typed-in-dom');
+  assert.equal(f.document.activeElement,f.field('authPassword'));assert.equal(f.field('authPassword').selectionStart,3);
+});
+test('login submission and auth-mode changes discard the previous credential draft',()=>{
+  for(const options of [{busy:true},{mode:'register'}]){
+    const f=authRenderFixture(options);f.render();
+    assert.equal(f.field('authPassword').value,'');assert.equal(f.field('authEmail').value,'');
+  }
+});
 function hostFixture() {
   class Node {
     constructor(){this.children=[];this.classList={remove(){},toggle(){}};}

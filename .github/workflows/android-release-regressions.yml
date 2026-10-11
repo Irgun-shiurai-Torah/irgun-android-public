@@ -23,6 +23,7 @@ on:
       - 'scripts/test_android_probes.mjs'
       - 'scripts/android-audio-download-probe.mjs'
       - 'scripts/android-emulator-hls.mjs'
+      - 'scripts/android-emulator-hls.sh'
       - 'scripts/android-emulator-account.mjs'
       - 'scripts/test_android_sources.mjs'
       - 'scripts/test_tab_swipes.cjs'
@@ -136,9 +137,9 @@ jobs:
         run: cat .github/release-tests/observer.js >> src/main.js
       - run: npm run build
       - run: npx cap sync android
-      - run: python3 scripts/android-emulator-prepare.py
+      - run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon assembleDebug
+      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
       - name: Enable KVM
         run: |
@@ -151,19 +152,7 @@ jobs:
           api-level: 30
           target: google_apis
           arch: x86_64
-          script: |
-            set -e
-            mkdir -p emulator-report
-            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-            adb shell am start -n org.irgunshiuraitorah.app/.SplashActivity
-            node scripts/android-emulator-inspect.mjs > emulator-report/startup-soak.json
-            # Start a real HLS video with decoded frames, then physically
-            # switch to native Audio. The Oct-6 MP4-only fixture occasionally
-            # fails before playback begins, so it cannot seed a 15-minute soak.
-            # The HLS script's real source and frame assertions still must pass.
-            IRGUN_SOAK_TO_AUDIO=1 timeout --signal=TERM --kill-after=10s 8m node scripts/android-emulator-hls.mjs > emulator-report/handoff-soak.json
-            test -s emulator-report/handoff-soak.json
-            node scripts/android-emulator-soak.mjs
+          script: bash scripts/android-emulator-hls.sh soak
       - name: Upload 15-minute observation logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -327,9 +316,9 @@ jobs:
       - run: npx cap sync android
       - run: bash scripts/prepare_android_icons.sh
       - name: Expose native audio volume in emulator only
-        run: python3 scripts/android-emulator-prepare.py
+        run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon assembleDebug
+      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
       - name: Enable KVM
         run: |
@@ -342,13 +331,7 @@ jobs:
           api-level: ${{ matrix.api-level }}
           target: google_apis
           arch: x86_64
-          script: |
-            set -e
-            mkdir -p emulator-report
-            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-            adb shell am start -n org.irgunshiuraitorah.app/.SplashActivity
-            node scripts/android-emulator-inspect.mjs > emulator-report/hls-startup.json
-            node scripts/android-emulator-hls.mjs
+          script: bash scripts/android-emulator-hls.sh
       - name: Upload real HLS video playback evidence
         if: always()
         uses: actions/upload-artifact@v7
