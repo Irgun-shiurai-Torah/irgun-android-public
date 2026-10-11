@@ -55,7 +55,7 @@ window.ISTAccountTest = { snapshot() {
     name:state.user?.name||'',profileShownName:document.querySelector('.profile-line span')?.textContent||'',
     accountEmail:state.user?.email||'',screen:state.screen,
     comments:(state.watchComments||[]).map(c=>({id:String(c.id),text:String(c.text),mine:String(c.user_id)===String(state.user?.id)})),
-    qaEditor:qaCommentId ? (()=>{const element=document.getElementById('editCommentText-'+qaCommentId);return element?{value:String(element.value),focused:document.activeElement===element}:null;})() : null,
+    qaEditor:qaCommentId ? (()=>{const element=document.getElementById('editCommentText-'+qaCommentId);if(!element)return null;const rect=element.getBoundingClientRect();return {value:String(element.value),focused:document.activeElement===element,rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height},activeTag:document.activeElement?.tagName||''};})() : null,
     likes:[...state.myLikes],later:[...state.watchLater],
     follows:[...state.follows.keys()],history:state.history.map(x=>historyRowId(x)),
     historyPositions:state.history.map(x=>({id:historyRowId(x),progressSeconds:Number(x.progressSeconds||x.positionSeconds||0),mediaType:String(x.mediaType||'')})),

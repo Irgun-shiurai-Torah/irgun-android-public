@@ -370,14 +370,20 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       visible = true;
     }
     if (!visible && activeSource === sources.hls && hls && !recoveryInProgress) {
-      // HLS can be buffering its first decoded frames on slow WebViews. Give
-      // the same HLS stream one bounded loader recovery before MP4 fallback.
+      // Some WebViews parse the manifest before decoding the first segment.
+      // Make two bounded attempts to recover HLS frames before using MP4.
+      // Neither retry counts as success without actual decoded picture motion.
       recoveryInProgress = true;
       try {
-        const position = Math.max(0, Number(video.currentTime) || initialPosition);
-        hls.stopLoad();
-        hls.startLoad(position);
-        visible = await waitForVideoFrame(8500);
+        for (let attempt = 1; attempt <= 2 && !visible && !destroyed; attempt++) {
+          const position = Math.max(0, Number(video.currentTime) || initialPosition);
+          video.dataset.hlsRecoveryAttempts = String(attempt);
+          hls.stopLoad();
+          if (attempt === 2 && typeof hls.recoverMediaError === 'function') hls.recoverMediaError();
+          hls.startLoad(position);
+          console.warn('[Playback] Retrying HLS video decoding', {attempt, position, reason:lastHlsFailure});
+          visible = await waitForVideoFrame(attempt === 1 ? 8500 : 10000);
+        }
       } catch (error) {
         console.warn('[Playback] HLS visual recovery failed', error);
       } finally { recoveryInProgress = false; }

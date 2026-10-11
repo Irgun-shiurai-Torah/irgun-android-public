@@ -232,8 +232,22 @@ try{
  report.checks.push('Native UI posted a comment, stored with correct author');
  await tap('editQaComment');
  await wait(s=>s.qaEditor?.value===qaCommentMarker,'Edit form did not display the existing QA comment');
- await tap('editedQaText');
- await wait(s=>s.qaEditor?.focused===true,'Android did not focus the actual comment textarea');
+ // Android 11 keyboard/window resizing can invalidate the original tap.
+ // Use genuine ADB taps at freshly measured textarea points; never set focus
+ // or textarea text through the read-only CDP observation channel.
+ if (!(await read()).qaEditor?.focused) await tap('editedQaText');
+ report.commentFocusTapAttempts=[];
+ for (let attempt=0;attempt<4 && !(await read()).qaEditor?.focused;attempt++) {
+   const snapshot=await read(),rect=snapshot.qaEditor?.rect;
+   assert.ok(rect && rect.width>40 && rect.height>30,'Real comment edit textarea disappeared during focus retry');
+   const point={x:rect.x+rect.width*(0.20+0.17*attempt),
+                y:rect.y+rect.height*(0.18+0.14*attempt)};
+   const xy=native(point,snapshot);
+   adb('shell','input','tap',...xy.map(String));
+   await delay(450);
+   report.commentFocusTapAttempts.push({point:xy,focused:(await read()).qaEditor?.focused===true});
+ }
+ await wait(s=>s.qaEditor?.focused===true,'Native Android touch did not focus the actual comment textarea');
  adb('shell','input','keyevent','KEYCODE_MOVE_END');
  adb('shell','input','text','-EDITED');
  const editedInput=await wait(s=>s.qaEditor?.value===qaCommentMarker+'-EDITED',

@@ -73,6 +73,8 @@ try {
       quality:(()=>{const e=document.querySelector('[data-hls-quality]');return e?{value:e.value,hidden:e.hidden,options:Array.from(e.options).map(o=>({value:o.value,label:o.textContent}))}:null})(),
       video:v?{src:v.currentSrc||v.src,time:v.currentTime,paused:v.paused,ready:v.readyState,width:v.videoWidth,muted:v.muted,volume:v.volume,
         frames:v.getVideoPlaybackQuality?.().totalVideoFrames??v.webkitDecodedFrameCount,error:v.error?.code,
+        hlsLastError:v.dataset.hlsLastError||null,hlsFallbackReason:v.dataset.hlsFallbackReason||null,
+        hlsRecoveryAttempts:v.dataset.hlsRecoveryAttempts||null,
         seeking:v.seeking,rate:v.playbackRate,buffered:Array.from({length:v.buffered.length},(_,i)=>[v.buffered.start(i),v.buffered.end(i)]),
         rect:r?{x:r.x,y:r.y,width:r.width,height:r.height}:null,
         stage:stage?{x:stage.x,y:stage.y,width:stage.width,height:stage.height}:null}:null,
@@ -172,13 +174,14 @@ try {
   adb('shell','input','text',code);adb('shell','input','keyevent','KEYCODE_ENTER');await delay(800);
   // Dismiss the keyboard only if still present, without navigating back.
   if(/mInputShown=true/.test(adb('shell','dumpsys','input_method')))adb('shell','input','keyevent','KEYCODE_BACK');
-  const selector=`[data-watch="${target.id}"]`;
+  // Click the actual Watch button, never a card surface near Listen.
+  const selector=`.media-primary-overlay button[data-watch="${target.id}"],button.media-title[data-watch="${target.id}"]`;
   for(let i=0;i<12 && !(await visiblePoint(selector));i++) {
     adb('shell','input','swipe',String(right-40),String(bottom-130),String(right-40),String(top+190),'450');
     await delay(400);
   }
   await tapVisible(selector);
-  await wait(s=>s.video?.ready>=2 && s.video.width>0);
+  await wait(s=>s.activeMode==="video" && s.video?.ready>=2 && s.video.width>0);
   const loaded=await read();report.loaded=loaded;
   assert.ok(loaded.video.rect.width>100 && loaded.video.rect.height>50,'Direct video must occupy a visible surface');
   assert.ok(loaded.video.rect.y>=0 && loaded.video.rect.y+loaded.video.rect.height<=bottom-top,'Direct video must fit the native viewport');
