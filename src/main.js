@@ -5230,10 +5230,38 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
       // over a silent VIDEO owner with a cleared current item.
       state.current = audioItem || videoAudioPlaybackItem(video, id);
       setPlaybackAuthorityFence('AUDIO', id, 5000);
-      const snapshot = await Promise.resolve(nativeMediaPlugin().getState()).catch(()=>state.nativePlayback);
-      if (String(snapshot?.mode || '') === 'VIDEO' || (String(snapshot?.mode || '') === 'AUDIO' && shouldPlay && !snapshot?.audioPlayWhenReady)) {
-        const livePosition = Math.max(0, Number(snapshot.audioPositionMs) || Number(snapshot.currentPositionMs) || 0) / 1000;
-        await PlaybackController.startAudioAt(livePosition, shouldPlay, { volume:1, commit:true }).catch(error => console.warn('[Playback] Audio rollback failed', error));
+      const native = nativeMediaPlugin();
+      let snapshot = await Promise.resolve(native.getState()).catch(()=>state.nativePlayback);
+      const keepPlaying = !shouldPlay || Boolean(snapshot?.audioIsPlaying || snapshot?.audioPlayWhenReady);
+      if (String(snapshot?.mode || '') !== 'AUDIO' || !keepPlaying) {
+        const livePosition = Math.max(
+          0, Number(snapshot?.audioPositionMs) || 0,
+          Number(snapshot?.currentPositionMs) || 0,
+          Number(state.watchResumeSeconds || 0) * 1000
+        ) / 1000;
+        let rollbackError = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            // If Media3 did not accept the first authority rollback, recreate
+            // only its audio source on the second attempt. Do not destroy the
+            // parked video; it can be retried on the user's next tap.
+            if (attempt) await PlaybackController.loadLecture(state.current, livePosition, true);
+            await PlaybackController.startAudioAt(livePosition, shouldPlay, { volume:1, commit:true });
+          } catch (failure) { rollbackError = failure; }
+          snapshot = await Promise.resolve(native.getState()).catch(()=>state.nativePlayback);
+          if (String(snapshot?.mode || '') === 'AUDIO' &&
+              (!shouldPlay || snapshot?.audioIsPlaying || snapshot?.audioPlayWhenReady)) break;
+        }
+        if (String(snapshot?.mode || '') !== 'AUDIO' ||
+            (shouldPlay && !snapshot?.audioIsPlaying && !snapshot?.audioPlayWhenReady)) {
+          console.error('[Playback] AUDIO rollback could not regain audible Media3 authority', rollbackError);
+          setToast(currentLanguage()==='he'
+            ? 'הווידאו לא היה מוכן; השמע לא חזר אוטומטית. נסו להפעיל שוב.'
+            : 'Video was not ready and audio could not resume automatically. Please retry playback.');
+        }
+      }
+      if (snapshot && String(snapshot.mode || '') === 'AUDIO') {
+        state.nativePlayback = { ...state.nativePlayback, ...snapshot, connected:true };
       }
       return false;
     }
