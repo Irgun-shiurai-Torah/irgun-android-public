@@ -8205,7 +8205,11 @@ async function closeWatch(save = true) {
     await saveHistory(videoId(state.watchVideo), 'video', state.watchResumeSeconds || 0, duration, false, { reconcile:true });
   } else if (state.watchMode === 'audio' && save) {
     const snapshot = captureCurrentAudioHistorySnapshot(videoId(state.watchVideo));
-    if (snapshot) await saveAudioHistorySnapshot(snapshot, false, { reconcile:true });
+    // Do not block the Back button on a slow network history write. The
+    // in-memory snapshot is captured first and the queued write finishes
+    // independently while the UI closes and native audio keeps playing.
+    if (snapshot) saveAudioHistorySnapshot(snapshot, false, { reconcile:true }).catch(error =>
+      console.warn('Could not save Audio history after closing Watch', error));
   }
   try { if (state.watchVimeo) await state.watchVimeo.destroy(); } catch (_) {}
   if (state.watchMode === 'video') {
