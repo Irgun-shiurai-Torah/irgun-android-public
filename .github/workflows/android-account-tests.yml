@@ -10,6 +10,8 @@ on:
       - 'scripts/android-website-account-sync.mjs'
       - '.github/workflows/android-account-tests.yml'
       - 'scripts/android-emulator-account*'
+      - 'src/**'
+      - 'scripts/test_android_sources.mjs'
 
 # This workflow mutates a shared QA account; concurrent runs would toggle each
 # other's Likes/Watch Later/follows and make persistence assertions misleading.
