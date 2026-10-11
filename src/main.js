@@ -4680,7 +4680,7 @@ function authHtml() {
   return `<div class="page-title"><h1>${registerMode ? 'Create Account' : 'Login'}</h1><p>${registerMode ? 'Create your Irgun Shiurai Torah account.' : 'Sign in to access your account.'}</p></div>
     <div class="account-card auth-card">
       ${state.authMessage ? `<div class="form-message">${esc(state.authMessage)}</div>` : ''}
-      <form id="authForm" class="form-stack" data-auth-mode="${esc(state.authMode)}">
+      <form id="authForm" class="form-stack" data-auth-draft-mode="${esc(state.authMode)}">
         ${registerMode ? '<label>Name<input id="authName" autocomplete="name" required></label>' : ''}
         <label>Email<input id="authEmail" type="email" autocomplete="email" required></label>
         <label>Password<input id="authPassword" type="password" autocomplete="current-password" minlength="6" required></label>
@@ -4899,6 +4899,8 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
   // any new frame from decoding. Android can also clear seeking briefly before
   // the keyframe plays. Require actual motion before correcting another drift.
   let lastSeekCorrectionAt = Number.NEGATIVE_INFINITY;
+  let catchupElement = null;
+  try {
   while (Date.now() < deadline) {
     if (!state.watchAudioToVideoHandoff || String(state.watchAudioToVideoHandoffId || '') !== String(videoKey || '')) {
       if (usesNativeUnifiedAudio()) return null;
@@ -4942,7 +4944,16 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
         // Let the first seek decode and actually play before chasing Audio's
         // advancing clock. Seeking as soon as metadata/currentTime resolve
         // repeatedly discards the destination's pending keyframe on API 35.
-        if (!element?.seeking && Date.now() - lastSeekCorrectionAt >= 1500) {
+        if (player?.getSourceType?.() === 'hls' && element) {
+          // The initial HLS seek can take seconds to decode a keyframe. Another
+          // seek discards that progress. Catch up while its decoded picture
+          // keeps moving, then restore the requested speed before committing.
+          const requestedRate = Number(state.playbackSpeed) || 1;
+          catchupElement = element;
+          element.playbackRate = again < stillSource
+            ? Math.min(4, Math.max(requestedRate * 2, requestedRate + 1))
+            : Math.max(.25, requestedRate / 2);
+        } else if (!element?.seeking && Date.now() - lastSeekCorrectionAt >= 1500) {
           lastSeekCorrectionAt = Date.now();
           await Promise.race([
             Promise.resolve(player.setCurrentTime(stillSource)).catch(()=>null),
@@ -4958,6 +4969,9 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
   }
   console.warn('[Playback] Vimeo destination did not become synchronized before timeout', lastPosition);
   return null;
+  } finally {
+    if (catchupElement) catchupElement.playbackRate = Number(state.playbackSpeed) || 1;
+  }
 }
 
 function videoAudioPlaybackItem(video, id) {
@@ -5993,7 +6007,7 @@ function preserveAuthFormDraft() {
   // Keep an in-progress form in the DOM only. Never put credentials in state,
   // storage, markup or logs. A login attempt or mode change clears the draft.
   const form = document.getElementById('authForm');
-  if (!form || state.user || state.authBusy || form.dataset.authMode !== state.authMode) return () => {};
+  if (!form || state.user || state.authBusy || form.dataset.authDraftMode !== state.authMode) return () => {};
   const fields = ['authName','authEmail','authPassword'].map(id => {
     const element = document.getElementById(id);
     return element ? { id, value:element.value, focused:document.activeElement === element,
@@ -6001,7 +6015,7 @@ function preserveAuthFormDraft() {
   }).filter(Boolean);
   return () => {
     const replacement = document.getElementById('authForm');
-    if (!replacement || state.user || state.authBusy || replacement.dataset.authMode !== state.authMode) return;
+    if (!replacement || state.user || state.authBusy || replacement.dataset.authDraftMode !== state.authMode) return;
     for (const field of fields) {
       const element = document.getElementById(field.id);
       if (!element) continue;

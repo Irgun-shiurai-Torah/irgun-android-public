@@ -200,7 +200,7 @@ function authRenderFixture({busy=false,mode='login'}={}) {
   const state={screen:'account',authMode:mode,authBusy:busy,user:null};
   const field=id=>({id,value:'',selectionStart:3,selectionEnd:3,focus(){document.activeElement=this;},setSelectionRange(a,b){this.selectionStart=a;this.selectionEnd=b;}});
   let fields=new Map(['authEmail','authPassword'].map(id=>[id,field(id)]));
-  const form=()=>({dataset:{authMode:'login'}});
+  const form=()=>({dataset:{authDraftMode:'login'}});
   const document={activeElement:fields.get('authPassword'),getElementById:id=>id==='authForm'?form():fields.get(id)};
   fields.get('authEmail').value='qa@example.test';fields.get('authPassword').value='typed-in-dom';
   const app={set innerHTML(_){fields=new Map(['authEmail','authPassword'].map(id=>[id,field(id)]));document.activeElement=null;}};
@@ -222,6 +222,28 @@ test('login submission and auth-mode changes discard the previous credential dra
     const f=authRenderFixture(options);f.render();
     assert.equal(f.field('authPassword').value,'');assert.equal(f.field('authEmail').value,'');
   }
+});
+test('clicking Login submits once without the form becoming an auth-mode button',()=>{
+  const state={authMode:'login',authBusy:false,authMessage:''};
+  const htmlStart=mainSource.indexOf('function authHtml()');
+  const form=new EventTarget();form.dataset={};let connected=true,logins=0,renders=0;
+  const fields={authForm:form,authEmail:{value:'qa@example.test'},authPassword:{value:'test-password'}};
+  const document={getElementById:id=>fields[id],querySelectorAll:selector=>selector==='[data-auth-mode]'&&form.dataset.authMode?[form]:[]};
+  const context={state,document,Capacitor:{isNativePlatform:()=>false},esc:x=>x,tr:x=>x,googleGIcon:()=>'',
+    render(){renders++;connected=false;},login(email,password){assert.equal(email,'qa@example.test');assert.equal(password,'test-password');logins++;}};
+  runInNewContext(mainSource.slice(htmlStart,mainSource.indexOf('function relatedVideos(',htmlStart))+'\nthis.html=authHtml();',context);
+  const tag=context.html.match(/<form\b[^>]*id="authForm"[^>]*>/)?.[0];assert.ok(tag);
+  const mode=tag.match(/\bdata-auth-mode="([^"]*)"/);if(mode)form.dataset.authMode=mode[1];
+  const modeStart=mainSource.indexOf("  document.querySelectorAll('[data-auth-mode]')");
+  const submitStart=mainSource.indexOf("  const authForm = document.getElementById('authForm');");
+  runInNewContext(mainSource.slice(modeStart,mainSource.indexOf("  document.querySelectorAll('[data-google-login]')",modeStart))+
+    mainSource.slice(submitStart,mainSource.indexOf('  const forgotPasswordForm',submitStart)),context);
+  // A submit-button click bubbles through its form before the default submit.
+  // Removing the form during that click cancels the browser's default action.
+  form.dispatchEvent(new Event('click',{bubbles:true}));
+  if(connected)form.dispatchEvent(new Event('submit',{cancelable:true}));
+  assert.equal(renders,0,'Mode buttons must not handle clicks on the form or its fields');
+  assert.equal(logins,1,'A physical Login click must reach the real login handler exactly once');
 });
 function hostFixture() {
   class Node {
@@ -278,7 +300,7 @@ test('Audio handoff accepts a synchronized destination only after clocks and fra
 });
 test('HLS handoff lets a keyframe decode before chasing the advancing Audio clock',async t=>{
   t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
-  let decodeAt=3000,basePosition=606,position=606,frames=327,decoded=false;
+  let decodeAt=3000,basePosition=606,position=606,frames=327,decoded=false,lastAdvancedAt=0;
   const seeks=[];
   // API 35 briefly reports seeking=false before a keyframe can play. Metadata
   // and a resolved seek setter are not proof that the decoder has settled.
@@ -286,14 +308,15 @@ test('HLS handoff lets a keyframe decode before chasing the advancing Audio cloc
   const advance=()=>{
     if(Date.now()<decodeAt)return;
     decoded=true;element.readyState=4;
-    position=basePosition+(Date.now()-decodeAt)/1000;
+    position+=(Date.now()-Math.max(decodeAt,lastAdvancedAt))/1000*(Number(element.playbackRate)||1);
+    lastAdvancedAt=Date.now();
     frames=327+Math.floor((Date.now()-decodeAt)/1000*30);
   };
   element.getVideoPlaybackQuality=()=>{advance();return {totalVideoFrames:frames};};
   const player={getPaused:async()=>false,getSourceType:()=> 'hls',getVideoElement:()=>element,
     getCurrentTime:async()=>{advance();return position;},setCurrentTime:async n=>{
       seeks.push({at:Date.now(),position:n});position=basePosition=n;
-      decodeAt=Date.now()+(decoded?100:3000);element.readyState=1;return n;
+      decodeAt=Date.now()+(decoded?100:3000);lastAdvancedAt=decodeAt;element.readyState=1;return n;
     }};
   const state={watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',
     nativePlayback:{mode:'AUDIO',audioIsPlaying:true,audioPlayWhenReady:true}};
@@ -318,6 +341,34 @@ test('HLS handoff gives a distant segment time to decode without relaxing frame 
   const f=handoffFixture({framesReadyAfterMs:9000});
   const transaction=resumeFixture({readyWait:(_,id,budget)=>f.wait(f.player,id,budget)});
   assert.equal(await transaction.resume(),true,'A synchronized HLS picture decoding after nine seconds must complete the handoff');
+});
+for(const cancel of [false,true])test('HLS catch-up preserves decoded progress and restores requested speed, cancel='+cancel,async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
+  const rate=1.5,decodeDelay=6000,seeks=[],rates=[];let decodeAt=decodeDelay,lastAt=decodeAt,position=606,frames=0,currentRate=rate;
+  const state={playbackSpeed:rate,watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',nativePlayback:{mode:'AUDIO',audioIsPlaying:true,audioPlayWhenReady:true}};
+  const element={paused:false,seeking:false,readyState:1,videoWidth:640,
+    get playbackRate(){return currentRate;},set playbackRate(value){currentRate=value;rates.push(value);if(cancel&&value>rate)state.watchAudioToVideoHandoff=false;}};
+  const advance=()=>{
+    if(Date.now()<decodeAt)return;
+    const elapsed=(Date.now()-Math.max(lastAt,decodeAt))/1000;
+    position+=elapsed*currentRate;frames+=Math.round(elapsed*30*currentRate);lastAt=Date.now();element.readyState=4;
+  };
+  element.getVideoPlaybackQuality=()=>{advance();return {totalVideoFrames:frames};};
+  const player={getSourceType:()=> 'hls',getVideoElement:()=>element,getPaused:async()=>false,
+    getCurrentTime:async()=>{advance();return position;},setCurrentTime:async value=>{
+      seeks.push(value);position=value;decodeAt=Date.now()+decodeDelay;lastAt=decodeAt;element.readyState=1;return value;
+    }};
+  const context={state,Date,setTimeout,console:{warn(){}},usesNativeUnifiedAudio:()=>true,playbackPositionSeconds:()=>606+Date.now()/1000*rate};
+  const start=mainSource.indexOf('async function waitForVimeoHandoffReady(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function videoAudioPlaybackItem(',start))+'\nthis.wait=waitForVimeoHandoffReady;',context);
+  let settled=false,result;const transaction=context.wait(player,'lecture',15000).then(value=>{result=value;settled=true;});
+  for(let i=0;i<170&&!settled;i++){t.mock.timers.tick(100);for(let j=0;j<12;j++)await Promise.resolve();}
+  await transaction;
+  assert.ok(rates.some(value=>value>rate),'The delayed moving destination must catch up without replacing its keyframe');
+  assert.equal(seeks.length,0,'Repeated seeks must not discard a decoded HLS destination');
+  assert.equal(element.playbackRate,rate,'Success and cancellation must restore the selected 1.5x speed');
+  if(cancel)assert.equal(result,null);
+  else {assert.ok(result>606);assert.ok(Math.abs(result-context.playbackPositionSeconds())<=1.8,'Only synchronized advancing playback can finish');}
 });
 test('logout shows the start of the sign-in form after a scrolled account profile',async()=>{
   const state={screen:'account',accountSection:'settings',user:{id:1}};

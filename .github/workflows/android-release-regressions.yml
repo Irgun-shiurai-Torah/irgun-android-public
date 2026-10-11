@@ -26,6 +26,7 @@ on:
       - 'scripts/android-emulator-hls.sh'
       - 'scripts/android-emulator-account.mjs'
       - 'scripts/test_android_sources.mjs'
+      - 'scripts/test_android_seek_guard.mjs'
       - 'scripts/test_tab_swipes.cjs'
       - 'src/**'
       - 'android/**'
@@ -65,7 +66,7 @@ jobs:
           node --check scripts/android-hls-delivery-probe.mjs
       - name: Check source and gesture unit regressions
         timeout-minutes: 2
-        run: node --test scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs scripts/test_android_probes.mjs
+        run: node --test scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs scripts/test_android_probes.mjs scripts/test_android_seek_guard.mjs
       - name: Prepare selected launcher icon
         run: |
           sudo apt-get update -qq
