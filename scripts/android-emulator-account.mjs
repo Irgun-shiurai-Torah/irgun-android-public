@@ -230,7 +230,13 @@ try{
  qaCommentId=String(withComment.comments.find(c=>c.text===qaCommentMarker&&c.mine).id);
  assert.ok(qaCommentId,'QA comment needs real server ID');
  report.checks.push('Native UI posted a comment, stored with correct author');
- await tap('editQaComment');await type('editedQaText','-EDITED');await tap('saveQaComment');
+ await tap('editQaComment');
+ await wait(s=>s.qaEditor?.value===qaCommentMarker,'Edit form did not display the existing QA comment');
+ await type('editedQaText','-EDITED');
+ const editedInput=await wait(s=>s.qaEditor?.value===qaCommentMarker+'-EDITED',
+   'Android keyboard did not append the QA edit to the comment textarea');
+ assert.equal(editedInput.qaEditor.value,qaCommentMarker+'-EDITED','Edit textarea must preserve the original comment');
+ await tap('saveQaComment');
  await wait(s=>s.comments.some(c=>c.id===qaCommentId&&c.text===qaCommentMarker+'-EDITED'),'Edited comment was not saved');
  report.checks.push('Native UI edit comment persisted');
  await tap('deleteQaComment');await acceptDeleteConfirmation();
