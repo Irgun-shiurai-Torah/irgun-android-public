@@ -61,7 +61,7 @@ async function read() {
   const snap=await evaluate('JSON.stringify(window.ISTReleaseQA?.snapshot?.() || {observerMissing:true})');
   const s=JSON.parse(snap);
   assert.equal(s.observerMissing,undefined,'QA observer must be appended to this disposable build');
-  s.native=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','getState',{})");
+  s.native=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaPlaybackSnapshot',{})");
   return s;
 }
 async function wait(test,message,timeout=45000) {
@@ -254,7 +254,15 @@ try{
     assert.ok(notification.includes(pkg),'The app did not post a media notification while backgrounded');
     const sessions=adb('shell','dumpsys','media_session');
     assert.ok(sessions.includes(pkg),'The Android Media3 session is absent while backgrounded');
-    report.background={notificationPosted:true,sessionRegistered:true, androidApi:report.androidApi};
+    const background=await read();audibleAudio(background);
+    assert.ok(background.native.audioPositionMs/1000>=beforePosition+1,'Home must preserve the actual playing position');
+    await delay(1400);
+    const continuing=await read();audibleAudio(continuing);
+    assert.ok(continuing.native.audioPositionMs>background.native.audioPositionMs+700,
+      'Actual audible native Audio must advance in the background before reopening');
+    report.background={notificationPosted:true,sessionRegistered:true, androidApi:report.androidApi,
+      beforeMs:background.native.audioPositionMs,afterMs:continuing.native.audioPositionMs,
+      audibleVolume:continuing.native.audioOutputVolume};
     adb('shell','cmd','statusbar','expand-notifications');
     await delay(1400);
     // Read the actual SystemUI tree without waiting for the continuously

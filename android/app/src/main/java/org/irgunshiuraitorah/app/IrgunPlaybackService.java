@@ -45,6 +45,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     private static final long DRIFT_LIMIT_MS = 750L;
     private static final long VIDEO_SHADOW_DRIFT_LIMIT_MS = 1800L;
     private final AudioSeekGuard audioSeekGuard = new AudioSeekGuard();
+    private final PlaybackAuthorityGuard authorityGuard = new PlaybackAuthorityGuard();
 
     public enum PlaybackMode { VIDEO, AUDIO }
     public enum PresentationMode { FULL, MINI, PIP }
@@ -526,7 +527,10 @@ public class IrgunPlaybackService extends MediaSessionService {
     ) {
         boolean sameLecture = cleanStatic(lectureId).equals(this.lectureId);
         boolean sameAudio = cleanStatic(audioUrl).equals(this.audioUrl);
-        if (!sameLecture || !sameAudio) audioSeekGuard.clear();
+        if (!sameLecture || !sameAudio) {
+            audioSeekGuard.clear();
+            authorityGuard.allowVideo();
+        }
 
         this.lectureId = cleanStatic(lectureId);
         this.vimeoId = cleanStatic(vimeoId);
@@ -677,6 +681,7 @@ public class IrgunPlaybackService extends MediaSessionService {
             if (Math.abs(player.getCurrentPosition() - target) > DRIFT_LIMIT_MS) player.seekTo(target);
             if (player.getPlaybackState() == Player.STATE_IDLE) player.prepare();
             if (commit) {
+                authorityGuard.commitAudio();
                 playbackMode = PlaybackMode.AUDIO;
                 externalVideoPlaying = false;
             }
@@ -693,6 +698,7 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     private void commitAudioHandoffInternal(float volume) {
         if (player == null) return;
+        authorityGuard.commitAudio();
         logicalVolume = clamp01(volume);
         playbackMode = PlaybackMode.AUDIO;
         externalVideoPlaying = false;
@@ -748,9 +754,11 @@ public class IrgunPlaybackService extends MediaSessionService {
             return;
         }
 
-        if (authoritative) {
+        if (authorityGuard.acceptsVideoUpdate(authoritative)) {
             audioSeekGuard.clear();
             playbackMode = PlaybackMode.VIDEO;
+        } else if (authoritative && playbackMode == PlaybackMode.AUDIO) {
+            Log.d(TAG, "[Playback] ignored delayed Video authority update after Audio committed");
         }
 
         // Mirror Vimeo into the ONE Media3 player silently. This intentionally keeps
@@ -812,6 +820,7 @@ public class IrgunPlaybackService extends MediaSessionService {
             return;
         }
         audioSeekGuard.clear();
+        authorityGuard.allowVideo();
         // A foreground Audio -> Video request supersedes any delayed Home-handoff
         // timeout or confirmation still queued from the previous presentation.
         pendingBackgroundHandoff = false;
@@ -936,6 +945,7 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     private void stopAudioInternal(boolean clearLecture) {
         audioSeekGuard.clear();
+        authorityGuard.commitAudio();
         pendingBackgroundHandoff = false;
         backgroundPauseRequested = false;
         if (player != null) {
@@ -1043,6 +1053,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         if (!pendingBackgroundHandoff || player == null) return;
         pendingBackgroundHandoff = false;
         backgroundPauseRequested = false;
+        authorityGuard.commitAudio();
         playbackMode = PlaybackMode.AUDIO;
         externalVideoPlaying = false;
         setCandidateAudioFocus(true);

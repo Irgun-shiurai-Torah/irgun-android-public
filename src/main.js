@@ -7620,6 +7620,12 @@ function setPlaybackAuthorityFence(mode, lectureId = '', ttlMs = 3500) {
 
 function nativeSnapshotConflicts(snapshot) {
   const fence = state.playbackAuthorityFence;
+  if (state.watchMode === 'audio' && state.watchVideo && String(snapshot?.mode || '') === 'VIDEO' &&
+      String(snapshot.lectureId || '') === videoId(state.watchVideo) && !state.watchAudioToVideoHandoff) {
+    // A queued Video snapshot cannot replace an already selected Audio view,
+    // even after a short transaction fence expires during notification reopening.
+    return true;
+  }
   if (state.watchAudioToVideoHandoff && String(snapshot?.mode || '') === 'AUDIO' &&
       String(snapshot.lectureId || '') === String(state.watchAudioToVideoHandoffId || '')) {
     // Follow the live Audio clock during preparation, then reject queued AUDIO

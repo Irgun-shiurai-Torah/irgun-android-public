@@ -491,6 +491,17 @@ test('native Audio reconciliation changes ownership before the parked player emi
   context.reconcile({mode:'AUDIO',lectureId:'lecture',currentPositionMs:613000});
   assert.equal(pauses,1);assert.equal(state.watchResumeSeconds,613);
 });
+test('delayed Video snapshots cannot replace the Audio view after its short fence expires',()=>{
+  const state={watchVideo:{id:'lecture'},watchMode:'audio',nativePlayback:{mode:'AUDIO'},
+    playbackAuthorityFence:{mode:'AUDIO',lectureId:'lecture',expiresAt:0}};
+  const context={state,Date,videoId:v=>v.id};
+  const start=mainSource.indexOf('function nativeSnapshotConflicts(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function nativeAudioPositionSeconds(',start))+'\nthis.conflicts=nativeSnapshotConflicts;',context);
+  assert.equal(context.conflicts({mode:'VIDEO',lectureId:'lecture'}),true,'A queued Video state must not turn the Audio clock into 0:00');
+  assert.equal(context.conflicts({mode:'AUDIO',lectureId:'lecture'}),false,'Actual native Audio progress must still update');
+  state.watchMode='video';state.watchAudioToVideoHandoff=true;state.watchAudioToVideoHandoffId='lecture';
+  assert.equal(context.conflicts({mode:'VIDEO',lectureId:'lecture'}),false,'A new explicit Video selection can complete its transaction');
+});
 
 function resumeFixture({ready=600.35,commitFails=false,focusStopped=false,readyWait}={}) {
   const item={id:'lecture'};

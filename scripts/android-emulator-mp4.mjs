@@ -1,12 +1,13 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
+import {observedAdb} from './android-adb-observer.mjs';
 
 // Read the real WebView through CDP, but perform every navigation gesture with
 // Android input events. No DOM clicks or synthetic touch events stand in for UI.
-const adb = (...args) => execFileSync('adb', args, { encoding: 'utf8' }).trim();
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const report = { gestures: [], checks: [] };
+const adb = observedAdb(report);
 let ws;
 try {
   const pid = adb('shell', 'pidof', 'org.irgunshiuraitorah.app').split(/\s+/)[0];
@@ -101,7 +102,7 @@ try {
   })())`));
   const read = async () => {
     const dom = await readDOM();
-    dom.native = await evaluate("window.Capacitor.nativePromise('IrgunPlayback','getState',{})");
+    dom.native = await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaPlaybackSnapshot',{})");
     return dom;
   };
   const wait = async predicate => {

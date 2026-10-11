@@ -23,7 +23,7 @@ async function connect(){
 }
 async function state(){
   await connect();
-  const id=++evalId,expression="window.Capacitor.nativePromise('IrgunPlayback','getState',{})";
+  const id=++evalId,expression="window.Capacitor.nativePromise('IrgunPlayback','qaPlaybackSnapshot',{})";
   return await new Promise((resolve,reject)=>{
     const timer=setTimeout(()=>{pending.delete(id);reject(new Error('Native Media3 state observation timed out'));},9000);
     pending.set(id,{resolve,reject,timer});

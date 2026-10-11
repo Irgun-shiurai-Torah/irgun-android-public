@@ -39,3 +39,33 @@ public final class AudioSeekGuardRegression {
     assert.match(output,/passed/);
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
+
+test('native Audio authority survives delayed Video callbacks until an explicit Video transaction',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'irgun-authority-'));
+  try {
+    const harness=join(dir,'PlaybackAuthorityRegression.java');
+    writeFileSync(harness,`package org.irgunshiuraitorah.app;
+public final class PlaybackAuthorityRegression {
+  static void require(boolean value, String message) { if (!value) throw new AssertionError(message); }
+  public static void main(String[] args) {
+    PlaybackAuthorityGuard guard = new PlaybackAuthorityGuard();
+    require(guard.acceptsVideoUpdate(true), "A new initial Video must be able to start");
+    guard.commitAudio();
+    require(!guard.acceptsVideoUpdate(true), "Delayed Video callback must not mute Audio after Home");
+    require(!guard.acceptsVideoUpdate(false), "Non-authoritative updates must not claim Video");
+    require(!guard.acceptsVideoUpdate(true), "The Audio owner must survive notification reopening and delays");
+    guard.allowVideo();
+    require(guard.acceptsVideoUpdate(true), "Explicit synchronized Audio-to-Video commit may change owner");
+    guard.commitAudio();
+    require(!guard.acceptsVideoUpdate(true), "Rollback must restore the Audio fence");
+    guard.allowVideo();
+    require(guard.acceptsVideoUpdate(true), "A different lecture may start Video normally");
+    System.out.println("Home Audio, delayed callbacks, explicit Video and rollback passed");
+  }
+}`);
+    execFileSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,
+      'android/app/src/main/java/org/irgunshiuraitorah/app/PlaybackAuthorityGuard.java',harness],{stdio:'pipe'});
+    const output=execFileSync('java',['-cp',dir,'org.irgunshiuraitorah.app.PlaybackAuthorityRegression'],{encoding:'utf8'});
+    assert.match(output,/passed/);
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});

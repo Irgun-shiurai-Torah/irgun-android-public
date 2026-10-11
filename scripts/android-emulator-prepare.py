@@ -29,6 +29,12 @@ if p.count(method) != 1:
     raise RuntimeError('Native window observation insertion point changed')
 p = p.replace(method, '''    // Disposable QA APK only: fresh native geometry, no playback mutation.
     @PluginMethod
+    public void qaPlaybackSnapshot(PluginCall call) {
+        // Unlike getState(), observation must not re-open bridge/foreground gates.
+        call.resolve(stateObject(IrgunPlaybackService.getSnapshot()));
+    }
+
+    @PluginMethod
     public void qaWindowBounds(PluginCall call) {
         getActivity().runOnUiThread(() -> {
             android.webkit.WebView view = getBridge().getWebView();
