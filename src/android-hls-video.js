@@ -115,9 +115,25 @@ async function getAndroidHlsSource(apiBase, videoId) {
       clearTimeout(timer);
     }
   };
-  // New shiurim may have an MP4 before their HLS backup is ready. Either direct
-  // source is playable; a missing HLS copy must not discard a valid MP4.
-  return lookup(false);
+  // New shiurim may have an MP4 before their HLS backup is ready. Either
+  // source is playable. An emulator's first source.json request sometimes
+  // times out even when the Worker/HLS media is healthy; falling back directly
+  // to Vimeo turns a temporary connection failure into a black player.
+  // Retry the descriptor once, before creating a media element, so users see
+  // one prepared video instead of several repeated playback starts.
+  try {
+    return await lookup(false);
+  } catch (error) {
+    const message = String(error?.message || '');
+    const retryable = error?.name === 'AbortError' ||
+      error?.name === 'TimeoutError' ||
+      error instanceof TypeError ||
+      /Video sources unavailable \((?:429|5\d\d)\)/.test(message);
+    if (!retryable || (typeof navigator !== 'undefined' && navigator.onLine === false)) throw error;
+    console.warn('[Playback] Retrying temporary video source lookup failure',message);
+    await new Promise(resolve => setTimeout(resolve,350));
+    return lookup(true);
+  }
 }
 
 export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, poster = '', resumeSeconds = 0, onError, onMinimize, onSpeedChange, isPictureInPicture = () => false } = {}) {
