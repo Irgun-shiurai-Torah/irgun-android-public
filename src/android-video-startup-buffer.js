@@ -32,3 +32,21 @@ export async function waitForInitialVideoBuffer(video, {seconds = 6, timeoutMs =
   }
   throw new Error('Video did not buffer enough to start smoothly');
 }
+
+// Some HLS manifests start at 0.066666s, not exactly at 0. A WebView may
+// accept six seconds of real buffered data while paused, but its first Play
+// then seeks to the first decoded frame and emits another Waiting event.
+// Align this tiny gap *before* Play, without inventing buffered bytes.
+export function firstBufferedStartupFrame(video, seconds = 6) {
+  const position = Number(video?.currentTime) || 0;
+  const rate = Math.max(.25, Number(video?.playbackRate) || 1);
+  const required = Math.max(0, seconds * rate);
+  const ranges = video?.buffered;
+  for (let index = 0; index < (ranges?.length || 0); index++) {
+    const start = Number(ranges.start(index)), end = Number(ranges.end(index));
+    const gap = start - position;
+    if (Number.isFinite(start) && Number.isFinite(end) && gap > .002 &&
+        gap <= .10 && end - start >= required) return start;
+  }
+  return null;
+}
