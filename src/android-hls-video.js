@@ -20,6 +20,7 @@ function loadHls(apiBase) {
 
 function makePlayerAdapter(video, stage, getHls, readyPromise) {
   const listeners = new Map();
+  let stalledHandoffRetargets = 0;
   const emit = (name, data) => {
     if (video.dataset.startupBufferPhase === 'priming' && ['play','pause','timeupdate','ended'].includes(name)) return;
     for (const callback of listeners.get(name) || []) {
@@ -48,6 +49,30 @@ function makePlayerAdapter(video, stage, getHls, readyPromise) {
     getCurrentTime:() => Promise.resolve(Math.max(0, Number(video.currentTime) || 0)),
     getDuration:() => Promise.resolve(Number(video.duration) || 0),
     getPaused:() => Promise.resolve(video.paused),
+    // HLS.js can remain pinned to a decoded keyframe after a high-speed
+    // Audio -> Video catch-up. Retarget the missing fragment ONCE; do not
+    // replace the media element, replay from 0:00, or turn off native Audio.
+    retargetStalledHandoff:seconds => {
+      const hls = getHls();
+      const target = Number(seconds);
+      if (!hls || stalledHandoffRetargets >= 1 || video.paused ||
+          !Number.isFinite(target) || target <= 0 ||
+          Math.abs(target - (Number(video.currentTime) || 0)) < 0.6 ||
+          typeof hls.stopLoad !== 'function' || typeof hls.startLoad !== 'function') return Promise.resolve(false);
+      try {
+        video.currentTime = Math.min(target, Number.isFinite(video.duration) && video.duration > 0
+          ? Math.max(0, video.duration - .25) : target);
+        hls.stopLoad();
+        hls.startLoad(video.currentTime);
+        stalledHandoffRetargets++;
+        video.dataset.hlsHandoffRetargetAt = String(video.currentTime);
+        console.warn('[Playback] Retargeting stalled HLS handoff without restarting native Audio',video.currentTime);
+        return Promise.resolve(true);
+      } catch (error) {
+        console.warn('[Playback] Unable to retarget stalled HLS handoff',error);
+        return Promise.resolve(false);
+      }
+    },
     setCurrentTime:seconds => {
       const duration = Number(video.duration) || 0;
       const target = Math.max(0, Number(seconds) || 0);
