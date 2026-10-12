@@ -5047,6 +5047,24 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
       Promise.resolve(player?.getCurrentTime?.()).catch(()=>null)
     ]);
     const videoNow = Number(current);
+    if (paused && player?.getSourceType?.() === 'hls' &&
+        state.nativePlayback?.mode === 'AUDIO' &&
+        (state.nativePlayback?.audioIsPlaying || state.nativePlayback?.audioPlayWhenReady) &&
+        typeof player.resumeStalledHandoff === 'function') {
+      // A decoder can pause itself after showing its first HLS frame, without
+      // the listener pressing Pause. Try one muted resume only when the HLS
+      // adapter still holds a genuine Play intent. Native Audio stays audible
+      // until moving pictures and matching clocks are proven below.
+      const resumed = await Promise.race([
+        Promise.resolve(player.resumeStalledHandoff()).catch(()=>false),
+        new Promise(resolve=>setTimeout(()=>resolve(false),900))
+      ]);
+      if (resumed) {
+        lastDecodedMotionAt = Date.now();
+        await new Promise(resolve=>setTimeout(resolve,350));
+        continue;
+      }
+    }
     if (!paused && Number.isFinite(videoNow)) {
       // Confirm the destination clock is live, not merely a resolved play() call.
       const element = player?.getVideoElement?.();
