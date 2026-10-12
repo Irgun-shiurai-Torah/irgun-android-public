@@ -72,3 +72,31 @@ test('a seek in progress cannot release initial playback even with six seconds b
   assert.ok(result&&result.ahead>=6);
   assert.equal(video.seeking,false,'The first WebView seek must settle before Play');
 });
+
+test('MP4 silent prime measures the six real downloaded seconds from original start, not hidden moving decoder',async()=>{
+  const video=media(2);video.currentTime=0;
+  video.buffered={length:1,start:()=>0,end:()=>2};
+  let elapsed=0;
+  const samples=[];
+  const prepared=await waitForInitialVideoBuffer(video,{
+    now:()=>elapsed,
+    bufferFromSeconds:()=>0,
+    onSample:sample=>samples.push(sample),
+    delay:async()=>{
+      elapsed+=150;
+      // Real muted MP4 playback advances while its buffer end downloads
+      // slightly faster. It never has 6s *ahead* of the hidden playhead.
+      video.currentTime=elapsed/1000;
+      video.buffered={length:1,start:()=>0,end:()=>2+elapsed/1000};
+    }
+  });
+  assert.ok(prepared.ahead>=6,'Playback can prime only once six actual initial media seconds have arrived');
+  assert.ok(video.currentTime>0,'Hidden priming playback is allowed to move under its cover');
+  assert.ok(bufferedVideoSecondsAhead(video)<6,
+    'An unanchored moving-playhead check would have waited forever');
+  // The production player pauses and returns to this exact original start
+  // before it exposes Video. The same real buffer must still pass the gate.
+  video.currentTime=0;
+  assert.ok((await waitForInitialVideoBuffer(video)).ahead>=6);
+  assert.ok(samples.some(s=>s.ahead<6),'The gate must have observed actual insufficient media before release');
+});
