@@ -655,11 +655,12 @@ test('Android session restores only verified offline identity for real /me trans
     {error:{status:403},expectedRestored:false,expectedCleared:false}
   ]){
     const state={token:'previously-verified-session',user:null};
-    let restores=0,clears=0;
+    let restores=0,clears=0,cacheClears=0;
     const context={
-      state,apiJson:async()=>{throw scenario.error;},
+      state,localStorage:{},apiJson:async()=>{throw scenario.error;},
       restoreOfflineAccount(){restores++;state.user={name:'Cached',email:'cached@example.test'};},
       setToken:()=>{clears++;state.token='';},
+      clearCachedAccount:()=>{cacheClears++;},
       resetUserState:()=>{state.user=null;}
     };
     runInNewContext(source,context);
@@ -668,6 +669,8 @@ test('Android session restores only verified offline identity for real /me trans
       'A network outage may show cached identity but a server rejection must not');
     assert.equal(clears,scenario.expectedCleared ? 1 : 0,
       'Only a confirmed 401 revokes the cached token');
+    assert.equal(cacheClears,scenario.error?.status===403?1:0,
+      'HTTP 403 must discard the cached display identity even without revoking the token');
     assert.equal(Boolean(state.user),scenario.expectedRestored,
       'Offline identity must never carry over after a rejected session');
   }
@@ -678,10 +681,11 @@ test('reconnected server rejection clears already-displayed offline identity wit
     + '\nthis.restoreSession=restoreSession;';
   for(const [status,revokeToken] of [[401,true],[403,false]]) {
     const state={token:'previously-verified-session',user:{name:'Cached',email:'cached@example.test'},isAdmin:false};
-    let cleared=0,restored=0,tokenChanges=0;
-    const context={state,apiJson:async()=>{throw {status};},
+    let cleared=0,restored=0,tokenChanges=0,cacheClears=0;
+    const context={state,localStorage:{},apiJson:async()=>{throw {status};},
       restoreOfflineAccount:()=>restored++,
       setToken:()=>{state.token='';tokenChanges++;},
+      clearCachedAccount:()=>{cacheClears++;},
       resetUserState:()=>{state.user=null;cleared++;}};
     runInNewContext(source,context);
     await context.restoreSession();
@@ -689,6 +693,8 @@ test('reconnected server rejection clears already-displayed offline identity wit
     assert.equal(cleared,1,'A previously restored identity must be hidden after /me refuses it');
     assert.equal(state.user,null);
     assert.equal(tokenChanges,revokeToken?1:0,'Only HTTP 401 revokes the existing session token');
+    assert.equal(cacheClears,status===403?1:0,
+      'HTTP 403 must make the cached display identity unavailable on a later offline restart');
   }
 });
 test('ready catalog and restored account remain usable while secondary startup feeds are pending',async()=>{
