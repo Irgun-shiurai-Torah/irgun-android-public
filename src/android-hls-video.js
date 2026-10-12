@@ -1,4 +1,4 @@
-import {bufferedVideoSecondsAhead, waitForInitialVideoBuffer} from './android-video-startup-buffer.js';
+import {bufferedVideoSecondsAhead, waitForInitialVideoBuffer, firstBufferedStartupFrame} from './android-video-startup-buffer.js';
 const hlsLibraryPromises = new Map();
 
 function loadHls(apiBase) {
@@ -815,6 +815,24 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
           }
         }
         if (!buffered || cancelled()) return;
+        if (activeSource === sources.hls) {
+          const firstFrame = firstBufferedStartupFrame(video);
+          if (firstFrame != null) {
+            // Only align a <=100ms real first-frame gap, and only after
+            // confirmed contiguous media bytes are already buffered. Finish
+            // the seek while the loading cover is still visible, before Play.
+            video.currentTime = firstFrame;
+            buffered = await waitForInitialVideoBuffer(video, {
+              timeoutMs:5000, isCancelled:cancelled,
+              onSample:sample => {
+                video.dataset.startupBufferRequired = String(sample.required);
+                video.dataset.startupBufferAhead = String(sample.ahead);
+              }
+            });
+            if (!buffered || cancelled()) return;
+            video.dataset.hlsInitialFrameAligned = String(firstFrame);
+          }
+        }
         video.dataset.startupBufferPhase = 'ready';
         video.dataset.startupBufferWaitMs = String(Date.now() - startupStartedAt);
       }
