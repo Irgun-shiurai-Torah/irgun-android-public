@@ -753,6 +753,32 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     }
   })();
   const adapter = makePlayerAdapter(video, stage, () => hls, readyPromise);
+  let stalledHandoffResumes = 0;
+  adapter.resumeStalledHandoff = async () => {
+    // An Android HLS decoder may unexpectedly pause after displaying its
+    // first frame. Resume only an *already-started*, still-requested and
+    // muted Video handoff. Never turn an explicit user Pause into Play, never
+    // wake MP4's silent startup priming, and never loop/restart endlessly.
+    if (destroyed || activeSource !== sources.hls || !hls ||
+        !playbackWanted || !initialPlaybackStarted || !video.paused ||
+        !video.muted || video.ended || startupPrime ||
+        stalledHandoffResumes >= 1 ||
+        (document.hidden && !isPictureInPicture())) return false;
+    const expectedIntent = playbackIntent;
+    stalledHandoffResumes += 1;
+    try {
+      await video.play();
+      if (destroyed || !playbackWanted || expectedIntent !== playbackIntent) {
+        video.pause();
+        return false;
+      }
+      video.dataset.hlsHandoffResumeCount = String(stalledHandoffResumes);
+      return !video.paused;
+    } catch (error) {
+      console.warn('[Playback] Stalled HLS Video could not resume',error);
+      return false;
+    }
+  };
   // The decoder may be paused while we silently prime an MP4 buffer. That
   // does not mean the listener pressed Pause. Native Video -> Audio handoff
   // must preserve the user's requested playback intent.
