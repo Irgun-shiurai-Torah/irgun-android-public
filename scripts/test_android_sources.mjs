@@ -76,6 +76,22 @@ class RecoveringHls {
 }
 const settleRecovery = async () => {for(let i=0;i<8;i++)await Promise.resolve();};
 const recoverySources = {video:{hls:'https://media.example.test/master.m3u8',mp4:'https://media.example.test/video.mp4'}};
+test('frozen HLS catch-up retargets one fragment without rebuilding the video or stopping audio',async()=>{
+  await fixture(recoverySources,'1233236785:585d5d53db',600,{Hls:RecoveringHls,onReady:async player=>{
+    const video=player.getVideoElement(),engine=RecoveringHls.current;
+    assert.equal(await player.retargetStalledHandoff(618),false,'An intentionally paused decoder must never be woken by a stale handoff');
+    video.paused=false;video.currentTime=606;video.buffered={length:1,start:()=>600,end:()=>607};
+    const original=video;
+    assert.equal(await player.retargetStalledHandoff(618),true,'One stalled unbuffered handoff may request the actual Audio clock');
+    assert.equal(video.currentTime,618);
+    assert.equal(engine.starts,1,'HLS must start loading at the new position once');
+    assert.equal(video.dataset.hlsHandoffRetargetAt,'618');
+    assert.equal(await player.retargetStalledHandoff(630),false,'The same decoder must not be repeatedly reset');
+    assert.equal(engine.starts,1);
+    assert.equal(player.getVideoElement(),original,'Keep the original media element and native audio authority');
+    assert.equal(video.paused,false);
+  }});
+});
 test('pausing during an HLS visual retry cannot restart parked video or select MP4',async t=>{
   t.mock.timers.enable({apis:['setTimeout','setInterval','Date']});
   await fixture(recoverySources,'1233236785:585d5d53db',0,{Hls:RecoveringHls,onReady:async player=>{
