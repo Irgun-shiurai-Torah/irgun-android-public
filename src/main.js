@@ -5220,7 +5220,12 @@ async function switchVideoToAudioSeamlessly(video, id) {
     const previousCurrent = state.current;
     let exact = await quickVimeoTime(state.watchResumeSeconds || 0, 350);
     let wasPlaying = Boolean(state.watchVideoPlaying);
-    if (player && typeof player.getPaused === 'function') {
+    if (player && typeof player.getPlaybackIntent === 'function') {
+      // Android can pause MP4 internally to prime its initial buffer while
+      // the user's Play request remains active. Transferring the decoder's
+      // paused flag to Media3 would start Audio silently paused.
+      try { wasPlaying = Boolean(player.getPlaybackIntent()); } catch (_) {}
+    } else if (player && typeof player.getPaused === 'function') {
       try {
         const paused = await Promise.race([
           Promise.resolve(player.getPaused()).catch(() => !wasPlaying),
