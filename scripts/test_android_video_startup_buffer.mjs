@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {bufferedVideoSecondsAhead, waitForInitialVideoBuffer} from '../src/android-video-startup-buffer.js';
+import {bufferedVideoSecondsAhead, waitForInitialVideoBuffer, firstBufferedStartupFrame} from '../src/android-video-startup-buffer.js';
 
 function media(ahead=0) {
   return {currentTime:30,duration:3600,playbackRate:1,readyState:4,seeking:false,
@@ -46,4 +46,29 @@ test('a priming gap never counts as buffered bytes and a distant range cannot re
     await assert.rejects(waitForInitialVideoBuffer(video,{timeoutMs:300,now:()=>clock,delay:async()=>{clock+=150;}}),/enough to start smoothly/);
   }
   assert.equal(video.currentTime,0);
+});
+
+test('aligns only the real first HLS frame before Play, not a distant unbuffered seek',async()=>{
+  const video=media();video.currentTime=0;
+  video.buffered={length:1,start:()=>.066666,end:()=>12.066666};
+  assert.equal(firstBufferedStartupFrame(video),.066666);
+  video.currentTime=firstBufferedStartupFrame(video);
+  assert.ok((await waitForInitialVideoBuffer(video)).ahead>=6,
+    'Alignment must still be backed by real contiguous media bytes');
+  assert.equal(video.currentTime,.066666,'Alignment must not jump past the true first buffered frame');
+  video.currentTime=0;
+  video.buffered={length:1,start:()=>.15,end:()=>60};
+  assert.equal(firstBufferedStartupFrame(video),null,'Large gaps must not be treated as tiny encoded-frame priming gaps');
+  video.buffered={length:1,start:()=>.066666,end:()=>5.066666};
+  assert.equal(firstBufferedStartupFrame(video),null,'Never align based on fewer than six actual buffered seconds');
+  video.currentTime=600;
+  video.buffered={length:1,start:()=>600.066666,end:()=>630};
+  assert.equal(firstBufferedStartupFrame(video),600.066666,'Resuming an HLS lecture must use the same real-frame alignment');
+});
+
+test('a seek in progress cannot release initial playback even with six seconds buffered',async()=>{
+  const video=media(9);video.seeking=true;let now=0;
+  const result=await waitForInitialVideoBuffer(video,{now:()=>now,delay:async()=>{now+=150;video.seeking=false;}});
+  assert.ok(result&&result.ahead>=6);
+  assert.equal(video.seeking,false,'The first WebView seek must settle before Play');
 });
