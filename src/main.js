@@ -2453,7 +2453,11 @@ async function bootstrap(options = {}) {
       state.offlineMode = true;
       state.usingCachedLibrary = true;
     }
-    if(state.offlineMode||navigator.onLine===false)restoreOfflineAccount();
+    // An Android WebView may continue reporting navigator.onLine=true after
+    // the actual catalog request has failed. The catch runs before /me can
+    // validate the session, so restore only the previously verified, token-
+    // bound *display identity*. Never restore admin rights or collections.
+    restoreOfflineAccount();
   } finally {
     state.loading = false;
     bootstrapInFlight = false;
