@@ -21,7 +21,7 @@ class Element extends EventTarget {
   querySelector(selector){if(!this.nodes.has(selector)) this.nodes.set(selector, new Element('button')); return this.nodes.get(selector);}
   replaceWith(child){child.parentElement = this.parentElement;}
 }
-async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {nativeHls = true, Hls, onReady, isPictureInPicture} = {}) {
+async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {nativeHls = true, Hls, onReady, isPictureInPicture, fetchSource} = {}) {
   const original = { document:globalThis.document, window:globalThis.window, fetch:globalThis.fetch, Option:globalThis.Option };
   const calls = [];
   const doc = new EventTarget(); doc.createElement = tag => {
@@ -32,7 +32,7 @@ async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {n
   globalThis.document = doc;
   globalThis.window = {Hls:Hls || {isSupported:()=>false}};
   globalThis.Option = class {};
-  globalThis.fetch = async url => {calls.push(url);return {ok:true,json:async()=>descriptor};};
+  globalThis.fetch = async url => {calls.push(url);return fetchSource ? fetchSource(url,calls.length) : {ok:true,json:async()=>descriptor};};
   const iframe = new Element('iframe'); new Element('div').appendChild(iframe);
   let player;
   try {
@@ -51,6 +51,32 @@ for (const id of ['1182395717','drivev-example']) test(`MP4-only shiur ${id} sta
   const r = await fixture({video:{hls:null,mp4:'https://media.example.test/video.mp4'}},id,42);
   assert.equal(r.source,'mp4');assert.equal(r.url,'https://media.example.test/video.mp4');
   assert.equal(r.position,42);assert.equal(r.paused,true);assert.equal(r.calls.length,1);
+});
+test('transient source.json network error retries once before any Video stage is created',async()=>{
+  const desc={video:{hls:'https://media.example.test/master.m3u8',mp4:'https://media.example.test/video.mp4'}};
+  let attempts=0;
+  const r=await fixture(desc,'1182395717',42,{fetchSource:async url=>{
+    attempts++;
+    if(attempts===1) {
+      const error=new Error('The user aborted a request.');error.name='AbortError';throw error;
+    }
+    return {ok:true,json:async()=>desc};
+  }});
+  assert.equal(attempts,2,'A temporary timeout receives exactly one retry');
+  assert.equal(r.calls.length,2);
+  assert.ok(r.calls[1].includes('?retry='),'Second lookup must bypass stale request caches');
+  assert.equal(r.source,'hls','Successful retry must retain direct HLS playback');
+  assert.equal(r.paused,true,'Descriptor retry must not start audio or media more than once');
+});
+test('permanent missing video source does not retry or restart playback',async()=>{
+  let attempts=0;
+  await assert.rejects(fixture({},'1182395717',0,{
+    fetchSource:async()=>{
+      attempts++;
+      return {ok:false,status:404,json:async()=>({})};
+    }
+  }),/Video sources unavailable \(404\)/);
+  assert.equal(attempts,1,'A permanent HTTP 404 is not a temporary network failure');
 });
 test('HLS remains the preferred source when both sources exist',async()=>{
   const r = await fixture({video:{hls:'https://media.example.test/master.m3u8',mp4:'https://media.example.test/video.mp4'}});
