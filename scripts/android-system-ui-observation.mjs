@@ -36,6 +36,16 @@ export function mediaNotificationClock(xml) {
   return seconds;
 }
 
+export function mediaNotificationControlPoint(xml, action, pattern) {
+  const visible = nodes(xml).filter(node => systemNode(node) && /visible="true"/.test(node) && /clickable="true"/.test(node));
+  const node = visible.find(node => pattern.test(node) &&
+    (!['play', 'pause'].includes(action) || attribute(node, 'content-desc').toLowerCase() === action));
+  const rect = node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
+  assert.ok(rect && rect[2] > rect[0] && rect[3] > rect[1],
+    'Actual visible notification ' + action + ' button must be present; never press the opposite action');
+  return [Math.round((rect[0] + rect[2]) / 2), Math.round((rect[1] + rect[3]) / 2)];
+}
+
 export function offlineConfirmationTapPoint(xml) {
   const visible = nodes(xml).filter(node => /package="org.irgunshiuraitorah.app"/.test(node) && /visible="true"/.test(node));
   if (!visible.some(node => attribute(node, 'resource-id') === 'android:id/message' &&

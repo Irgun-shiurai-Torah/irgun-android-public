@@ -135,6 +135,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private ExoPlayer player;
     private Player sessionPlayer;
+    private PlaybackMode sessionPlayerMode = PlaybackMode.AUDIO;
     private MediaSession mediaSession;
     private AudioAttributes mediaAudioAttributes;
 
@@ -161,6 +162,7 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     private boolean pendingBackgroundHandoff = false;
     private long pendingBackgroundPositionMs = 0L;
+    private long backgroundHandoffStartedMs = 0L;
     private boolean pendingBackgroundWasPlaying = false;
     private long backgroundHandoffId = 0L;
     private boolean backgroundPauseRequested = false;
@@ -254,6 +256,15 @@ public class IrgunPlaybackService extends MediaSessionService {
         // foreground/media notification lifecycle active on every supported Android.
         if (mediaSession == null) return;
         try {
+            if (sessionPlayerMode != playbackMode && player != null) {
+                // The forwarding view changed authority while the underlying
+                // engine kept playing. Rebind the logical view to the SAME
+                // engine/session so controllers discard the old Play/Pause state.
+                Player updated = new SessionPlayer(player);
+                mediaSession.setPlayer(updated);
+                sessionPlayer = updated;
+                sessionPlayerMode = playbackMode;
+            }
             if (!isSessionAdded(mediaSession)) addSession(mediaSession);
             triggerNotificationUpdate();
         } catch (Throwable error) {
@@ -303,6 +314,7 @@ public class IrgunPlaybackService extends MediaSessionService {
                     // VIDEO play/pause intent is handled by onPlayWhenReadyChanged.
                     // isPlaying becomes false while the hidden MP3 shadow buffers,
                     // which must never be interpreted as Vimeo pausing.
+                    if (isPlaying && pendingBackgroundHandoff) continueBackgroundHandoffIfReady();
                     publishNativeState();
                     refreshMediaNotification();
                 }
@@ -1002,6 +1014,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         backgroundPauseRequested = false;
         backgroundHandoffId += 1L;
         pendingBackgroundPositionMs = Math.max(0L, externalVideoPositionMs);
+        backgroundHandoffStartedMs = android.os.SystemClock.elapsedRealtime();
         pendingBackgroundWasPlaying = externalVideoPlaying || player.getPlayWhenReady();
         Log.d(TAG, "[Playback] Home VIDEO -> AUDIO requested at " + pendingBackgroundPositionMs + "ms");
 
@@ -1029,8 +1042,12 @@ public class IrgunPlaybackService extends MediaSessionService {
         if (!pendingBackgroundHandoff || player == null || player.getPlaybackState() != Player.STATE_READY) return;
         if (backgroundPauseRequested) return;
         if (pendingBackgroundWasPlaying && !player.isPlaying()) return;
-        long drift = Math.abs(player.getCurrentPosition() - pendingBackgroundPositionMs);
-        if (drift > DRIFT_LIMIT_MS) {
+        long position = player.getCurrentPosition();
+        long elapsed = Math.max(0L, android.os.SystemClock.elapsedRealtime() - backgroundHandoffStartedMs);
+        long latest = pendingBackgroundPositionMs + Math.round(elapsed * logicalSpeed);
+        // A ready shadow is already advancing. Comparing it to a fixed Home
+        // position repeatedly seeks backwards and delays background playback.
+        if (position < pendingBackgroundPositionMs - DRIFT_LIMIT_MS || position > latest + DRIFT_LIMIT_MS) {
             player.seekTo(pendingBackgroundPositionMs);
             return;
         }

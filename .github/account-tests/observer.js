@@ -1,5 +1,9 @@
 // Read-only observations appended to disposable debug builds; no credentials or UI setters.
-window.ISTAccountTest = { snapshot() {
+window.ISTAccountTest = {
+  // Actual session for external revocation; never included in snapshots or logs.
+  // This read-only accessor is appended only to disposable QA APKs.
+  sessionToken() { return state.token; },
+  snapshot() {
   const qaComment = state.watchComments?.find(c =>
     String(c.user_id) === String(state.user?.id) && String(c.text || '').startsWith('IRGUN-QA-')
   ) || null;

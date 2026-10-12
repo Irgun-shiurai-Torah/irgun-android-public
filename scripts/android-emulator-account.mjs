@@ -2,6 +2,7 @@ import {execFileSync} from 'node:child_process';
 import {writeFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
+import {settledNativeTapPoint} from './android-native-tap-point.mjs';
 const email=process.env.IRGUN_TEST_EMAIL,password=process.env.IRGUN_TEST_PASSWORD;
 assert.ok(email&&password,'Configure dedicated verified account secrets IRGUN_TEST_EMAIL and IRGUN_TEST_PASSWORD');
 const adb=(...a)=>execFileSync('adb',a,{encoding:'utf8'}).trim();
@@ -32,7 +33,12 @@ async function connect(){
  await new Promise((r,j)=>{ws.addEventListener('open',r,{once:true});ws.addEventListener('error',j,{once:true});});
  const socket=ws;let id=0;const pending=new Map();
  socket.addEventListener('close',()=>{for(const p of pending.values()){clearTimeout(p.timer);p.reject(new Error('Observation connection closed'));}pending.clear();});
- socket.addEventListener('message',e=>{const m=JSON.parse(e.data),p=pending.get(m.id);if(!p)return;pending.delete(m.id);clearTimeout(p.timer);m.error||m.result.exceptionDetails?p.reject(new Error('Observation failed')):p.resolve(m.result.result.value);});
+ socket.addEventListener('message',e=>{const m=JSON.parse(e.data),p=pending.get(m.id);if(!p)return;pending.delete(m.id);clearTimeout(p.timer);
+  if(m.error||m.result?.exceptionDetails){
+   const detail=String(m.error?.message||m.result.exceptionDetails.exception?.description||m.result.exceptionDetails.text||'Unknown observer exception');
+   p.reject(new Error('Observation failed: '+detail.replaceAll(email,'[email]').replaceAll(password,'[password]').slice(0,450)));
+  }else p.resolve(m.result.result.value);
+ });
  return (expression='JSON.stringify(window.ISTAccountTest ? window.ISTAccountTest.snapshot() : {ready:false,observerReady:false})')=>new Promise((resolve,reject)=>{const n=++id;const timer=setTimeout(()=>{pending.delete(n);reject(new Error('Observation timeout'));},10000);pending.set(n,{resolve,reject,timer});socket.send(JSON.stringify({id:n,method:'Runtime.evaluate',params:{expression,returnByValue:true,awaitPromise:true}}));}).then(JSON.parse);
 }
 let readSnapshot;
@@ -68,8 +74,14 @@ async function tap(key) {
   bounds=await readNativeBounds();
   const s=await read(),p=s.controls[key];
   if(p) {
-   adb('shell','input','tap',...native(p,s).map(String));
+   const measured=await settledNativeTapPoint({delay,
+    readBounds:async()=>{const b=await readNativeBounds();return {left:b[0],top:b[1],right:b[2],bottom:b[3],focused:true};},
+    readPoint:async()=>{const observed=await read(),point=observed.controls[key];return point?{...point,width:observed.width,height:observed.height}:null;}
+   });
+   bounds=measured.bounds;
+   adb('shell','input','tap',...measured.point.map(String));
    await delay(700);
+   if(key==='closeWatch')await wait(s=>!s.watchId,'The actual Back tap must close Watch before account navigation');
    return;
   }
   if(key==='playlists' && s.screen==='library' && s.libraryTabStrip) {
@@ -377,7 +389,7 @@ try{
  // The token remains in memory only and is never added to logs or artifacts.
  await type('email',email);await type('password',password);await tap('login');
  await wait(s=>s.loggedIn,'Native session required for the real revoked-session check');
- const actualToken=await readSnapshot('JSON.stringify(state.token)');assert.ok(actualToken,'Actual app token required');
+ const actualToken=await readSnapshot('JSON.stringify(window.ISTAccountTest.sessionToken())');assert.ok(actualToken,'Actual app token required');
  const revokeHeaders={Origin:'https://localhost','X-Irgun-App':'1',Authorization:'Bearer '+actualToken};
  const revoke=await fetch('https://api.irgunshiuraitorah.com/logout',{method:'POST',headers:revokeHeaders,signal:AbortSignal.timeout(20000)});
  assert.equal(revoke.status,200,'External request must revoke the actual Android app session');

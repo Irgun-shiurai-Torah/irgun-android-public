@@ -1,4 +1,5 @@
 import {test} from 'node:test';
+import {mediaNotificationControlPoint} from './android-system-ui-observation.mjs';
 import assert from 'node:assert/strict';
 import {fullscreenEducationTapPoint, mediaNotificationClock, offlineConfirmationTapPoint, settledOfflineConfirmationPoint} from './android-system-ui-observation.mjs';
 
@@ -45,4 +46,12 @@ test('physical offline confirmation waits for two consistent observed dialog pos
 });
 test('unstable offline dialog never produces a physical tap target',async()=>{
   let n=0;await assert.rejects(settledOfflineConfirmationPoint({readHierarchy:()=>offlineDialog(n++%2?215:220),delay:async()=>{},samples:4}),/no tap was performed/);
+});
+test('the observed Android 14 Play icon must never be tapped as notification Pause',()=>{
+ const play='<hierarchy><node text="" content-desc="Play" resource-id="com.android.systemui:id/actionPlayPause" package="com.android.systemui" clickable="true" visible="true" bounds="[240,256][288,304]"></node></hierarchy>';
+ const pattern=/(?:content-desc="Pause"|resource-id="[^"]*actionPlayPause")/;
+ assert.throws(()=>mediaNotificationControlPoint(play,'pause',pattern),/opposite action/);
+ const pause=play.replace('content-desc="Play"','content-desc="Pause"');
+ assert.deepEqual(mediaNotificationControlPoint(pause,'pause',pattern),[264,280]);
+ assert.throws(()=>mediaNotificationControlPoint(pause.replace('com.android.systemui" clickable','org.irgunshiuraitorah.app" clickable'),'pause',pattern),/button must be present/);
 });

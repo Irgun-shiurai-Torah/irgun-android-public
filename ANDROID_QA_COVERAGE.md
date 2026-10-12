@@ -6,13 +6,13 @@ head remain pending until its actual reports, logs and screenshots are inspected
 Local unit checks are separate.
 Do not merge this PR based on unit tests or a green subset of matrix jobs.
 
-Latest inspected attempt: [regression #79](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38248725709)
-had **2 successful jobs and 13 failed jobs**. All emulator jobs failed during
-native observer preparation, before SDK compilation or app/emulator execution.
-The separate startup #119 failed at the same point. This setup regression was
-introduced by the new Audio-authority snapshot field; it is not evidence of
-13 distinct app bugs. The correction and actual API-only passes are recorded
-in the final section below. A complete new emulator run is required.
+Latest inspected attempt: [regression #80](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38276337676)
+had **7 successful jobs and 8 failed jobs**. Native preparation and compilation
+passed. Actual HLS passed on all four APIs; mixed 15-minute reliability and
+startup #120 passed. Native account scenarios now ran, including real login.
+Remaining failures and their corrections are recorded in the final section.
+The separate signed-in media suite remains unexecuted because its preceding
+account jobs failed. New corrections require a complete new emulator run.
 
 ## Evidence checked
 
@@ -368,3 +368,69 @@ Next-head local validation: **135 checks passed, zero skipped**, including the
 four actual preparation checks. Vite build, Python/Node syntax and whitespace
 checks passed. Full Android SDK compilation and the new complete emulator
 results remain pending. PR #35 stays draft and unmerged.
+
+
+## Run #80: actual remaining failures after preparation recovered
+
+[Regression #80](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38276337676)
+on `3b25230e3bb0605c763e98ea6377ab9818c37fe4` finished **7 successful jobs and
+8 failed jobs**. All eight failed job logs, downloaded reports, relevant native
+traces and failure images were inspected. The #79 setup fix passed; actual SDK
+compilation completed in these jobs. [Startup #120](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38276337337)
+passed its real baseline and navigation checks.
+
+Real passes on this commit:
+- HLS API 30/34/35/36 each passed seven actual moving-picture, quality/position,
+  buffered-startup and blocked-Vimeo transport checks. Initial waits were
+  1728/1544/2344/1919 ms respectively, with 11.946667/11.946667/11.6/11.946667
+  actual buffered seconds and zero initial waiting events. This verifies the
+  repeated-startup-loading change for these fixtures; it does not cover every
+  video/network condition.
+- API 30 mixed reliability passed **900,107 ms**: repeated Audio/Video and
+  mini/full changes, Home/reopening, screen locks, unchanged app process,
+  advancing clocks and retained controls. PSS baseline 142,158 KB/peak 147,727 KB
+  stayed inside the declared memory budget.
+- MP3 response and HLS HTTP/CORS passed.
+- Native API 30/34 each passed all 11 baseline checks, repeated switches,
+  near-end seek, Video-selected speed, fullscreen Back, rotation, PiP and
+  Hebrew/English moving player labels. Real audio focus and Doze passed on both;
+  notification permission revoke/grant passed on API 34. Both completed actual
+  offline download/playback and process restart while offline before deletion
+  confirmation failed.
+- Native account API 30/34 each completed **25 actual checks**; API 35/36 each
+  completed **20**. All four passed native wrong-password denial, valid QA login,
+  visible correct account name/English-Hebrew controls, Like/Watch Later/Follow,
+  real advancing playback/server history, native comment create/edit/delete,
+  native playlist creation/add/remove, account/flags/history/playlist persistence
+  across process restart and deleted-comment absence after restart. API 30/34
+  additionally passed temporary playlist removal, restored lecture flags, logout,
+  subsequent native login/name and subsequent logout. Temporary QA comments and
+  playlists were cleaned in all four reports. These are actual Android account
+  passes, distinct from the still-unexecuted separate signed-in media matrix.
+- Independent comment and account/session API probes passed in all four jobs.
+
+| Failed device/scenario | Expected versus actual | Correction; new runtime result pending |
+| --- | --- | --- |
+| Native API 35 Audio to Video at ten minutes | Synchronized moving audible Video; first HLS frames took about eight seconds, catch-up reached 4x, then the clock froze near 611.14 seconds while Audio advanced. The unchanged deadline caused an honest rollback to Audio | After observed decoded motion, recover a catch-up clock stall once at user speed, seeking only into actual cached media at the live Audio position. Keep the original one-second synchronization/decoded-frame checks and deadline; unavailable bytes still fail |
+| Native API 36 before baseline playback | Actual app remains on search results; instead Activity was destroyed after search/keyboard handling and the screenshot showed Launcher. CDP timed out, with zero completed baseline checks. No ANR or Java crash was recorded | Avoid sending Android Back during the Enter/IME-hide race; physical Escape and the unchanged actual-search-screen assertion cannot finish the Activity in that way. Cause remains an inference from trace/gesture timing pending rerun |
+| Native API 30 Home | Native Audio ownership within the background observation; instead mode remained VIDEO with silent Audio, and the actual handoff completed about 6.9 seconds after Home | Continue the transaction on the real isPlaying transition as well as READY; stop repeatedly rewinding a ready advancing shadow to the fixed Home timestamp. Positions remain bounded by actual elapsed time |
+| Native API 34 notification Pause | Actual Pause icon/tap stops Media3; XML showed Play on actionPlayPause while native Audio was playing. The old selector tapped Play as though it were Pause | Rebind the logical session view when authority changes, retaining the same MediaSession and actual engine; require the real requested Play/Pause accessibility label before any tap. This does not substitute a fabricated Pause response |
+| Native API 30/34 offline deletion | Physical confirmation removes the real MP3; actual OK at [252,356] left the synchronous native WebView confirm open. Later inspector checks timed out behind it | Replace offline deletion's blocking confirm with an asynchronous translated app dialog. Physical Cancel must retain the real file; physical Remove still must acknowledge native source replacement, delete the file, remove its record and prove actual filesystem absence. Assert decoded Video/clock advance while the dialog is open |
+| Account API 30/34 actual-token revocation | Read/revoke the application's actual session; instead the CDP expression JSON.stringify(state.token) raised an observer exception after 25 completed checks. The module-private state variable is not a global CDP variable | A QA-only read-only accessor returns the real module token in memory, outside snapshots/reports/screenshots. Retain actual server revocation, HTTP 401 and restart/session-clearing assertions; improve redacted exception diagnostics |
+| Account API 35/36 navigation after restart | Back closes Watch, revealing Library; actual image still shows the Watch header and scrolled recommendations, so Library is inaccessible | Queue Video history writes without waiting for network reconciliation before closing. Require stable fresh physical account tap bounds and the actual Watch-closed postcondition before navigation. Slow queued history/stale tap geometry are possible causes; runtime confirmation is required |
+
+Native API 35 never ran the extension scenarios after its failed baseline;
+API 36 completed zero baseline checks. API 30/34's later network, lock, speed
+and small-screen inspector failures follow the still-open native confirmation;
+they are failed/unverified scenarios, not independent proven failures of every
+feature. No revoked-session or separate logged-in playback pass is claimed.
+
+Next-head validation: **142 local checks passed, zero skipped**. New checks run
+the actual native Home/session-view methods, preserve the same actual engine,
+reject wrong source positions, prove the real QA-only token accessor, keep the
+observed wrong notification action failed, test asynchronous confirmation/Cancel
+and duplicate approval, close Video despite a pending history write, and exercise
+the observed HLS catch-up stall with/without cached media. Vite build, script
+syntax and whitespace checks passed. Full SDK compilation and new emulator
+results remain pending. No failing assertion was disabled or changed to a fake
+success. PR #35 remains draft and unmerged.

@@ -261,6 +261,8 @@ const state = {
   downloadPanelOpen: false,
   downloaderReady: false,
   offlineDownloads: new Map((loadJson(OFFLINE_DOWNLOADS_KEY, []) || []).map(item => [String(item?.key || ''), item]).filter(([key]) => key)),
+  offlineDeleteKey: '',
+  offlineDeleteBusy: false,
   offlineJobs: new Map(),
   playlists: [],
   activePlaylistId: '',
@@ -485,8 +487,7 @@ async function saveOffline(kind, id) {
   if (state.offlineDownloads.has(key)) {
     const stored = state.offlineDownloads.get(key);
     if (isPlausibleOfflineAudio(stored?.bytes, stored?.durationSeconds)) {
-      const confirmed = confirm(currentLanguage() === 'he' ? 'להסיר את העותק השמור להאזנה ללא אינטרנט?' : 'Remove the saved offline copy?');
-      if (confirmed) await deleteOffline(key, { stayHere:true });
+      requestOfflineDeletion(key);
       return;
     }
     // Corrupt downloads are not usable or 'saved'. Remove them and retry.
@@ -589,6 +590,52 @@ async function saveOffline(kind, id) {
     if (state.screen === 'library' && state.librarySection === 'downloads') render(); else refreshOfflineButtonsForKey(key);
   } finally {
     try { if (listener && typeof listener.remove === 'function') await listener.remove(); } catch (_) {}
+  }
+}
+
+function requestOfflineDeletion(key) {
+  if (state.offlineDeleteBusy || !state.offlineDownloads.has(String(key || ''))) return;
+  state.offlineDeleteKey = String(key);
+  refreshOfflineDeleteDialog();
+}
+
+function offlineDeleteDialogHtml() {
+  if (!state.offlineDeleteKey) return '';
+  const he = currentLanguage() === 'he';
+  return `<div class="confirm-backdrop offline-delete-backdrop"><section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="offlineDeleteTitle">
+    <h2 id="offlineDeleteTitle">${he ? 'להסיר את העותק השמור להאזנה ללא אינטרנט?' : 'Remove the saved offline copy?'}</h2>
+    <div class="confirm-actions"><button class="confirm-cancel" data-offline-delete-cancel="1" ${state.offlineDeleteBusy ? 'disabled' : ''}>${he ? 'ביטול' : 'Cancel'}</button>
+    <button class="confirm-delete" data-offline-delete-confirm="1" ${state.offlineDeleteBusy ? 'disabled' : ''}>${state.offlineDeleteBusy ? (he ? 'מוחק…' : 'Deleting…') : (he ? 'הסר' : 'Remove')}</button></div>
+  </section></div>`;
+}
+
+function bindOfflineDeleteDialog(root) {
+  if (!root) return;
+  root.querySelector('[data-offline-delete-cancel]')?.addEventListener('click', () => {
+    if (state.offlineDeleteBusy) return;
+    state.offlineDeleteKey = '';
+    refreshOfflineDeleteDialog();
+  });
+  root.querySelector('[data-offline-delete-confirm]')?.addEventListener('click', confirmOfflineDeletion);
+}
+
+function refreshOfflineDeleteDialog() {
+  const root = document.getElementById('offlineDeleteMount');
+  if (!root) return;
+  root.innerHTML = offlineDeleteDialogHtml();
+  bindOfflineDeleteDialog(root);
+}
+
+async function confirmOfflineDeletion() {
+  if (state.offlineDeleteBusy || !state.offlineDeleteKey) return;
+  const key = state.offlineDeleteKey;
+  state.offlineDeleteBusy = true;
+  refreshOfflineDeleteDialog();
+  try { await deleteOffline(key, {stayHere:true}); }
+  finally {
+    state.offlineDeleteBusy = false;
+    state.offlineDeleteKey = '';
+    refreshOfflineDeleteDialog();
   }
 }
 
@@ -3534,6 +3581,7 @@ function shell(content) {
     ${state.playerOpen && state.current ? fullPlayerHtml() : ''}
     ${state.watchVideo && !state.watchHostedExternally && !state.playerOpen ? watchHtml() : ''}
     <div id="downloadManagerMount">${downloadManagerHtml()}</div>
+    <div id="offlineDeleteMount">${offlineDeleteDialogHtml()}</div>
     ${filterSheetHtml()}
     ${deleteAccountDialogHtml()}
     ${adminEditorHtml()}
@@ -4966,6 +5014,8 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
   // the keyframe plays. Require actual motion before correcting another drift.
   let lastSeekCorrectionAt = Number.NEGATIVE_INFINITY;
   let catchupElement = null;
+  let lastDecodedMotionAt = startedAt;
+  let recoveredCatchupStall = false;
   try {
   while (Date.now() < deadline) {
     if (!state.watchAudioToVideoHandoff || String(state.watchAudioToVideoHandoffId || '') !== String(videoKey || '')) {
@@ -4995,6 +5045,26 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
       const framesAfter = frameCount();
       const movingPicture = !element || (!element.paused && !element.seeking && element.readyState >= 2 && element.videoWidth > 0 &&
         (framesBefore == null || (framesAfter != null && framesAfter > framesBefore)));
+      if (Number.isFinite(again) && again > videoNow + 0.05 && movingPicture) lastDecodedMotionAt = Date.now();
+      if (!recoveredCatchupStall && player?.getSourceType?.() === 'hls' && catchupElement === element &&
+          element && !element.seeking && element.playbackRate > (Number(state.playbackSpeed) || 1) &&
+          Date.now() - lastDecodedMotionAt >= 900 && state.nativePlayback?.audioIsPlaying === true) {
+        // API 35 decoded the first keyframe, then its clock froze at 4x despite
+        // buffered media. Reset catch-up speed and make one cached-range seek
+        // to the actual advancing Audio clock; do not restart either source.
+        const rangeReady = Array.from({length:element.buffered?.length || 0}, (_, i) => i).some(i =>
+          element.buffered.start(i) <= stillSource && element.buffered.end(i) >= stillSource + 2);
+        if (rangeReady) {
+          recoveredCatchupStall = true;
+          element.playbackRate = Number(state.playbackSpeed) || 1;
+          await Promise.race([
+            Promise.resolve(player.setCurrentTime(stillSource)).catch(()=>null),
+            new Promise(resolve=>setTimeout(()=>resolve(null),900))
+          ]);
+          lastDecodedMotionAt = Date.now();
+          continue;
+        }
+      }
       // A long MP4 seek can present its first frames before the following byte
       // range arrives. Keep Audio audible until the destination has a runway,
       // rather than committing over a picture that immediately buffers again.
@@ -6346,7 +6416,8 @@ function bind() {
   }));
   document.querySelectorAll('[data-save-offline-kind]').forEach(el=>el.addEventListener('click',event=>{event.stopPropagation();saveOffline(el.dataset.saveOfflineKind,el.dataset.saveOfflineId);}));
   document.querySelectorAll('[data-offline-play]').forEach(el=>el.addEventListener('click',()=>playOfflineRecord(el.dataset.offlinePlay)));
-  document.querySelectorAll('[data-offline-delete]').forEach(el=>el.addEventListener('click',()=>deleteOffline(el.dataset.offlineDelete)));
+  document.querySelectorAll('[data-offline-delete]').forEach(el=>el.addEventListener('click',()=>requestOfflineDeletion(el.dataset.offlineDelete)));
+  bindOfflineDeleteDialog(document.getElementById('offlineDeleteMount'));
   document.querySelectorAll('[data-open-playlist-picker]').forEach(el=>el.addEventListener('click',event=>{event.stopPropagation();openPlaylistPicker(el.dataset.playlistKind,el.dataset.playlistId);}));
   document.querySelectorAll('[data-playlist-picker-close]').forEach(el=>el.addEventListener('click',event=>{if(event.target.closest('[data-playlist-picker-panel]') && event.target!==el)return;state.playlistPickerItem=null;render();}));
   document.querySelectorAll('[data-playlist-picker-panel]').forEach(el=>el.addEventListener('click',event=>event.stopPropagation()));
@@ -8446,7 +8517,10 @@ async function closeWatch(save = true) {
   if (state.watchMode === 'video' && state.watchVideo && save) {
     let duration = 0;
     try { duration = state.watchVimeo ? await state.watchVimeo.getDuration() : Number(state.watchVideo.duration) || 0; } catch (_) {}
-    await saveHistory(videoId(state.watchVideo), 'video', state.watchResumeSeconds || 0, duration, false, { reconcile:true });
+    // Queue the actual position before closing, but keep Back usable while
+    // server history writes or reconciliation are slow.
+    saveHistory(videoId(state.watchVideo), 'video', state.watchResumeSeconds || 0, duration, false, { reconcile:true }).catch(error =>
+      console.warn('Could not save Video history after closing Watch', error));
   } else if (state.watchMode === 'audio' && save) {
     const snapshot = captureCurrentAudioHistorySnapshot(videoId(state.watchVideo));
     // Do not block the Back button on a slow network history write. The

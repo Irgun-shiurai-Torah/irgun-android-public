@@ -182,9 +182,10 @@ try {
   report.searchAfterSubmit=observedSearch;
   assert.equal(observedSearch.screen,'shiurim','Enter in the focused search input must open search results, not a lecture');
   assert.equal(observedSearch.query,code,'Actual search results must use the typed lecture code');
-  // KEYCODE_BACK is safe only after confirming search navigation and a visible IME.
+  // Enter can start hiding the IME while dumpsys still reports it as shown.
+  // Escape dismisses input without sending Android Back to the app Activity.
   if(/(?:mInputShown|isInputViewShown)=true/.test(adb('shell','dumpsys','input_method'))) {
-    adb('shell','input','keyevent','KEYCODE_BACK');await delay(500);
+    adb('shell','input','keyevent','KEYCODE_ESCAPE');await delay(500);
     assert.equal((await searchState()).screen,'shiurim','Keyboard dismissal must not leave search results');
   }
   const selector=`.media-primary-overlay button[data-watch="${target.id}"],button.media-title[data-watch="${target.id}"]`;

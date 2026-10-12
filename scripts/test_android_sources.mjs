@@ -969,3 +969,64 @@ test('offline deletion cannot unlink the active file when native source replacem
   assert.equal(await context.remove(record.key),false);assert.equal(filesystemCalls,0);
   assert.equal(state.offlineDownloads.get(record.key),record);assert.equal(state.current.offline,true);
 });
+
+test('offline confirmation stays asynchronous, cancel preserves the file, and duplicate approval cannot delete twice',async()=>{
+ const state={offlineDownloads:new Map([['video:lecture',{key:'video:lecture'}]]),offlineDeleteKey:'',offlineDeleteBusy:false};
+ const handlers={};let deletes=0,finish;
+ const mount={innerHTML:'',querySelector:selector=>({addEventListener:(_event,handler)=>{handlers[selector]=handler;}})};
+ const context={state,currentLanguage:()=> 'en',document:{getElementById:()=>mount},
+  deleteOffline:async(key,options)=>{assert.equal(key,'video:lecture');assert.equal(options.stayHere,true);deletes++;await new Promise(r=>{finish=r;});}};
+ const start=mainSource.indexOf('function requestOfflineDeletion(');
+ runInNewContext(mainSource.slice(start,mainSource.indexOf('async function deleteOffline(',start))+'\nthis.request=requestOfflineDeletion;this.approve=confirmOfflineDeletion;',context);
+ context.request('video:lecture');assert.match(mount.innerHTML,/role="dialog" aria-modal="true"/);assert.match(mount.innerHTML,/Remove the saved offline copy/);
+ assert.equal(deletes,0);handlers['[data-offline-delete-cancel]']();assert.equal(state.offlineDeleteKey,'');assert.equal(deletes,0);assert.ok(state.offlineDownloads.has('video:lecture'));
+ context.request('video:lecture');const pending=context.approve();assert.equal(deletes,1);assert.equal(state.offlineDeleteBusy,true);assert.match(mount.innerHTML,/disabled/);
+ await context.approve();handlers['[data-offline-delete-cancel]']();assert.equal(deletes,1);assert.equal(state.offlineDeleteKey,'video:lecture');
+ finish();await pending;assert.equal(state.offlineDeleteBusy,false);assert.equal(state.offlineDeleteKey,'');assert.equal(mount.innerHTML,'');
+});
+
+test('closing Video captures history but does not hold Back behind a pending server write',async()=>{
+ const video={id:'lecture',duration:3600},player={getDuration:async()=>3600,destroy:async()=>{}};
+ const state={watchVideo:video,watchMode:'video',watchVimeo:player,watchVimeoGeneration:5,watchResumeSeconds:743,current:null};
+ let saved,cleared=false;
+ const context={state,usesNativeUnifiedAudio:()=>true,playbackIsPaused:()=>false,
+  preserveWatchTime:async()=>{},videoId:v=>v?.id||'',saveHistory:(...args)=>{saved=args;return new Promise(()=>{});},
+  clearCurrentAudioStateForVideo(){},clearNativeMediaSession:()=>{cleared=true;},setNativeVideoFullscreen(){},
+  clearPersistentVideoMount(){},usageAnalytics:{setMedia(){}},render(){},console};
+ const start=mainSource.indexOf('async function closeWatch(');
+ runInNewContext(mainSource.slice(start,mainSource.indexOf('async function performWatchModeSwitch(',start))+'\nthis.close=closeWatch;',context);
+ await context.close();assert.equal(state.watchVideo,null);assert.equal(cleared,true);
+ assert.deepEqual(saved.slice(0,5),['lecture','video',743,3600,false]);
+});
+
+for(const buffered of [true,false])test('observed HLS 4x catch-up clock stall uses one verified cached seek, buffered='+buffered,async t=>{
+ t.mock.timers.enable({apis:['setTimeout','Date']});let recoveredAt=null,recoveredPosition=0;const seeks=[];
+ const native={mode:'AUDIO',audioIsPlaying:true,audioPlayWhenReady:true};
+ const state={watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',watchAudioToVideoTargetSeconds:605.58,playbackSpeed:1,nativePlayback:native};
+ const position=()=>recoveredAt!=null?recoveredPosition+(Date.now()-recoveredAt)/1000:Date.now()<8000?605.58:Date.now()<11000?605.58+(Date.now()-8000)/1000*2:611.14;
+ const element={paused:false,seeking:false,readyState:4,videoWidth:640,playbackRate:1,
+  buffered:{length:buffered?1:0,start:()=>600.066666,end:()=>678.018666},
+  getVideoPlaybackQuality:()=>({totalVideoFrames:Date.now()<8000?318:318+Math.floor((Date.now()-8000)/30)})};
+ const player={getSourceType:()=> 'hls',getVideoElement:()=>element,getPaused:async()=>false,getCurrentTime:async()=>position(),
+  setCurrentTime:async value=>{seeks.push(value);recoveredAt=Date.now();recoveredPosition=value;}};
+ const context={state,Date,setTimeout,usesNativeUnifiedAudio:()=>true,playbackPositionSeconds:()=>605.58+Date.now()/1000,console:{warn(){}}};
+ const start=mainSource.indexOf('async function waitForVimeoHandoffReady(');
+ runInNewContext(mainSource.slice(start,mainSource.indexOf('function videoAudioPlaybackItem(',start))+'\nthis.wait=waitForVimeoHandoffReady;',context);
+ let done=false,result;const pending=context.wait(player,'lecture',15000).then(r=>{done=true;result=r;});
+ for(let i=0;i<180&&!done;i++){t.mock.timers.tick(100);for(let j=0;j<15;j++)await Promise.resolve();}
+ await pending;assert.equal(seeks.length,buffered?1:0,'No repeated keyframe seek or seek to unavailable bytes');
+ if(buffered){assert.ok(result>617);assert.ok(Math.abs(result-(605.58+Date.now()/1000))<=1,'The original one-second clock requirement stays active');}
+ else assert.equal(result,null,'A stalled decoder without cached recovery media must remain a failed handoff');
+ assert.equal(element.playbackRate,1,'Internal recovery must restore the chosen rate');
+});
+
+test('actual QA session accessor reads the module token without putting it in the account snapshot',()=>{
+ const source=readFileSync('.github/account-tests/observer.js','utf8');
+ const start=source.indexOf('sessionToken()'),end=source.indexOf('  snapshot()',start);
+ const state={token:'real-session-in-memory'},context={state};
+ runInNewContext('this.observer={'+source.slice(start,end)+'};',context);
+ assert.equal(context.observer.sessionToken(),state.token);state.token='new-actual-session';assert.equal(context.observer.sessionToken(),state.token);
+ assert.doesNotMatch(source.slice(end),/sessionToken:|token:state\.token|return state\.token/);
+ const script=readFileSync('scripts/android-emulator-account.mjs','utf8');
+ assert.match(script,/window\.ISTAccountTest\.sessionToken\(\)/);assert.doesNotMatch(script,/JSON\.stringify\(state\.token\)/);
+});

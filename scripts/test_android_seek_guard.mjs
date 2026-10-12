@@ -5,6 +5,54 @@ import {mkdtempSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
+test('actual native Home readiness accepts an advancing shadow and rebinds only the session view',()=>{
+ const source=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java','utf8');
+ const begin=source.indexOf('    private void continueBackgroundHandoffIfReady()');
+ const home=source.slice(begin,source.indexOf('    private void confirmBackgroundVideoPausedInternal(',begin));
+ const refreshStart=source.indexOf('    private void refreshMediaNotification()');
+ const refresh=source.slice(refreshStart,source.indexOf('    @Override',refreshStart));
+ const callbackStart=source.indexOf('public void onIsPlayingChanged('),callbackEnd=source.indexOf('                @Override',callbackStart);
+ assert.match(source.slice(callbackStart,callbackEnd),/if \(isPlaying && pendingBackgroundHandoff\) continueBackgroundHandoffIfReady\(\)/,
+  'READY may precede isPlaying: the actual listener must resume the waiting handoff');
+ const dir=mkdtempSync(join(tmpdir(),'irgun-native-home-'));
+ try {
+  const harness=join(dir,'NativeHomeRegression.java');
+  writeFileSync(harness,`public class NativeHomeRegression {
+   enum PlaybackMode {VIDEO,AUDIO}
+   static class Player {static final int STATE_READY=3;long position=735922;boolean playing=true;int seeks;int getPlaybackState(){return STATE_READY;}boolean isPlaying(){return playing;}long getCurrentPosition(){return position;}void seekTo(long value){seeks++;position=value;}}
+   static class SessionPlayer extends Player {final Player engine;SessionPlayer(Player p){engine=p;}}
+   static class MediaSession {Player view;int rebinds;void setPlayer(Player p){view=p;rebinds++;}}
+   static class android {static class os {static class SystemClock {static long now=1800;static long elapsedRealtime(){return now;}}}}
+   static class Log {static void w(String tag,String message){}static void w(String tag,String message,Throwable error){}}
+   static class IrgunPlaybackPlugin {static int requests;static void requestPauseVimeoForBackground(long id){requests++;}}
+   static class Handler {Runnable pending;void postDelayed(Runnable run,long delay){pending=run;}}
+   final String TAG="QA";final long DRIFT_LIMIT_MS=750;final Handler mainHandler=new Handler();
+   boolean pendingBackgroundHandoff=true,backgroundPauseRequested=false;long pendingBackgroundPositionMs=734122,backgroundHandoffStartedMs=0,backgroundHandoffId=11;
+   boolean pendingBackgroundWasPlaying=true;float logicalSpeed=1;Player player=new Player(),sessionPlayer;MediaSession mediaSession=new MediaSession();
+   PlaybackMode playbackMode=PlaybackMode.VIDEO,sessionPlayerMode=PlaybackMode.VIDEO;int notifications;
+   boolean isSessionAdded(MediaSession s){return true;}void addSession(MediaSession s){}void triggerNotificationUpdate(){notifications++;}
+   void completeBackgroundHandoffInternal(){pendingBackgroundHandoff=false;playbackMode=PlaybackMode.AUDIO;}
+   ${home}
+   ${refresh}
+   static void require(boolean value,String message){if(!value)throw new AssertionError(message);}
+   public static void main(String[] args){
+    NativeHomeRegression s=new NativeHomeRegression();Player engine=s.player;
+    s.player.playing=false;s.continueBackgroundHandoffIfReady();require(IrgunPlaybackPlugin.requests==0,"Do not transfer to a silent unready source");
+    s.player.playing=true;s.continueBackgroundHandoffIfReady();require(s.player.seeks==0,"Observed advancing shadow must not rewind to fixed Home clock");require(IrgunPlaybackPlugin.requests==1,"Ready playing transition must request actual Video pause");
+    s.continueBackgroundHandoffIfReady();require(IrgunPlaybackPlugin.requests==1,"No duplicate pause transaction");
+    s.mainHandler.pending.run();require(s.playbackMode==PlaybackMode.AUDIO,"The existing bounded suspended-WebView completion stays active");
+    s.refreshMediaNotification();require(s.mediaSession.rebinds==1,"Audio authority must refresh controller view");require(((SessionPlayer)s.mediaSession.view).engine==engine,"Rebinding must keep the single actual engine");
+    s.refreshMediaNotification();require(s.mediaSession.rebinds==1,"Position ticks must not repeatedly replace the controller view");
+    s.playbackMode=PlaybackMode.VIDEO;s.refreshMediaNotification();require(s.mediaSession.rebinds==2,"Video authority must also refresh the real logical view");require(s.player==engine,"No new playback engine");
+    s.pendingBackgroundHandoff=true;s.backgroundPauseRequested=false;s.player.position=930000;s.continueBackgroundHandoffIfReady();require(s.player.seeks==1&&s.player.position==734122,"Wrong lecture position is still rejected/corrected");
+    System.out.println("passed");
+   }
+  }`);
+  execFileSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,harness],{stdio:'pipe'});
+  assert.match(execFileSync('java',['-cp',dir,'NativeHomeRegression'],{encoding:'utf8'}),/passed/);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
 test('native seek guard rejects the observed 10s to 93s jump with one real-source retry',()=>{
   const dir=mkdtempSync(join(tmpdir(),'irgun-seek-'));
   try {

@@ -3,7 +3,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
-import {fullscreenEducationTapPoint,mediaNotificationClock,offlineConfirmationTapPoint,settledOfflineConfirmationPoint} from './android-system-ui-observation.mjs';
+import {fullscreenEducationTapPoint,mediaNotificationClock,mediaNotificationControlPoint} from './android-system-ui-observation.mjs';
 
 // Run after android-emulator-mp4.mjs: the actual reported shiur is already
 // playing in native AUDIO mode. All UI actions below are physical ADB events.
@@ -131,22 +131,15 @@ async function tapWithScroll(selector) {
   }
   throw new Error('Required control was not visible after native scrolling: '+selector);
 }
-async function tapPositiveAndroidDialog(){
-  const readHierarchy=()=>nativeHierarchy('emulator-report/irgun-offline-delete-dialog.xml');
-  const point=await settledOfflineConfirmationPoint({readHierarchy,delay});
+async function tapOfflineDeleteConfirmation(){
+  // The app's asynchronous confirmation keeps playback/bridge JS running.
+  // The same real removal assertion follows a physical, hit-tested button tap.
+  assert.ok(await hit('[data-offline-delete-confirm]'),'Actual offline confirmation must be visible');
+  const point=await tap('[data-offline-delete-confirm]');
   report.offlineConfirmation={physicalTap:point,dialogClosed:false};save();
-  adb('shell','input','tap',...point.map(String));
-  // A native confirm pauses WebView JavaScript. Observe its actual dismissal
-  // through Android before asking the JavaScript inspector for file deletion.
-  for(let i=0;i<8;i++) {
-    await delay(250);
-    const xml=nativeHierarchy('emulator-report/offline-confirmation-after-tap.xml');
-    if(!offlineConfirmationTapPoint(xml)){report.offlineConfirmation.dialogClosed=true;save();return;}
-  }
-  // Cancel this still-open modal so later independent checks can run. The
-  // failed positive tap/file-deletion assertion remains a failure.
-  adb('shell','input','keyevent','KEYCODE_BACK');
-  throw new Error('Actual positive confirmation tap did not close the offline deletion dialog');
+  await wait(async()=>!await hit('[data-offline-delete-confirm]'),
+    'Actual positive confirmation tap did not close the offline deletion dialog',20000);
+  report.offlineConfirmation.dialogClosed=true;save();
 }
 function checks(label,details={}) {report.checks.push({label,...details});save();}
 async function section(name,fn){
@@ -230,10 +223,8 @@ async function seekAudio(seconds) {
 }
 async function nativeNotificationTap(pattern,name) {
   const xml=nativeHierarchy('emulator-report/notification-'+name+'.xml');
-  const node=(xml.match(/<node\b[^>]*>/g)||[]).find(n=>/visible="true"/.test(n)&&/clickable="true"/.test(n)&&pattern.test(n));
-  const rect=node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
-  assert.ok(rect&&rect[2]>rect[0]&&rect[3]>rect[1],'Actual visible notification '+name+' button must be present');
-  adb('shell','input','tap',String(Math.round((rect[0]+rect[2])/2)),String(Math.round((rect[1]+rect[3])/2)));
+  const point=mediaNotificationControlPoint(xml,name,pattern);
+  adb('shell','input','tap',...point.map(String));
   await delay(800);
 }
 async function verifyOfflineServerHistory(id) {
@@ -601,7 +592,16 @@ try{
     const present=await read();
     assert.ok(present.offline.some(x=>x.key===record.key&&x.bytes>0),'Downloaded file disappeared before deletion');
     await tap('[data-save-offline-kind="video"][data-save-offline-id="'+before.watchId+'"]');
-    await tapPositiveAndroidDialog();
+    const modalBefore=await read();await delay(1300);const modalAfter=await read();audibleVideo(modalAfter);
+    assert.ok(modalAfter.video.time>modalBefore.video.time+.5&&modalAfter.video.frames>modalBefore.video.frames,
+      'Actual Video clock and decoded frames must advance while the offline confirmation is open');
+    await tap('[data-offline-delete-cancel]');
+    assert.equal(await hit('[data-offline-delete-confirm]'),null,'Physical Cancel must close the actual offline confirmation');
+    assert.ok((await read()).offline.some(x=>x.key===record.key),'Cancel must retain the downloaded record');
+    adb('shell','run-as',pkg,'ls',savedPath);
+    checks('Physical offline Cancel preserves the actual file while the modal keeps Video moving');
+    await tap('[data-save-offline-kind="video"][data-save-offline-id="'+before.watchId+'"]');
+    await tapOfflineDeleteConfirmation();
     await wait(s=>!s.offline.some(x=>x.key===record.key),'Offline file was not deleted after user confirmation',25000);
     let deletionError;
     try{adb('shell','run-as',pkg,'ls',savedPath);}catch(error){deletionError=error;}
