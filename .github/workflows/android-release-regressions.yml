@@ -47,6 +47,14 @@ on:
 permissions:
   contents: read
 
+# Matrix jobs share a single authenticated test account. The whole matrix must
+# be serialized across pushes; newer commits supersede obsolete emulator runs.
+# Within one run, max-parallel: 1 executes all four account API levels in turn.
+# A job-level shared concurrency key instead cancels pending matrix children.
+concurrency:
+  group: irgun-android-complete-regression-matrix
+  cancel-in-progress: true
+
 jobs:
   media-and-device:
     name: Native media Android API ${{ matrix.api-level }}
@@ -229,10 +237,8 @@ jobs:
       max-parallel: 1
       matrix:
         api-level: [30, 34, 35, 36]
-    # The same QA account must never be mutated by two running CI jobs.
-    concurrency:
-      group: irgun-android-logged-in-account-qa
-      cancel-in-progress: false
+    # The workflow-level concurrency lock prevents cross-run account overlap.
+    # max-parallel: 1 above prevents simultaneous account jobs within this run.
     env:
       IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
       IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
