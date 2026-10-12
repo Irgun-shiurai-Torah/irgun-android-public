@@ -131,7 +131,9 @@ async function getAndroidHlsSource(apiBase, videoId) {
       /Video sources unavailable \((?:429|5\d\d)\)/.test(message);
     if (!retryable || (typeof navigator !== 'undefined' && navigator.onLine === false)) throw error;
     console.warn('[Playback] Retrying temporary video source lookup failure',message);
-    await new Promise(resolve => setTimeout(resolve,350));
+    // Wi-Fi often needs longer than 350ms to recover after offline Audio.
+    // Retry only the source descriptor; never build a second player here.
+    await new Promise(resolve => setTimeout(resolve,1100));
     return lookup(true);
   }
 }

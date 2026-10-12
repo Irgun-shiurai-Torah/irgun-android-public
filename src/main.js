@@ -2511,17 +2511,31 @@ async function loadUserCollections() {
       apiJson('/my-like-ids').catch(() => ({ ids: [] })),
       apiJson('/watch-later').catch(() => ({ items: [] })),
       apiJson('/follows').catch(() => ({ items: [] })),
-      apiJson('/history').catch(() => ({ items: [] })),
+      (async () => {
+        try { return await apiJson('/history', { cache:'no-store' }); }
+        catch (error) {
+          // A transient GET failure during relaunch must not empty previously
+          // saved history. Retry one fresh request, never a rejected session.
+          if ([401,403].includes(Number(error?.status))) throw error;
+          await new Promise(resolve => setTimeout(resolve, 700));
+          return apiJson('/history', { cache:'no-store' });
+        }
+      })().catch(error => {
+        console.warn('Could not refresh server watch history', error);
+        return null;
+      }),
       apiJson('/notification-settings').catch(() => ({ pushEnabled:false, emailEnabled:false, pushConfigured:false, emailConfigured:false })),
       apiJson('/custom-playlists').catch(() => ({ items: [] }))
     ]);
     state.myLikes = new Set((likes.ids || []).map(String));
     state.watchLater = new Set((later.items || []).map(item => String(item.id || item.vimeoId || '')));
     state.follows = new Map((follows.items || []).map(item => [`${item.type}:${item.key}`, item]));
-    const rawHistory = history.items || [];
-    state.history = normalizeHistoryRows(rawHistory);
-    refreshHistoryTypeIndex();
-    cleanupDuplicateHistoryRows(rawHistory).catch(() => {});
+    if (history && Array.isArray(history.items)) {
+      const rawHistory = history.items;
+      state.history = normalizeHistoryRows(rawHistory);
+      refreshHistoryTypeIndex();
+      cleanupDuplicateHistoryRows(rawHistory).catch(() => {});
+    }
     state.playlists = normalizePlaylistStore(playlists.items || []);
     try { localStorage.removeItem(PLAYLISTS_KEY); } catch (_) {}
     state.notificationSettings = { ...state.notificationSettings, ...notificationSettings };
@@ -8741,6 +8755,18 @@ async function performWatchModeSwitch(mode) {
 
 async function switchWatchMode(mode) {
   if (!state.watchVideo || !['video', 'audio'].includes(mode)) return;
+  // Both direct HLS and Vimeo can fail while starting Video offline. When the
+  // UI still says Video but Media3 continues offline Audio, a new physical
+  // Video tap after reconnect must retry a genuine, safe handoff.
+  if (mode === 'video' && state.watchMode === 'video' &&
+      !state.watchVimeo && !watchVimeoInitFlight &&
+      usesNativeUnifiedAudio() && state.current?.id === videoId(state.watchVideo) &&
+      state.nativePlayback.mode === 'AUDIO') {
+    state.watchMode = 'audio';
+    state.watchVideoPlaying = false;
+    state.watchAudioToVideoHandoff = false;
+    state.watchAudioToVideoHandoffId = '';
+  }
   // Last tap wins. A tap that arrives while a handoff is running replaces the
   // pending target instead of being dropped.
   state.pendingWatchMode = mode;
@@ -9332,9 +9358,31 @@ window.addEventListener('offline', () => {
 // Android has completed Activity.onResume. The second pull reopens the native
 // event gate if onResume ran after the first one.
 let foregroundPlaybackRefreshTimer = null;
+let foregroundFocusRepairTimer = null;
+async function repairAudioFocusOnForegroundReturn() {
+  // Android 11 can lose Media3 focus as its parked WebView Video decoder
+  // resumes after notification navigation. Native code verifies this was an
+  // AUDIO_FOCUS_LOSS for the same shiur; explicit Pause stays respected.
+  if (document.hidden || !usesNativeUnifiedAudio() || state.mediaSwitchBusy ||
+      !state.watchVideo || state.watchMode !== 'audio' ||
+      state.nativePlayback.mode !== 'AUDIO' ||
+      state.nativePlayback.audioIsPlaying || state.nativePlayback.audioPlayWhenReady) return;
+  const id = videoId(state.watchVideo);
+  if (!id || state.current?.id !== id) return;
+  await nativeMediaPlugin().restoreAudioAfterVideoTeardown({lectureId:id});
+  await PlaybackController.refreshFromNative();
+}
 function refreshPlaybackAfterForeground() {
   if (!usesNativeUnifiedAudio() || document.hidden) return;
   if (foregroundPlaybackRefreshTimer) clearTimeout(foregroundPlaybackRefreshTimer);
+  if (foregroundFocusRepairTimer) clearTimeout(foregroundFocusRepairTimer);
+  // A focus-loss callback can arrive after the first foreground state pull.
+  // One delayed, identity-bound repair covers this race without looping.
+  foregroundFocusRepairTimer = setTimeout(() => {
+    foregroundFocusRepairTimer = null;
+    if (!document.hidden) PlaybackController.refreshFromNative()
+      .then(repairAudioFocusOnForegroundReturn).catch(() => {});
+  }, 2400);
   // Schedule the second pull after the first bridge call finishes. If onResume
   // closes the native event gate during a slow first pull, a concurrent 450ms
   // request would only share its promise and never reopen the ticker.

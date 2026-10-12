@@ -365,6 +365,12 @@ try{
  assert.equal(report.restartComparison.like.actual,report.restartComparison.like.expected,'Like did not persist across Android app restart');
  assert.equal(report.restartComparison.watchLater.actual,report.restartComparison.watchLater.expected,'Watch Later did not persist across Android app restart');
  assert.ok(report.restartComparison.follows.match,'Following did not persist across Android app restart');
+ if(!report.restartComparison.playbackHistory.actual) {
+   // Cached catalog readiness precedes asynchronous account hydration; wait
+   // for the independently verified server row, never synthesize it in JS.
+   const hydrated=await wait(s=>s.loggedIn&&s.history.includes(id),'Server playback history never hydrated after restart');
+   report.restartComparison.playbackHistory.actual=hydrated.history.includes(id);
+ }
  assert.ok(report.restartComparison.playbackHistory.actual,'Playback history did not persist across Android app restart');
  report.checks.push('Server-backed likes, Watch Later, follows, history and playlist survive process restart');
  await tap('shiurim');await tap('open');

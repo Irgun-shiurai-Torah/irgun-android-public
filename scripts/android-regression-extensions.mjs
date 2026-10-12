@@ -186,7 +186,9 @@ async function videoReady(){
     await wait(s=>!!s.watchId,'Existing lecture did not reopen from the native audio player');
     await closePlayer();current=await read();
   }
-  if(current.watchMode!=='video')await tap('[data-watch-mode="video"]');
+  if(current.watchMode!=='video' ||
+      (current.native.mode==='AUDIO'&&!current.video&&!String(current.hostClass||'').includes('watch-video-host')))
+    await tap('[data-watch-mode="video"]');
   return await wait(
     s=>s.watchMode==='video'&&s.video&&!s.video.paused&&s.video.ready>=2&&s.video.width>0&&
       !s.video.muted&&s.video.volume>0&&s.native.mode==='VIDEO'&&
@@ -589,7 +591,16 @@ try{
       checks('Process restart while offline reopens and plays the real downloaded file');
     }finally{await setOnline(true);}
     if(process.env.IRGUN_EXPECT_SIGNED_IN==='1')await verifyOfflineServerHistory(record.id);
-    await videoReady();
+    const audioBeforeVideo=await read();
+    assert.equal(audioBeforeVideo.native.mode,'AUDIO','Native MP3 must own playback until actual Video frames arrive');
+    const recoveredVideo=await sampleMovingVideo();
+    assert.ok(recoveredVideo.before.video.time>=audioBeforeVideo.native.audioPositionMs/1000-8,
+      'Video after offline MP3 rewinded the live audio position');
+    checks('Reconnected offline MP3 returns to advancing Video frames',{
+      videoSeconds:recoveredVideo.after.video.time,
+      audioBeforeSeconds:audioBeforeVideo.native.audioPositionMs/1000,
+      framesDecoded:recoveredVideo.after.video.frames-recoveredVideo.before.video.frames
+    });
     const present=await read();
     assert.ok(present.offline.some(x=>x.key===record.key&&x.bytes>0),'Downloaded file disappeared before deletion');
     await tap('[data-save-offline-kind="video"][data-save-offline-id="'+before.watchId+'"]');
