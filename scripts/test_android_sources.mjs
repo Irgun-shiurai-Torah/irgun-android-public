@@ -319,7 +319,7 @@ function authRenderFixture({busy=false,mode='login'}={}) {
   const app={set innerHTML(_){fields=new Map(['authEmail','authPassword'].map(id=>[id,field(id)]));document.activeElement=null;}};
   const context={state,document,app,tabSwipeRenderGate:{shouldDefer:()=>false},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
     accountHtml:()=>'',shell:x=>x,playlistPickerHtml:()=>'',bind(){},syncLivePlaybackAnalytics(){},updatePlayerUi(){},refreshOfflineButtonsForKey(){}};
-  const start=mainSource.indexOf('function preserveAuthFormDraft(');
+  const start=mainSource.indexOf('function preserveHomeSearchDraft(');
   const renderStart=mainSource.indexOf('function render()');
   const source=(start>=0?mainSource.slice(start,renderStart):'')+mainSource.slice(renderStart,mainSource.indexOf('function syncOpenFilterChecks(',renderStart));
   runInNewContext(source+'\nthis.renderApp=render;',context);
@@ -746,4 +746,37 @@ test('A paused/stalled HLS seek is not restarted continuously while Audio contin
   f2.player.setCurrentTime=async n=>{racing++;return n;};
   assert.equal(await f2.wait(f2.player,'lecture',2800),null);
   assert.equal(racing,0,'An active media element seek must not be interrupted with a second seek');
+});
+
+function homeSearchRenderFixture() {
+  const state={screen:'home',scheduleDataLoaded:true,liveStatusLoaded:true};
+  const field=()=>({value:'',selectionStart:4,selectionEnd:4,
+    focus(){document.activeElement=this;},setSelectionRange(a,b){this.selectionStart=a;this.selectionEnd=b;}});
+  let input=field();input.value='IST-DL6067';
+  const document={activeElement:input,getElementById:id=>id==='homeLibrarySearch'?input:null};
+  const app={set innerHTML(_){input=field();document.activeElement=null;}};
+  const context={state,document,app,tabSwipeRenderGate:{shouldDefer:()=>false},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
+    homeHtml:()=>'',accountHtml:()=>'',shiurimHtml:()=>'',shell:x=>x,playlistPickerHtml:()=>'',bind(){},
+    syncLivePlaybackAnalytics(){},updatePlayerUi(){},refreshOfflineButtonsForKey(){},setTimeout(){}};
+  const start=mainSource.indexOf('function preserveHomeSearchDraft('),end=mainSource.indexOf('function syncOpenFilterChecks(',start);
+  runInNewContext(mainSource.slice(start,end)+'\nthis.renderApp=render;',context);
+  return {render:context.renderApp,state,document,input:()=>input};
+}
+test('a real Home render preserves typed lecture search, focus and cursor during feed refresh',()=>{
+  const f=homeSearchRenderFixture();f.render();
+  assert.equal(f.input().value,'IST-DL6067');assert.equal(f.document.activeElement,f.input());
+  assert.equal(f.input().selectionStart,4);
+});
+test('leaving Home does not restore the old search focus or draft onto another screen',()=>{
+  const f=homeSearchRenderFixture();f.state.screen='shiurim';f.render();
+  assert.equal(f.input().value,'');assert.equal(f.document.activeElement,null);
+});
+
+test('a user HLS speed change updates the shared rate; internal catch-up rates do not call it',()=>{
+  const source=readFileSync(new URL('../src/android-hls-video.js',import.meta.url),'utf8');
+  const begin=source.indexOf("  speedSelect.addEventListener('change'"),end=source.indexOf('  pipButton.hidden',begin);
+  let handler;const calls=[],video={playbackRate:1},speedSelect={value:'1.5',addEventListener(_event,callback){handler=callback;}};
+  runInNewContext(source.slice(begin,end),{video,speedSelect,onSpeedChange:rate=>calls.push(rate)});
+  handler();assert.equal(video.playbackRate,1.5);assert.deepEqual(calls,[1.5]);
+  video.playbackRate=1.18;assert.deepEqual(calls,[1.5]);
 });

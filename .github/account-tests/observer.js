@@ -4,6 +4,7 @@ window.ISTAccountTest = { snapshot() {
     String(c.user_id) === String(state.user?.id) && String(c.text || '').startsWith('IRGUN-QA-')
   ) || null;
   const qaCommentId = qaComment ? String(qaComment.id) : '';
+  const qaPlaylist=state.playlists.filter(p=>/^Irgun-QA-\d+$/.test(p.name)).sort((a,b)=>b.name.localeCompare(a.name))[0];
   const queries = {
     commentText:'#commentText', postComment:'#commentForm button[type="submit"]',
     editQaComment:qaCommentId ? '[data-edit-comment="'+qaCommentId+'"]' : '#irgun-qa-comment-unavailable',
@@ -14,14 +15,19 @@ window.ISTAccountTest = { snapshot() {
     library: '.bottom-nav [data-nav="library"]', email: '#authEmail', password: '#authPassword',
     login: '#authForm button[type="submit"]', logout: '[data-logout]',
     profile: '[data-account-section="profile"]', settings: '[data-account-section="settings"]',
-    open: '[data-watch]', like: '.watch-actions [data-like],.watch-action[data-like]',
+    open: '.media-primary-overlay button[data-watch],button.media-title[data-watch]', like: '.watch-actions [data-like],.watch-action[data-like]',
     audioMode: '[data-watch-mode="audio"]', audioPlay: '.watch-audio-play[data-play-toggle]',
     save: '.watch-actions [data-open-playlist-picker],.watch-action[data-open-playlist-picker]',
     later: '.playlist-picker [data-save]', closePicker: '.playlist-picker-head [data-playlist-picker-close]',
     closeWatch: '[data-close-watch]', follow: '[data-follow-type="speaker"]',
     playlists: '[data-library-section="playlists"]', playlistName: '#libraryPlaylistCreateName',
     createPlaylist: '#libraryPlaylistCreateForm button[type="submit"]',
-    testPlaylist: '[data-playlist-open]', deletePlaylist: '[data-playlist-delete]',
+    testPlaylist: qaPlaylist?'[data-playlist-open="'+qaPlaylist.id+'"]':'#qa-playlist-unavailable',
+    deletePlaylist: qaPlaylist?'[data-playlist-delete="'+qaPlaylist.id+'"]':'#qa-playlist-unavailable',
+    playlistBack: '[data-playlist-back]',
+    addQaPlaylist: qaPlaylist?'[data-playlist-add-target="'+qaPlaylist.id+'"]':'#qa-playlist-unavailable',
+    removeQaPlaylistItem: qaPlaylist?'[data-playlist-remove="'+qaPlaylist.id+'"]':'#qa-playlist-unavailable',
+    language: '[data-language-toggle]',videoMode:'[data-watch-mode="video"]',
     history: '[data-library-section="history"]', likes: '[data-library-section="likes"]',
     saved: '[data-library-section="later"]', following: '[data-library-section="following"]'
   };
@@ -71,7 +77,8 @@ window.ISTAccountTest = { snapshot() {
       audioReady:!!state.nativePlayback?.audioReady,audioIsPlaying:!!state.nativePlayback?.audioIsPlaying,
       audioPlayWhenReady:!!state.nativePlayback?.audioPlayWhenReady,
       audioPositionMs:Number(state.nativePlayback?.audioPositionMs||0),nativeDisabled:!!state.nativePlaybackDisabled},
-    playlists:state.playlists.map(x=>({id:x.id,name:x.name,items:x.items.length})),
+    playlists:state.playlists.map(x=>({id:x.id,name:x.name,items:x.items.length,itemIds:x.items.map(item=>String(item.id||''))})),
+    commentsLoaded:!state.watchCommentsLoading&&!state.watchCommentsError,lang:document.documentElement.lang,dir:document.documentElement.dir,
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
     settingsVisible:!!document.querySelector('#appEmailToggle'),profileVisible:!!document.querySelector('#profileForm'),
     authError:!!document.querySelector('.auth-card .form-message'),playlistPickerOpen:!!document.querySelector('.playlist-picker-backdrop'),

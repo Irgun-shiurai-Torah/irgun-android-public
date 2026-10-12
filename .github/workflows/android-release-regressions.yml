@@ -92,7 +92,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Test Android 11 media, PiP, Home, notification, Wi-Fi, offline, speed and narrow screen
+      - name: Logged-out Android media, interruptions, notification controls, offline restart, rotation and speed
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api-level }}
@@ -208,9 +208,14 @@ jobs:
 
 
   authenticated-account:
-    name: Real Android 11 login, comments, and two-session account sync
+    name: Logged-in account and native media Android API ${{ matrix.api-level }}
     runs-on: ubuntu-latest
-    timeout-minutes: 53
+    timeout-minutes: 58
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        api-level: [30, 34, 35, 36]
     # The same QA account must never be mutated by two running CI jobs.
     concurrency:
       group: irgun-android-logged-in-account-qa
@@ -243,7 +248,9 @@ jobs:
       - run: npm ci
       - run: bash scripts/prepare_android_icons.sh
       - name: Add read-only QA observations to disposable Android APK
-        run: cat .github/account-tests/observer.js >> src/main.js
+        run: |
+          cat .github/account-tests/observer.js >> src/main.js
+          cat .github/release-tests/observer.js >> src/main.js
       - run: npm run build
       - run: npx cap sync android
       - run: bash scripts/prepare_android_icons.sh
@@ -251,15 +258,15 @@ jobs:
       - run: chmod +x android/gradlew
       - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
-      - name: Enable KVM for real Android 11 emulator
+      - name: Enable KVM for actual Android emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Native signed-in account, name, comments, playlists, session restart and logout
+      - name: Native account and separate logged-in playback, offline restart and history sync
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 30
+          api-level: ${{ matrix.api-level }}
           target: google_apis
           arch: x86_64
           script: bash scripts/android-emulator-account.sh
@@ -273,14 +280,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: android-complete-account-${{ github.run_id }}
-          path: |
-            emulator-report/account.json
-            emulator-report/startup.png
-            emulator-report/account-failure.png
-            emulator-report/comments.json
-            emulator-report/account-cross-device.json
-            emulator-report/account-android-errors.log
+          name: android-complete-account-api-${{ matrix.api-level }}-${{ github.run_id }}
+          path: emulator-report/
           if-no-files-found: warn
           retention-days: 14
 

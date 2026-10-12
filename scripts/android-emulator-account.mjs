@@ -7,7 +7,7 @@ assert.ok(email&&password,'Configure dedicated verified account secrets IRGUN_TE
 const adb=(...a)=>execFileSync('adb',a,{encoding:'utf8'}).trim();
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const report={checks:[],credentialsRecorded:false,startedAt:new Date().toISOString()};let ws;
-let qaCommentId='',qaCommentMarker='',accountDisplayName='',restartPlaylistName='';
+let qaCommentId='',qaCommentMarker='',accountDisplayName='',restartPlaylistName='',deletedQaCommentId='';
 async function connect(){
  // The WebView CDP target can briefly disappear during IME/dialog lifecycle.
  // Retry discovery against the ACTUAL running app process. Never manufacture a
@@ -109,7 +109,13 @@ async function tap(key) {
  }
  throw new Error(`Visible control missing: ${key}`);
 }
-async function type(key,value){assert.match(value,/^[a-zA-Z0-9@._+!-]+$/,'Dedicated credentials must use characters supported by native adb text input');await tap(key);adb('shell','input','text',value);
+async function type(key,value){assert.match(value,/^[a-zA-Z0-9@._+!-]+$/,'Dedicated credentials must use characters supported by native adb text input');await tap(key);
+ if(key==='email'||key==='password') {
+   const field=key==='email'?'authEmail':'authPassword';
+   const length=await readSnapshot('JSON.stringify(document.getElementById('+JSON.stringify(field)+').value.length)');
+   if(length>0) {adb('shell','input','keyevent','KEYCODE_MOVE_END');adb('shell','input','keyevent',...Array(length).fill('KEYCODE_DEL'));}
+ }
+ adb('shell','input','text',value);
  // BACK without a visible IME can dismiss the edit dialog or navigate out of
  // the app. Dismiss ONLY the actual keyboard (never invent a screen tap).
  const ime=adb('shell','dumpsys','input_method');
@@ -138,6 +144,24 @@ async function acceptDeleteConfirmation(){
  assert.ok(b,'Native Delete confirmation must have actual coordinates');
  adb('shell','input','tap',String(Math.floor((b[0]+b[2])/2)),String(Math.floor((b[1]+b[3])/2)));
 }
+async function verifyServerPlaylist(name,count,id) {
+ const headers={Origin:'https://localhost','X-Irgun-App':'1','Content-Type':'application/json'};
+ const response=await fetch('https://api.irgunshiuraitorah.com/login',{method:'POST',headers,body:JSON.stringify({email,password}),signal:AbortSignal.timeout(16000)});
+ assert.equal(response.status,200,'Independent QA session required to verify actual playlist edits');
+ const session=await response.json();assert.ok(session.sessionToken&&String(session.user?.email||'').toLowerCase()===email.trim().toLowerCase(),'Playlist verification must use the approved QA account');
+ const authenticated={...headers,Authorization:'Bearer '+session.sessionToken};
+ try {
+  const deadline=Date.now()+20000;let found;
+  while(Date.now()<deadline) {
+   const result=await fetch('https://api.irgunshiuraitorah.com/custom-playlists',{headers:authenticated,signal:AbortSignal.timeout(12000)});
+   assert.equal(result.status,200,'Actual server playlists must be readable');
+   const data=await result.json();found=(data.items||[]).find(p=>p.name===name&&Array.isArray(p.items)&&p.items.length===count&&(!count||p.items.some(x=>String(x.id||'')===id)));
+   if(found)break;await delay(500);
+  }
+  assert.ok(found,'Native playlist edit must reach the real server with '+count+' actual items');
+  report.checks.push('Independent server verified native playlist '+(count?'add':'remove'));
+ }finally {await fetch('https://api.irgunshiuraitorah.com/logout',{method:'POST',headers:authenticated,signal:AbortSignal.timeout(10000)}).catch(()=>{});}
+}
 async function cleanupQaComment(){
  if(!qaCommentMarker||!report.commentVideoId)return;
  const origin='https://localhost',h={'Content-Type':'application/json','X-Irgun-App':'1',Origin:origin};
@@ -158,18 +182,39 @@ async function cleanupQaComment(){
  assert.equal(check.status,200);
  assert.ok(!(await check.json()).comments.some(c=>String(c.user_id)===String(body.user?.id)&&String(c.text||'').startsWith(qaCommentMarker)),'Temporary QA comment was not removed');
  report.qaCommentCleanedUp=true;qaCommentId='';
+ if(restartPlaylistName) {
+   const response=await fetch('https://api.irgunshiuraitorah.com/custom-playlists',{headers:protectedHeaders,signal:AbortSignal.timeout(16000)});
+   assert.equal(response.status,200,'Temporary QA playlist cleanup must read actual owned playlists');
+   const playlist=(await response.json()).items?.find(p=>p.name===restartPlaylistName);
+   if(playlist) {
+     const deletion=await fetch('https://api.irgunshiuraitorah.com/custom-playlists/delete',{method:'POST',headers:protectedHeaders,body:JSON.stringify({playlistId:playlist.id}),signal:AbortSignal.timeout(16000)});
+     assert.equal(deletion.status,200,'Temporary QA playlist cleanup failed');
+   }
+   report.qaPlaylistCleanedUp=true;
+ }
  await fetch('https://api.irgunshiuraitorah.com/logout',{method:'POST',headers:protectedHeaders}).catch(()=>{});
 }
 try{
  readSnapshot=await connect();await wait(s=>s.ready,'Library unavailable');
  bounds=await readNativeBounds();
- report.nativeLoginStartedAt=new Date().toISOString();await tap('account');await type('email',email);await type('password',password);await tap('login');
+ report.androidApi=Number(adb('shell','getprop','ro.build.version.sdk'));
+ report.nativeLoginStartedAt=new Date().toISOString();await tap('account');
+ await type('email',email);await type('password',password+'-invalid');await tap('login');
+ await wait(s=>!s.authBusy&&!s.loggedIn&&s.authError,'Actual Android login UI must reject an incorrect password and show an error');
+ report.checks.push('Actual native login UI rejects an incorrect password');
+ await type('email',email);await type('password',password);await tap('login');
  const loggedIn=await wait(s=>s.loggedIn&&s.profileVisible,'Native login failed');
  accountDisplayName=String(loggedIn.name||'').trim();
  assert.ok(accountDisplayName,'Account must display the registered name, not a blank label');
  assert.equal(String(loggedIn.profileShownName||'').trim(),accountDisplayName,'Profile screen must display the correct account name');
  report.checks.push('Real Android account name displayed on profile');
  assert.equal((await read()).isAdmin,false,'Use a non-admin dedicated account');assert.ok(String((await read()).accountEmail||'').trim().toLowerCase()===email.trim().toLowerCase(),'Refuse to mutate an account other than the dedicated approved account');report.checks.push('Native email/password login and profile');
+ await tap('language');await wait(s=>s.lang==='he'&&s.dir==='rtl','Native account page must switch to Hebrew RTL');
+ const hebrewProfile=await read();assert.equal(String(hebrewProfile.name||'').trim(),accountDisplayName,'Account identity must remain unchanged in Hebrew');
+ const hebrewLabels=await readSnapshot('JSON.stringify([...document.querySelectorAll("[data-account-section], [data-logout]")].filter(e=>e.getBoundingClientRect().width>0).map(e=>e.textContent.trim()))');
+ assert.ok(hebrewLabels.length>=2&&hebrewLabels.every(x=>/[\u0590-\u05ff]/.test(x)),'Native Hebrew account controls must be translated');
+ await tap('language');await wait(s=>s.lang==='en'&&s.dir==='ltr','Native account page must restore English LTR');
+ report.checks.push('Real Hebrew/English account controls, RTL and unchanged identity');
  await tap('settings');await wait(s=>s.settingsVisible,'Settings missing');report.checks.push('Account settings displayed');
  await tap('shiurim');await tap('open');await wait(s=>!!s.watchId,'Lecture did not open');const id=(await read()).watchId;
  report.accountMutationsStartedAt=new Date().toISOString();const before=await read();await tap('like');await wait(s=>s.likes.includes(id)!==before.likes.includes(id),'Like toggle failed');report.checks.push('Native Like toggle');
@@ -213,8 +258,9 @@ try{
    if(historyResponse.ok) {
      const historyData=await historyResponse.json();
      const rows=Array.isArray(historyData.items)?historyData.items:[];
+     const actualPosition=(await read()).audioTime;
      savedRow=rows.find(row=>String(row.videoId||row.rawAudioId||row.id||'').replace(/^audio:/,'')===id&&
-       Number(row.progressSeconds||row.positionSeconds||0)>=playbackObserved.audioTime);
+       Number(row.progressSeconds||row.positionSeconds||0)>=playbackObserved.audioTime&&Number(row.progressSeconds||row.positionSeconds||0)<=actualPosition+3);
      if(savedRow)break;
    }
    await delay(1300);
@@ -262,8 +308,19 @@ try{
  report.checks.push('Native UI edit comment persisted');
  await tap('deleteQaComment');await acceptDeleteConfirmation();
  await wait(s=>!s.comments.some(c=>c.id===qaCommentId),'Native QA comment deletion failed');
- report.checks.push('Native UI deleted its own QA comment');qaCommentId='';
+ report.checks.push('Native UI deleted its own QA comment');deletedQaCommentId=qaCommentId;qaCommentId='';
  await tap('closeWatch');await tap('library');await tap('playlists');const name=`Irgun-QA-${Date.now()}`;restartPlaylistName=name;await type('playlistName',name);await tap('createPlaylist');await wait(s=>s.playlists.some(p=>p.name===name),'Playlist creation failed');
+ report.checks.push('Native UI created a dedicated temporary QA playlist');
+ await tap('playlistBack');await tap('shiurim');await tap('open');
+ assert.equal((await wait(s=>!!s.watchId,'Playlist edit lecture did not open')).watchId,id,'Playlist edit must use the same QA shiur');
+ await tap('save');await tap('addQaPlaylist');
+ await wait(s=>s.playlists.some(p=>p.name===name&&p.items===1&&p.itemIds.includes(id)),'Native Save must add the actual shiur to the new playlist');
+ await verifyServerPlaylist(name,1,id);
+ await closeSavePicker();await tap('closeWatch');await tap('library');await tap('playlists');await tap('testPlaylist');
+ await tap('removeQaPlaylistItem');
+ await wait(s=>s.playlists.some(p=>p.name===name&&p.items===0),'Native playlist edit must remove the selected shiur');
+ await verifyServerPlaylist(name,0,id);
+ report.checks.push('Actual native playlist editing adds and removes the correct lecture');
  const changed=await read();
  report.beforeRestart = {
   signedIn:changed.loggedIn,
@@ -298,7 +355,16 @@ try{
  assert.ok(report.restartComparison.follows.match,'Following did not persist across Android app restart');
  assert.ok(report.restartComparison.playbackHistory.actual,'Playback history did not persist across Android app restart');
  report.checks.push('Server-backed likes, Watch Later, follows, history and playlist survive process restart');
- // Restore only the lecture flags changed by this run. Leave the named QA playlist for review.
+ await tap('shiurim');await tap('open');
+ assert.equal((await wait(s=>!!s.watchId&&s.commentsLoaded,'Restarted app did not reload lecture comments')).watchId,id);
+ assert.ok(!(await read()).comments.some(c=>c.id===deletedQaCommentId||c.text.startsWith(qaCommentMarker)),
+   'Deleted QA comment must not return in the actual app after process restart');
+ report.checks.push('Deleted comment stays absent after actual Android process restart');
+ await tap('closeWatch');await tap('library');await tap('playlists');await tap('testPlaylist');
+ await tap('deletePlaylist');await acceptDeleteConfirmation();
+ await wait(s=>!s.playlists.some(p=>p.name===name),'Temporary native QA playlist deletion failed');
+ report.checks.push('Temporary QA playlist cleaned up through native UI');
+ // Restore only the lecture flags changed by this run.
  await tap('shiurim');await tap('open');assert.equal((await wait(s=>!!s.watchId,'Lecture unavailable')).watchId,id,'Cleanup must target the same lecture');await tap('like');await tap('save');await tap('later');await closeSavePicker();await tap('follow');await wait(s=>s.likes.includes(id)===before.likes.includes(id)&&s.later.includes(id)===before.later.includes(id)&&JSON.stringify(s.follows.slice().sort())===JSON.stringify(before.follows.slice().sort()),'Lecture flags were not restored');report.checks.push('Lecture flags restored');await tap('closeWatch');await tap('account');await tap('logout');await wait(s=>!s.loggedIn&&s.likes.length===0&&s.later.length===0&&s.playlists.length===0,'Logout did not clear account data');report.checks.push('Logout clears account state');
  await type('email',email);await type('password',password);await tap('login');
  const again=await wait(s=>s.loggedIn&&s.profileVisible,'Subsequent native login failed');
@@ -307,6 +373,27 @@ try{
  report.checks.push('Subsequent email/password login restores correct profile name');
  await tap('logout');await wait(s=>!s.loggedIn,'Second native logout failed');
  report.checks.push('Subsequent logout successful');
+ // Revoke the actual application's token through a separate HTTP request.
+ // The token remains in memory only and is never added to logs or artifacts.
+ await type('email',email);await type('password',password);await tap('login');
+ await wait(s=>s.loggedIn,'Native session required for the real revoked-session check');
+ const actualToken=await readSnapshot('JSON.stringify(state.token)');assert.ok(actualToken,'Actual app token required');
+ const revokeHeaders={Origin:'https://localhost','X-Irgun-App':'1',Authorization:'Bearer '+actualToken};
+ const revoke=await fetch('https://api.irgunshiuraitorah.com/logout',{method:'POST',headers:revokeHeaders,signal:AbortSignal.timeout(20000)});
+ assert.equal(revoke.status,200,'External request must revoke the actual Android app session');
+ const denied=await fetch('https://api.irgunshiuraitorah.com/history',{headers:revokeHeaders,signal:AbortSignal.timeout(20000)});
+ assert.equal(denied.status,401,'A genuinely revoked token must be rejected by the server');
+ ws.close();adb('shell','am','force-stop','org.irgunshiuraitorah.app');adb('shell','am','start','-n','org.irgunshiuraitorah.app/.SplashActivity');
+ await delay(3000);readSnapshot=await connect();bounds=await readNativeBounds();
+ await wait(s=>s.ready&&!s.loggedIn&&!s.hasStoredSession,'Actual revoked session must return the restarted Android app to logged-out state');
+ await tap('account');await wait(s=>!!s.controls.login,'Revoked session must expose a usable native login form');
+ report.checks.push('Actual Android session revoked externally is rejected and cleared on app restart');
+ if(process.env.IRGUN_KEEP_QA_SESSION==='1') {
+   await type('email',email);await type('password',password);await tap('login');
+   await wait(s=>s.loggedIn&&!s.isAdmin,'A dedicated signed-in session is required for the separate media suite');
+   report.checks.push('Dedicated QA session established for separate logged-in playback regression suite');
+ }
+ report.unverified=['Other valid user comment ownership requires a second dedicated QA account','Time-based session expiry has not been exercised; actual revocation is tested'];
  report.accountMutationsFinishedAt=new Date().toISOString();report.status='passed';
 }catch(e){
  try{report.appPidAtFailure=adb('shell','pidof','org.irgunshiuraitorah.app')||'';}catch(_){}

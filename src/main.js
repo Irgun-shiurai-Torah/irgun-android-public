@@ -6030,6 +6030,22 @@ function analyticsScreenLabel() {
   return names[String(state.screen || '')] || String(state.screen || 'Home');
 }
 
+function preserveHomeSearchDraft() {
+  const input = document.getElementById('homeLibrarySearch');
+  if (state.screen !== 'home' || !input) return () => {};
+  const value = input.value, focused = document.activeElement === input;
+  const start = input.selectionStart, end = input.selectionEnd;
+  return () => {
+    const replacement = document.getElementById('homeLibrarySearch');
+    if (state.screen !== 'home' || !replacement) return;
+    replacement.value = value;
+    if (focused) {
+      replacement.focus({preventScroll:true});
+      try { replacement.setSelectionRange(start, end); } catch (_) {}
+    }
+  };
+}
+
 function preserveAuthFormDraft() {
   // Keep an in-progress form in the DOM only. Never put credentials in state,
   // storage, markup or logs. A login attempt or mode change clears the draft.
@@ -6085,9 +6101,11 @@ function render() {
     : state.screen === 'library' ? libraryHtml()
     : accountHtml();
   const restoreAuthDraft = preserveAuthFormDraft();
+  const restoreSearchDraft = preserveHomeSearchDraft();
   app.innerHTML = shell(content + playlistPickerHtml());
   bind();
   restoreAuthDraft();
+  restoreSearchDraft();
   syncLivePlaybackAnalytics();
   updatePlayerUi();
   refreshOfflineButtonsForKey();
@@ -8567,6 +8585,11 @@ async function initWatchVimeoOnce(userInitiated = false) {
           iframe: frame,
           resumeSeconds: Math.max(0, Number(state.watchResumeSeconds) || 0),
           isPictureInPicture: () => state.systemPipActive,
+          onSpeedChange: rate => {
+            if (generation === state.watchVimeoGeneration && videoId(state.watchVideo) === videoKey) {
+              void PlaybackController.setSpeed(rate);
+            }
+          },
           onMinimize: () => {
             if (generation === state.watchVimeoGeneration && state.watchMode === 'video' && !state.systemPipActive && !state.watchMinimized && videoId(state.watchVideo) === videoKey) {
               void minimizeWatchToPersistent();

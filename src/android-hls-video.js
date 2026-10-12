@@ -107,7 +107,7 @@ async function getAndroidHlsSource(apiBase, videoId) {
   return lookup(false);
 }
 
-export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, poster = '', resumeSeconds = 0, onError, onMinimize, isPictureInPicture = () => false } = {}) {
+export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, poster = '', resumeSeconds = 0, onError, onMinimize, onSpeedChange, isPictureInPicture = () => false } = {}) {
   if (!apiBase || !videoId || !iframe || platform !== 'android') return null;
   const sources = await getAndroidHlsSource(String(apiBase).replace(/\/$/, ''), videoId);
   if (!sources) return null;
@@ -255,14 +255,14 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   const updatePlayIcon = () => {
     const playing = !video.paused && !video.ended;
     playButton.textContent = playing ? 'Ⅱ' : '▶';
-    playButton.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+    playButton.setAttribute('aria-label', window.IST_I18N?.t?.(playing ? 'Pause' : 'Play') || (playing ? 'Pause' : 'Play'));
   };
   const volumeIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 4 6 8H3v8h3l5 4V4z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M15 9a4 4 0 0 1 0 6m2-9a8 8 0 0 1 0 12"/></svg>';
   const mutedIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 4 6 8H3v8h3l5 4V4z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m16 9 5 6m0-6-5 6"/></svg>';
   const updateVolumeIcon = () => {
     const muted = video.muted || video.volume === 0;
     muteButton.innerHTML = muted ? mutedIcon : volumeIcon;
-    muteButton.setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
+    muteButton.setAttribute('aria-label', window.IST_I18N?.t?.(muted ? 'Unmute' : 'Mute') || (muted ? 'Unmute' : 'Mute'));
     volumeControl.value = String(video.volume);
   };
   video.addEventListener('timeupdate', updateTimeline);
@@ -335,7 +335,13 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     video.volume = Number(volumeControl.value);
     if (video.volume > 0) video.muted = false;
   });
-  speedSelect.addEventListener('change', () => { video.playbackRate = Number(speedSelect.value) || 1; });
+  speedSelect.addEventListener('change', () => {
+    const rate = Number(speedSelect.value) || 1;
+    video.playbackRate = rate;
+    // Only a user's speed selection updates the shared preference. Temporary
+    // handoff/decoder catch-up rates must not overwrite it.
+    onSpeedChange?.(rate);
+  });
   pipButton.hidden = !(document.pictureInPictureEnabled && video.requestPictureInPicture);
   pipButton.addEventListener('click', () => video.requestPictureInPicture?.().catch(() => {}));
   fullscreenButton.addEventListener('click', async () => {
