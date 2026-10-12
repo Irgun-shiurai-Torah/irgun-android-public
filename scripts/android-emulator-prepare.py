@@ -5,6 +5,7 @@ The native service deliberately runs a silent audio shadow in Video mode, so
 isPlaying alone cannot detect overlapping audible outputs.
 """
 from pathlib import Path
+import re
 import shutil
 import sys
 
@@ -15,14 +16,21 @@ s = service.read_text()
 p = plugin.read_text()
 field = '        public final boolean audioPlayWhenReady;'
 start = '        return new Snapshot(\n            lectureId, vimeoId, title, speaker, image, mediaKind, sourceId, paidAudioId, trackId, audioUrl, videoSource,'
-end = '            logicalSpeed, logicalVolume, audioReadyInternal(), audioPosition, audioDuration, audioPlaying, audioPlayWhenReady\n        );'
 serialize = '        out.put("audioPlayWhenReady", s.audioPlayWhenReady);'
-for text, token in [(s, field), (s, start), (s, end), (p, serialize)]:
+for text, token in [(s, field), (s, start), (p, serialize)]:
     if text.count(token) != 1:
         raise RuntimeError('Native volume observation insertion point changed')
+# Preserve the complete production constructor, including new snapshot fields.
+# The empty snapshot is intentionally not observed: it has no active player.
+constructors = list(re.finditer(
+    r'(?m)^        return new Snapshot\(\n(?:            [^\n]+\n)+        \);', s))
+if len(constructors) != 1 or not constructors[0].group().startswith(start):
+    raise RuntimeError('Native volume observation insertion point changed')
+constructor = constructors[0].group()
 s = s.replace(field, field + '\n        public float audioOutputVolume; // Emulator-only read-only observation')
-s = s.replace(start, start.replace('return new Snapshot(', 'Snapshot observed = new Snapshot('))
-s = s.replace(end, end + '\n        observed.audioOutputVolume = player == null ? 0f : player.getVolume();\n        return observed;')
+s = s.replace(constructor,
+    constructor.replace('return new Snapshot(', 'Snapshot observed = new Snapshot(', 1)
+    + '\n        observed.audioOutputVolume = player == null ? 0f : player.getVolume();\n        return observed;', 1)
 p = p.replace(serialize, serialize + '\n        out.put("audioOutputVolume", s.audioOutputVolume);')
 method = '    @PluginMethod\n    public void getState(PluginCall call) {'
 if p.count(method) != 1:

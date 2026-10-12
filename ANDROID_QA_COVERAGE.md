@@ -6,6 +6,14 @@ head remain pending until its actual reports, logs and screenshots are inspected
 Local unit checks are separate.
 Do not merge this PR based on unit tests or a green subset of matrix jobs.
 
+Latest inspected attempt: [regression #79](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38248725709)
+had **2 successful jobs and 13 failed jobs**. All emulator jobs failed during
+native observer preparation, before SDK compilation or app/emulator execution.
+The separate startup #119 failed at the same point. This setup regression was
+introduced by the new Audio-authority snapshot field; it is not evidence of
+13 distinct app bugs. The correction and actual API-only passes are recorded
+in the final section below. A complete new emulator run is required.
+
 ## Evidence checked
 
 - Main production tree `7fbf1982eae458f2fbb18468a9fd2dd6b1748941`:
@@ -56,7 +64,8 @@ Do not merge this PR based on unit tests or a green subset of matrix jobs.
 4. Add missing Hebrew HLS control translations and translate dynamically updated
    Play/Pause and Mute/Unmute accessible labels.
 
-None of those production fixes has a new emulator pass until the new run finishes.
+Verification differs by commit; the dated run sections below record actual
+passes and failures. New corrections require new runtime evidence.
 
 ## Reporting rules and test limits
 
@@ -301,3 +310,61 @@ The production Java method is tested against the observed post-deletion seek,
 unchanged native player/item count, Video shadow silence and paused Audio intent.
 These are local source regressions; the complete real emulator rerun is still
 required and no new runtime pass is claimed.
+
+
+## Run #79: setup failure and recovered account API
+
+[Regression #79](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38248725709)
+on `0d513db9a7c62eec24e19e06af43891355649a52` completed with **2 successful jobs
+and 13 failed jobs**. Every failed job log was read, including all four sequential
+account jobs. The separate [startup #119](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38248725664)
+failed for the same reason.
+
+Expected: add read-only native volume/window observation to the disposable QA
+APK, then compile and run the actual Android app. Actual: Python raised
+**RuntimeError: Native volume observation insertion point changed**. The
+production Snapshot gained audioAuthorityCommitted, but the preparer still
+matched the previous exact constructor tail. This was an error in the prior
+change. Android compilation, playback, HLS, soak and native account scenarios
+were never executed in this attempt; they cannot be counted as passes. The
+soak evidence upload also failed because no emulator evidence was generated.
+
+The preparer now locates the one supported active Snapshot constructor and
+preserves every original argument, including the Audio-authority field. It
+still fails on missing/ambiguous insertion points before writing either native
+source. QA observes actual player.getVolume(), read-only getSnapshot(), and
+real WebView geometry/focus; production playback and bridge methods remain
+unchanged. The optional hierarchy observer remains a separate instrumentation
+target and never targets the Irgun app process. Release workflows do not run
+this preparation.
+
+Four new checks run the actual Python preparer against temporary copies of the
+current Java source. They prove byte-for-byte preservation of production code,
+actual volume/snapshot observations, the separate observer package, rejection
+of missing/ambiguous anchors without file writes, and rejection of repeated
+instrumentation. Regression and startup workflows execute these checks before
+building their disposable APKs. No app assertion was removed or relaxed.
+
+Actual server checks did run despite the Android setup failure:
+- MP3 response and HLS HTTP/CORS jobs passed.
+- Each of the four account jobs passed six independent comment checks:
+  real temporary comment creation/author/video, edit, fresh-session persistence,
+  deletion persistence, anonymous creation rejection and anonymous/invalid-token
+  edit/delete rejection. Temporary comments were deleted.
+- Each passed nine independent account/session checks: wrong-password HTTP 401,
+  valid token/cookie login to the same non-admin account, invalid-session denial,
+  matching Likes/Watch Later/Following/playlists, Like changes in both directions,
+  temporary playlist creation/deletion across sessions, and real token logout
+  without invalidating the independent website session. Original Like state was
+  restored and temporary playlists were deleted.
+
+These are real API requests, not Android UI/account passes. The previous valid
+login HTTP 500 did not recur in #79's API probes. Its cause or a server fix is
+not established by this Android change. Native UI login, app identity persistence,
+revoked actual app sessions, account controls and signed-in playback remain
+unverified on this head because no emulator launched.
+
+Next-head local validation: **135 checks passed, zero skipped**, including the
+four actual preparation checks. Vite build, Python/Node syntax and whitespace
+checks passed. Full Android SDK compilation and the new complete emulator
+results remain pending. PR #35 stays draft and unmerged.
