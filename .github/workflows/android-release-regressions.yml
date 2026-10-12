@@ -228,17 +228,12 @@ jobs:
           retention-days: 14
 
 
-  authenticated-account:
-    name: Logged-in account and native media Android API ${{ matrix.api-level }}
+  authenticated-account-30:
+    name: Logged-in account and native media Android API 30
     runs-on: ubuntu-latest
     timeout-minutes: 58
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        api-level: [30, 34, 35, 36]
-    # The workflow-level concurrency lock prevents cross-run account overlap.
-    # max-parallel: 1 above prevents simultaneous account jobs within this run.
+    # The next device starts only after this job completes; no competing
+    # pending matrix children can cancel each other under GitHub concurrency.
     env:
       IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
       IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
@@ -282,12 +277,12 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Validate emulator SDK download for Android API ${{ matrix.api-level }}
-        run: bash scripts/android-emulator-sdk-preflight.sh ${{ matrix.api-level }}
+      - name: Validate emulator SDK download for Android API 30
+        run: bash scripts/android-emulator-sdk-preflight.sh 30
       - name: Native account and separate logged-in playback, offline restart and history sync
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: ${{ matrix.api-level }}
+          api-level: 30
           target: google_apis
           arch: x86_64
           script: bash scripts/android-emulator-account.sh
@@ -301,7 +296,232 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: android-complete-account-api-${{ matrix.api-level }}-${{ github.run_id }}
+          name: android-complete-account-api-30-${{ github.run_id }}
+          path: emulator-report/
+          if-no-files-found: warn
+          retention-days: 14
+
+  authenticated-account-34:
+    name: Logged-in account and native media Android API 34
+    runs-on: ubuntu-latest
+    timeout-minutes: 58
+    needs: authenticated-account-30
+    # Continue verifying later Android versions even if the previous device
+    # fails; do not run obsolete jobs after a workflow cancellation.
+    if: ${{ always() && !cancelled() }}
+    env:
+      IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
+      IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
+    steps:
+      - name: Require dedicated non-admin Android QA credentials
+        run: |
+          test -n "$IRGUN_TEST_EMAIL" && test -n "$IRGUN_TEST_PASSWORD" || {
+            echo "Dedicated QA login secrets are missing"; exit 1;
+          }
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Install Android build dependencies
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+      - run: npm ci
+      - run: bash scripts/prepare_android_icons.sh
+      - name: Add read-only QA observations to disposable Android APK
+        run: |
+          cat .github/account-tests/observer.js >> src/main.js
+          cat .github/release-tests/observer.js >> src/main.js
+      - run: npm run build
+      - run: npx cap sync android
+      - run: bash scripts/prepare_android_icons.sh
+      - run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
+      - run: chmod +x android/gradlew
+      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+        working-directory: android
+      - name: Enable KVM for actual Android emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Validate emulator SDK download for Android API 34
+        run: bash scripts/android-emulator-sdk-preflight.sh 34
+      - name: Native account and separate logged-in playback, offline restart and history sync
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          script: bash scripts/android-emulator-account.sh
+      - name: Independent authenticated comment CRUD, deletion and rejection checks
+        if: always()
+        run: node scripts/android-comments-qa.mjs
+      - name: Independent Android token and website cookie session sync checks
+        if: always()
+        run: node scripts/android-website-account-sync.mjs
+      - name: Upload actual account and comment evidence even if tests fail
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-complete-account-api-34-${{ github.run_id }}
+          path: emulator-report/
+          if-no-files-found: warn
+          retention-days: 14
+
+  authenticated-account-35:
+    name: Logged-in account and native media Android API 35
+    runs-on: ubuntu-latest
+    timeout-minutes: 58
+    needs: authenticated-account-34
+    # Continue verifying later Android versions even if the previous device
+    # fails; do not run obsolete jobs after a workflow cancellation.
+    if: ${{ always() && !cancelled() }}
+    env:
+      IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
+      IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
+    steps:
+      - name: Require dedicated non-admin Android QA credentials
+        run: |
+          test -n "$IRGUN_TEST_EMAIL" && test -n "$IRGUN_TEST_PASSWORD" || {
+            echo "Dedicated QA login secrets are missing"; exit 1;
+          }
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Install Android build dependencies
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+      - run: npm ci
+      - run: bash scripts/prepare_android_icons.sh
+      - name: Add read-only QA observations to disposable Android APK
+        run: |
+          cat .github/account-tests/observer.js >> src/main.js
+          cat .github/release-tests/observer.js >> src/main.js
+      - run: npm run build
+      - run: npx cap sync android
+      - run: bash scripts/prepare_android_icons.sh
+      - run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
+      - run: chmod +x android/gradlew
+      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+        working-directory: android
+      - name: Enable KVM for actual Android emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Validate emulator SDK download for Android API 35
+        run: bash scripts/android-emulator-sdk-preflight.sh 35
+      - name: Native account and separate logged-in playback, offline restart and history sync
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          script: bash scripts/android-emulator-account.sh
+      - name: Independent authenticated comment CRUD, deletion and rejection checks
+        if: always()
+        run: node scripts/android-comments-qa.mjs
+      - name: Independent Android token and website cookie session sync checks
+        if: always()
+        run: node scripts/android-website-account-sync.mjs
+      - name: Upload actual account and comment evidence even if tests fail
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-complete-account-api-35-${{ github.run_id }}
+          path: emulator-report/
+          if-no-files-found: warn
+          retention-days: 14
+
+  authenticated-account-36:
+    name: Logged-in account and native media Android API 36
+    runs-on: ubuntu-latest
+    timeout-minutes: 58
+    needs: authenticated-account-35
+    # Continue verifying later Android versions even if the previous device
+    # fails; do not run obsolete jobs after a workflow cancellation.
+    if: ${{ always() && !cancelled() }}
+    env:
+      IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
+      IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
+    steps:
+      - name: Require dedicated non-admin Android QA credentials
+        run: |
+          test -n "$IRGUN_TEST_EMAIL" && test -n "$IRGUN_TEST_PASSWORD" || {
+            echo "Dedicated QA login secrets are missing"; exit 1;
+          }
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Install Android build dependencies
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+      - run: npm ci
+      - run: bash scripts/prepare_android_icons.sh
+      - name: Add read-only QA observations to disposable Android APK
+        run: |
+          cat .github/account-tests/observer.js >> src/main.js
+          cat .github/release-tests/observer.js >> src/main.js
+      - run: npm run build
+      - run: npx cap sync android
+      - run: bash scripts/prepare_android_icons.sh
+      - run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
+      - run: chmod +x android/gradlew
+      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+        working-directory: android
+      - name: Enable KVM for actual Android emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Validate emulator SDK download for Android API 36
+        run: bash scripts/android-emulator-sdk-preflight.sh 36
+      - name: Native account and separate logged-in playback, offline restart and history sync
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          script: bash scripts/android-emulator-account.sh
+      - name: Independent authenticated comment CRUD, deletion and rejection checks
+        if: always()
+        run: node scripts/android-comments-qa.mjs
+      - name: Independent Android token and website cookie session sync checks
+        if: always()
+        run: node scripts/android-website-account-sync.mjs
+      - name: Upload actual account and comment evidence even if tests fail
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-complete-account-api-36-${{ github.run_id }}
           path: emulator-report/
           if-no-files-found: warn
           retention-days: 14
