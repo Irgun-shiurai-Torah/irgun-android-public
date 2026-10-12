@@ -35,3 +35,25 @@ export function mediaNotificationClock(xml) {
   assert.ok(seconds != null, 'Actual Android notification must expose its elapsed media timer');
   return seconds;
 }
+
+export function offlineConfirmationTapPoint(xml) {
+  const visible = nodes(xml).filter(node => /package="org.irgunshiuraitorah.app"/.test(node) && /visible="true"/.test(node));
+  if (!visible.some(node => attribute(node, 'resource-id') === 'android:id/message' &&
+      /Remove the saved offline copy\?|להסיר את העותק השמור להאזנה ללא אינטרנט\?/.test(attribute(node, 'text')))) return null;
+  const button = visible.find(node => attribute(node, 'resource-id') === 'android:id/button1' &&
+    /clickable="true"/.test(node) && /^OK$/i.test(attribute(node, 'text')));
+  const rect = button?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
+  assert.ok(rect && rect[2] > rect[0] && rect[3] > rect[1], 'Actual offline confirmation must expose its positive button');
+  return [Math.round((rect[0] + rect[2]) / 2), Math.round((rect[1] + rect[3]) / 2)];
+}
+
+export async function settledOfflineConfirmationPoint({readHierarchy, delay, samples = 8}) {
+  let previous;
+  for (let i = 0; i < samples; i++) {
+    const point = offlineConfirmationTapPoint(await readHierarchy());
+    if (point && previous && point.every((value,index)=>Math.abs(value-previous[index]) <= 1)) return point;
+    previous = point;
+    await delay(200);
+  }
+  throw new Error('Actual offline confirmation did not settle; no tap was performed');
+}

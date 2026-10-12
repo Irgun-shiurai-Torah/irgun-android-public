@@ -74,6 +74,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         public final long audioDurationMs;
         public final boolean audioIsPlaying;
         public final boolean audioPlayWhenReady;
+        public final boolean audioAuthorityCommitted;
 
         Snapshot(
             String lectureId,
@@ -98,7 +99,8 @@ public class IrgunPlaybackService extends MediaSessionService {
             long audioPositionMs,
             long audioDurationMs,
             boolean audioIsPlaying,
-            boolean audioPlayWhenReady
+            boolean audioPlayWhenReady,
+            boolean audioAuthorityCommitted
         ) {
             this.lectureId = cleanStatic(lectureId);
             this.vimeoId = cleanStatic(vimeoId);
@@ -123,6 +125,7 @@ public class IrgunPlaybackService extends MediaSessionService {
             this.audioDurationMs = Math.max(0L, audioDurationMs);
             this.audioIsPlaying = audioIsPlaying;
             this.audioPlayWhenReady = audioPlayWhenReady;
+            this.audioAuthorityCommitted = audioAuthorityCommitted;
         }
     }
 
@@ -152,6 +155,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     private long externalVideoPositionMs = 0L;
     private long externalVideoDurationMs = 0L;
     private boolean externalVideoPlaying = false;
+    private int lastPlayIntentReason = Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST;
     private float logicalSpeed = 1f;
     private float logicalVolume = 1f;
 
@@ -305,6 +309,7 @@ public class IrgunPlaybackService extends MediaSessionService {
 
                 @Override
                 public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
+                    lastPlayIntentReason = reason;
                     Log.d(TAG, "[Playback] play intent=" + playWhenReady + " reason=" + reason + " mode=" + playbackMode);
                     if (playbackMode == PlaybackMode.VIDEO && videoMirrorCallbackAllowed()) {
                         // Notification/lock-screen/headset controls change the shadow
@@ -434,6 +439,7 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     @Override
     public void onDestroy() {
+        Log.d(TAG, "[Playback] Media3 service destroyed; mode=" + playbackMode + " lecture=" + lectureId);
         pendingBackgroundHandoff = false;
         backgroundPauseRequested = false;
         if (mediaSession != null) {
@@ -497,7 +503,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         return new Snapshot(
             lectureId, vimeoId, title, speaker, image, mediaKind, sourceId, paidAudioId, trackId, audioUrl, videoSource,
             playbackMode, presentationMode, position, duration, playing,
-            logicalSpeed, logicalVolume, audioReadyInternal(), audioPosition, audioDuration, audioPlaying, audioPlayWhenReady
+            logicalSpeed, logicalVolume, audioReadyInternal(), audioPosition, audioDuration, audioPlaying, audioPlayWhenReady, authorityGuard.isAudioCommitted()
         );
     }
 
@@ -1135,7 +1141,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private static Snapshot emptySnapshot() {
-        return new Snapshot("", "", "", "", "", "", "", "", "", "", "", PlaybackMode.AUDIO, PresentationMode.FULL, 0L, 0L, false, 1f, 1f, false, 0L, 0L, false, false);
+        return new Snapshot("", "", "", "", "", "", "", "", "", "", "", PlaybackMode.AUDIO, PresentationMode.FULL, 0L, 0L, false, 1f, 1f, false, 0L, 0L, false, false, false);
     }
 
     /**
@@ -1206,6 +1212,63 @@ public class IrgunPlaybackService extends MediaSessionService {
         onMain(() -> {
             IrgunPlaybackService s = active();
             if (s != null) s.startAudioAtInternal(positionMs, shouldPlay, speed, volume, commit);
+        });
+    }
+
+    private boolean replaceOfflineAudioSourceInternal(String expectedFileUrl, String replacementUrl) {
+        String expected = cleanStatic(expectedFileUrl);
+        if (player == null || !expected.startsWith("file:") || !audioUrl.equals(expected)) return false;
+        String replacement = cleanStatic(replacementUrl);
+        if (!"https".equals(Uri.parse(replacement).getScheme())) {
+            throw new IllegalArgumentException("Replacement audio source must use HTTPS");
+        }
+        long position = playbackMode == PlaybackMode.VIDEO
+            ? externalVideoPositionMs : player.getCurrentPosition();
+        boolean wanted = playbackMode == PlaybackMode.VIDEO
+            ? externalVideoPlaying : player.getPlayWhenReady();
+        suppressVideoMirrorCallbacks();
+        boolean previousSync = syncingVideoShadow;
+        syncingVideoShadow = true;
+        try {
+            // Swap the URI in the existing engine before unlinking the file.
+            // A later seek must never reopen a deleted offline MP3.
+            audioUrl = replacement;
+            player.clearMediaItems();
+            setCandidateAudioFocus(playbackMode == PlaybackMode.AUDIO);
+            player.setVolume(playbackMode == PlaybackMode.VIDEO ? 0f : logicalVolume);
+            ensureAudioMediaItemInternal(Math.max(0L, position));
+            player.prepare();
+            player.setPlayWhenReady(wanted);
+        } finally {
+            syncingVideoShadow = previousSync;
+        }
+        Log.d(TAG, "[Playback] replaced offline native source before file deletion");
+        publishNativeState();
+        return true;
+    }
+
+    public static boolean replaceOfflineAudioSourceNow(String expectedFileUrl, String replacementUrl) {
+        if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("Audio source swap requires main thread");
+        IrgunPlaybackService s = active();
+        return s != null && s.replaceOfflineAudioSourceInternal(expectedFileUrl, replacementUrl);
+    }
+
+    private void restoreAudioAfterVideoTeardownInternal(String expectedLectureId) {
+        String expected = cleanStatic(expectedLectureId);
+        if (player == null || playbackMode != PlaybackMode.AUDIO ||
+            !lectureId.equals(expected) || expected.isEmpty() ||
+            player.getPlayWhenReady() ||
+            lastPlayIntentReason != Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS) return;
+        // Only repair a focus-loss stop in the same source during WebView
+        // teardown. User/notification Pause and different lectures stay paused.
+        Log.d(TAG, "[Playback] restoring native Audio focus after parked Video teardown");
+        player.play();
+    }
+
+    public static void restoreAudioAfterVideoTeardown(String expectedLectureId) {
+        onMain(() -> {
+            IrgunPlaybackService s = active();
+            if (s != null) s.restoreAudioAfterVideoTeardownInternal(expectedLectureId);
         });
     }
 

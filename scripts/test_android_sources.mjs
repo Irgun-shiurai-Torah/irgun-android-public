@@ -594,7 +594,7 @@ test('delayed video source events cannot publish VIDEO over an Audio rollback',a
 });
 test('native Audio reconciliation changes ownership before the parked player emits Pause',()=>{
   let pauses=0,muted=false;
-  const state={watchVideo:{id:'lecture'},watchMode:'video',watchVimeo:{pause(){
+  const state={nativeBackgroundHandoff:true,watchVideo:{id:'lecture'},watchMode:'video',watchVimeo:{pause(){
     assert.equal(state.watchMode,'audio');assert.equal(muted,true);pauses++;return Promise.resolve();
   }}};
   const start=mainSource.indexOf('function reconcileNativeWatchAudio(');
@@ -643,11 +643,11 @@ test('delayed Video snapshots cannot replace the Audio view after its short fenc
 
 function resumeFixture({ready=600.35,commitFails=false,focusStopped=false,readyWait}={}) {
   const item={id:'lecture'};
-  const state={current:item,watchResumeSeconds:600,nativePlayback:{mode:'AUDIO',audioIsPlaying:!focusStopped,audioPlayWhenReady:!focusStopped},playbackSpeed:1};
+  const state={current:item,watchVideo:{id:'lecture'},watchMode:'video',watchVimeoGeneration:3,watchResumeSeconds:600,nativePlayback:{mode:'AUDIO',audioIsPlaying:!focusStopped,audioPlayWhenReady:!focusStopped},playbackSpeed:1};
   const events=[];
   const player={getCurrentTime:async()=>600,setPlaybackRate:async()=>{},play:()=>new Promise(()=>{}),pause:async()=>events.push('pause')};
   state.watchVimeo=player;
-  const context={state,console:{debug(){},warn(){}},setTimeout(){},usesNativeUnifiedAudio:()=>true,
+  const context={state,document:{hidden:false},console:{debug(){},warn(){}},setTimeout(){},usesNativeUnifiedAudio:()=>true,
     playbackPositionSeconds:()=>600,setVimeoHandoffMuted:async(_,muted)=>events.push(muted?'mute':'unmute'),
     waitForVimeoHandoffReady:async(...args)=>{events.push('verify');return readyWait?readyWait(...args):ready;},
     finishAudioToVideoHandoff:async()=>{events.push('commit');state.current=null;state.nativePlayback.mode='VIDEO';if(commitFails)throw Error('native error');state.watchAudioToVideoHandoff=false;return true;},
@@ -667,7 +667,7 @@ function initializedHandoffFixture(transaction) {
   const {state}=transaction;
   state.watchVimeoGeneration=3;state.watchVideo={id:'lecture'};state.watchMode='video';
   const ui=[];
-  const context={state,videoId:video=>video?.id, resumeParkedVideoFromAudio:()=>transaction.resume(),
+  const context={state,document:{hidden:false},videoId:video=>video?.id, resumeParkedVideoFromAudio:()=>transaction.resume(),
     parkHostedVideoForAudio:()=>ui.push('park'),render:()=>ui.push('render'),updatePlayerUi:()=>ui.push('controls')};
   const start=mainSource.indexOf('async function finishInitializedNativeVideoHandoff(');
   runInNewContext(mainSource.slice(start,mainSource.indexOf('function initWatchVimeo(',start))+'\nthis.finish=finishInitializedNativeVideoHandoff;',context);
@@ -853,4 +853,119 @@ test('initial buffered Play remains allowed in actual system PiP while the Activ
   await player.play();
   assert.equal(player.getVideoElement().paused,false,'PiP must not be cancelled as a normal Home transition');
  }});
+});
+
+test('initial native Audio prewarm cannot replace a foreground Video that is still loading',()=>{
+  const state={watchVideo:{id:'lecture'},watchMode:'video',watchVimeoReady:false};
+  const start=mainSource.indexOf('function reconcileNativeWatchAudio(');
+  const context={state,document:{hidden:false},videoId:v=>v.id,
+    ensureNativeAudioCurrentForWatch(){throw Error('Metadata must not claim Audio');}};
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('const PlaybackController =',start))+'\nthis.reconcile=reconcileNativeWatchAudio;',context);
+  context.reconcile({mode:'AUDIO',lectureId:'lecture',currentPositionMs:0,audioAuthorityCommitted:false});
+  assert.equal(state.watchMode,'video');
+});
+
+for(const home of [false,true])test('real Video authority confirmation preserves the latest Home intent, Home='+home,async()=>{
+  let now=1000,cancelled=false;
+  const doc={hidden:false},item={id:'lecture'},events=[];
+  const element={paused:false,muted:true,volume:1,readyState:4,videoWidth:640};
+  const player={getCurrentTime:async()=>600,getDuration:async()=>3663,getVideoElement:()=>element,
+    play:async()=>{events.push('play');element.paused=false;}};
+  const state={current:item,watchVimeo:player,watchVimeoGeneration:3,watchMode:'video',
+    watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture'};
+  const context={state,document:doc,Date:{now:()=>now},console:{debug(){},warn(){}},
+    usesNativeUnifiedAudio:()=>true,setVimeoHandoffMuted:async(_,muted)=>{element.muted=muted;},
+    PlaybackController:{switchAuthorityToVideo:async()=>events.push('VIDEO')},
+    setTimeout:callback=>{now+=180;if(home&&!cancelled){cancelled=true;doc.hidden=true;state.nativeBackgroundHandoff=true;state.watchAudioToVideoHandoff=false;element.paused=true;}callback();}};
+  const start=mainSource.indexOf('async function confirmVideoAudibleAfterAuthority(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('async function waitForVimeoHandoffReady(',start))+'\nthis.finish=finishAudioToVideoHandoff;',context);
+  assert.equal(await context.finish('lecture',player),!home);
+  assert.equal(state.watchAudioToVideoCommitBusy,false);
+  assert.equal(state.current,home?item:null,'A cancelled foreground commit cannot clear background Audio');
+  assert.deepEqual(events,['VIDEO'],'Home cancellation must never replay WebView video');
+});
+
+for(const playing of [false,true])test('closing a parked Video preserves Audio intent through native teardown, playing='+playing,async()=>{
+  const events=[],item={id:'lecture'};
+  const player={destroy:async()=>events.push('destroy')};
+  const state={watchVideo:{id:'lecture'},watchVimeo:player,watchMode:'audio',watchVimeoGeneration:3,current:item};
+  const context={state,usesNativeUnifiedAudio:()=>true,playbackIsPaused:()=>!playing,
+    nativeMediaPlugin:()=>({restoreAudioAfterVideoTeardown:async args=>{assert.equal(args.lectureId,'lecture');assert.deepEqual(events,['destroy']);events.push('focus-guard');}}),
+    PlaybackController:{refreshFromNative:async()=>events.push('refresh')},
+    setTimeout:callback=>callback(),setNativeVideoFullscreen(){},clearPersistentVideoMount(){},render:()=>events.push('render')};
+  const start=mainSource.indexOf('async function closeWatch(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('async function performWatchModeSwitch(',start))+'\nthis.close=closeWatch;',context);
+  await context.close(false);assert.equal(state.watchVideo,null);assert.equal(state.current,item);
+  assert.deepEqual(events,playing?['destroy','focus-guard','refresh','render']:['destroy','render']);
+});
+
+test('HLS synchronization accepts actual decoded progress after WebView stopped native Audio focus',async()=>{
+  const f=handoffFixture({focusStopped:true});f.player.getSourceType=()=> 'hls';
+  assert.ok(await f.wait(f.player,'lecture',3000)>600);
+});
+
+for(const failed of [false,true])test('actual offline deletion preserves the saved record when native file removal fails, failure='+failed,async()=>{
+  const record={key:'video:lecture',id:'lecture',uri:'file:///private/lecture.mp3',path:'irgun-offline/lecture.mp3'},state={offlineDownloads:new Map([[record.key,record]])};
+  const events=[];
+  const context={state,usesNativeUnifiedAudio:()=>true,audioUrl:id=>'https://api.example/audio/'+id, nativeMediaPlugin:()=>({replaceOfflineAudioSource:async args=>{assert.equal(args.fileUrl,record.uri);assert.equal(args.networkUrl,'https://api.example/audio/lecture');events.push('swap');}}),Directory:{Data:'DATA'},Filesystem:{deleteFile:async args=>{assert.deepEqual(events,['swap']);assert.equal(args.path,record.path);events.push('delete');if(failed)throw Error('Native deletion failed');}},
+    console:{warn(){}},currentLanguage:()=> 'en',persistOfflineDownloads:()=>events.push('persist'),
+    setToast:text=>events.push(text),refreshInteractiveUi(){},refreshOfflineButtonsForKey(){}};
+  const start=mainSource.indexOf('async function deleteOffline(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('async function playOfflineRecord(',start))+'\nthis.remove=deleteOffline;',context);
+  assert.equal(await context.remove(record.key,{stayHere:true}),!failed);
+  assert.equal(state.offlineDownloads.has(record.key),failed);
+  assert.equal(events.includes('persist'),!failed,'A native error must not persist a fabricated removal');
+  assert.equal(events.includes('Offline copy removed.'),!failed);
+});
+
+test('a genuine native Audio commit restores Home playback controls even if the WebView missed visibility events',()=>{
+  const state={watchVideo:{id:'lecture'},watchMode:'video',watchVimeo:{pause:async()=>{}}};
+  let adopted=false;
+  const context={state,document:{hidden:false,getElementById:()=>null},videoId:v=>v.id,
+    ensureNativeAudioCurrentForWatch:()=>{adopted=true;},setVimeoHandoffMuted:async()=>{},parkHostedVideoForAudio(){},render(){}};
+  const start=mainSource.indexOf('function reconcileNativeWatchAudio(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('const PlaybackController =',start))+'\nthis.reconcile=reconcileNativeWatchAudio;',context);
+  context.reconcile({mode:'AUDIO',lectureId:'lecture',currentPositionMs:732244,audioAuthorityCommitted:true});
+  assert.equal(state.watchMode,'audio');assert.equal(state.watchResumeSeconds,732.244);assert.equal(adopted,true);
+});
+
+test('HLS with stopped native focus corrects decoded drift without widening the one-second source position limit',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:1000});
+  let position=604,frames=0,decodeAt=3500,lastAt=decodeAt;const seeks=[];
+  const element={paused:false,seeking:false,readyState:1,videoWidth:640,playbackRate:1};
+  const advance=()=>{
+    if(Date.now()<decodeAt)return;
+    element.readyState=4;position+=(Date.now()-Math.max(lastAt,decodeAt))/1000*element.playbackRate;
+    frames+=Math.max(1,Math.floor((Date.now()-Math.max(lastAt,decodeAt))/1000*30));lastAt=Date.now();
+  };
+  element.getVideoPlaybackQuality=()=>{advance();return {totalVideoFrames:frames};};
+  const player={getSourceType:()=> 'hls',getVideoElement:()=>element,getPaused:async()=>false,
+    getCurrentTime:async()=>{advance();return position;},setCurrentTime:async target=>{
+      seeks.push(Date.now());position=target;decodeAt=Date.now()+100;lastAt=decodeAt;element.readyState=1;return target;
+    }};
+  const state={watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',playbackSpeed:1,
+    nativePlayback:{mode:'AUDIO',audioIsPlaying:false,audioPlayWhenReady:false}};
+  const context={state,Date,setTimeout,console:{warn(){}},usesNativeUnifiedAudio:()=>true,playbackPositionSeconds:()=>600};
+  const start=mainSource.indexOf('async function waitForVimeoHandoffReady(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function videoAudioPlaybackItem(',start))+'\nthis.wait=waitForVimeoHandoffReady;',context);
+  let finished=false,result;
+  const flight=context.wait(player,'lecture',8000).then(value=>{finished=true;result=value;});
+  for(let i=0;i<100&&!finished;i++){t.mock.timers.tick(100);for(let j=0;j<12;j++)await Promise.resolve();}
+  await flight;
+  assert.ok(result>=600&&result<=601,'A muted moving decoder must not skip the parked Audio position');
+  assert.equal(seeks.length,1,'Correct decoded drift once; do not reset a pending keyframe repeatedly');
+  assert.ok(seeks[0]>=3500,'A pending keyframe must decode before a corrective seek');
+});
+
+test('offline deletion cannot unlink the active file when native source replacement fails',async()=>{
+  const record={key:'video:lecture',id:'lecture',uri:'file:///private/lecture.mp3',path:'irgun-offline/lecture.mp3'};
+  const state={offlineDownloads:new Map([[record.key,record]]),current:{id:'lecture',offline:true,offlineKey:record.key}};
+  let filesystemCalls=0;
+  const context={state,usesNativeUnifiedAudio:()=>true,audioUrl:()=> 'https://api.example/audio/lecture',
+    nativeMediaPlugin:()=>({replaceOfflineAudioSource:async()=>{throw Error('Native swap failed');}}),
+    Filesystem:{deleteFile:async()=>filesystemCalls++},Directory:{Data:'DATA'},console:{warn(){}},currentLanguage:()=> 'en',setToast(){}};
+  const start=mainSource.indexOf('async function deleteOffline(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('async function playOfflineRecord(',start))+'\nthis.remove=deleteOffline;',context);
+  assert.equal(await context.remove(record.key),false);assert.equal(filesystemCalls,0);
+  assert.equal(state.offlineDownloads.get(record.key),record);assert.equal(state.current.offline,true);
 });

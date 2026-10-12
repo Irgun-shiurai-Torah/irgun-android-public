@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {fullscreenEducationTapPoint, mediaNotificationClock} from './android-system-ui-observation.mjs';
+import {fullscreenEducationTapPoint, mediaNotificationClock, offlineConfirmationTapPoint, settledOfflineConfirmationPoint} from './android-system-ui-observation.mjs';
 
 const node = attributes => '<node package="com.android.systemui" visible="true" ' + attributes + '/>';
 test('notification reads actual Android 16 spoken elapsed time, excluding total duration', () => {
@@ -29,4 +29,20 @@ test('fullscreen education dismisses only the real identified SystemUI prompt', 
 });
 test('fullscreen education fails for missing actual button geometry', () => {
   assert.throws(()=>fullscreenEducationTapPoint(node('text="Viewing full screen"')),/Got it button/);
+});
+
+const offlineDialog = x => '<node package="org.irgunshiuraitorah.app" visible="true" resource-id="android:id/message" text="Remove the saved offline copy?"/>'+
+  '<node package="org.irgunshiuraitorah.app" visible="true" resource-id="android:id/button1" text="OK" clickable="true" bounds="['+x+',320]['+(x+64)+',368]"/>';
+test('actual offline confirmation requires the correct app, message and positive button',()=>{
+  assert.deepEqual(offlineConfirmationTapPoint(offlineDialog(220)),[252,344]);
+  assert.equal(offlineConfirmationTapPoint(offlineDialog(220).replaceAll('org.irgunshiuraitorah.app','android')),null);
+  assert.equal(offlineConfirmationTapPoint(offlineDialog(220).replace('Remove the saved offline copy?','Different action?')),null);
+});
+test('physical offline confirmation waits for two consistent observed dialog positions',async()=>{
+  const samples=[offlineDialog(220),offlineDialog(215),offlineDialog(215)],waits=[];
+  const point=await settledOfflineConfirmationPoint({readHierarchy:()=>samples.shift(),delay:ms=>waits.push(ms)});
+  assert.deepEqual(point,[247,344]);assert.deepEqual(waits,[200,200]);
+});
+test('unstable offline dialog never produces a physical tap target',async()=>{
+  let n=0;await assert.rejects(settledOfflineConfirmationPoint({readHierarchy:()=>offlineDialog(n++%2?215:220),delay:async()=>{},samples:4}),/no tap was performed/);
 });

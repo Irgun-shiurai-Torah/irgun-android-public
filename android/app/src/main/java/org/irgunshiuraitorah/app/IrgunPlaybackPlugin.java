@@ -151,6 +151,7 @@ public class IrgunPlaybackPlugin extends Plugin {
         out.put("audioDurationMs", s.audioDurationMs);
         out.put("audioIsPlaying", s.audioIsPlaying);
         out.put("audioPlayWhenReady", s.audioPlayWhenReady);
+        out.put("audioAuthorityCommitted", s.audioAuthorityCommitted);
         return out;
     }
 
@@ -272,6 +273,24 @@ public class IrgunPlaybackPlugin extends Plugin {
 
     @PluginMethod public void play(PluginCall call) { ensureServiceRunning(); IrgunPlaybackService.play(); call.resolve(); }
     @PluginMethod public void pause(PluginCall call) { ensureServiceRunning(); IrgunPlaybackService.pause(); call.resolve(); }
+    @PluginMethod public void restoreAudioAfterVideoTeardown(PluginCall call) {
+        String lectureId = call.getString("lectureId", "");
+        if (!lectureId.isEmpty()) IrgunPlaybackService.restoreAudioAfterVideoTeardown(lectureId);
+        call.resolve();
+    }
+    @PluginMethod public void replaceOfflineAudioSource(PluginCall call) {
+        MAIN.post(() -> {
+            try {
+                boolean changed = IrgunPlaybackService.replaceOfflineAudioSourceNow(
+                    call.getString("fileUrl", ""), call.getString("networkUrl", ""));
+                JSObject result = new JSObject();
+                result.put("sourceReplaced", changed);
+                call.resolve(result);
+            } catch (Exception error) {
+                call.reject("Could not replace the offline playback source", error);
+            }
+        });
+    }
     @PluginMethod public void seekTo(PluginCall call) { ensureServiceRunning(); IrgunPlaybackService.seekTo(Math.max(0L, Math.round(d(call, "positionMs", 0.0)))); call.resolve(); }
     @PluginMethod public void seekBy(PluginCall call) { ensureServiceRunning(); IrgunPlaybackService.seekBy(Math.round(d(call, "deltaMs", 0.0))); call.resolve(); }
     @PluginMethod public void setSpeed(PluginCall call) { ensureServiceRunning(); IrgunPlaybackService.setSpeed((float)Math.max(0.25, d(call, "rate", 1.0))); call.resolve(); }

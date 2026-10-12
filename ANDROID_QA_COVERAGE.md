@@ -214,3 +214,90 @@ Unresolved failures:
 Next-head local validation: **115 checks passed, zero skipped**, Vite build,
 script syntax, workflow YAML and whitespace checks passed. These corrections
 remain draft and unmerged pending a new complete real emulator run.
+
+
+## Run #78: remaining races and actual confirmation failures
+
+[Regression #78](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38233574337)
+on `b00cf838355f797b0f75e31851ca5d1e2503dfd9` finished **6 jobs passed, 9 failed**.
+All nine failed job logs and emulator reports were inspected. The separate
+[startup #118](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38233574351)
+passed its actual 11 baseline playback checks and three English/Hebrew tab checks.
+
+Real passes:
+- HLS API 30/35/36: seven moving-picture/buffer/quality/blocked-Vimeo checks each.
+- MP3 response and HLS HTTP/CORS delivery.
+- API 30 mixed reliability: **900,066 ms**, 16 samples, unchanged process,
+  Audio/Video and mini/full changes, locks and Home/reopening. PSS baseline
+  142,120 KB/peak 151,640 KB stayed within the existing declared budget.
+- All four native media jobs completed their 11 baseline checks, repeated
+  Audio/Video switches, near-end seek, Video speed changes, true fullscreen Back,
+  rotation and PiP. The API 35 launch ANR from #77 did not recur in #78; that
+  single successful launch does not establish that its original cause is fixed.
+- Hebrew/English moving player checks passed on API 30/34/36. Actual Home,
+  notification buttons and advancing spoken timer passed on API 36. Real audio
+  focus and Doze passed on API 30/34/36; permission checks passed on API 34/36.
+- API 34 completed offline playback/restart/UI removal and the simple Wi-Fi/data
+  interruption scenario. New direct filesystem deletion proof is still pending.
+
+| Failed job/scenario | Expected vs actual observed | Correction or open finding |
+| --- | --- | --- |
+| HLS API 34 startup | Moving HLS Video; instead the Watch view changed to paused Audio at 0:00, no video element and zero completed playback checks | Initial native MP3 prewarming can report AUDIO before Video decodes. Native snapshots now expose whether Audio authority was actually committed; metadata cannot replace a foreground Video choice |
+| Native API 35 Hebrew/English reopen | Audio continues and Video starts moving/audible; instead native Audio stopped, with logged play-intent reason=2 (audio focus loss), then Video remained paused | Closing a parked decoder now invokes a guarded native focus-loss repair for the same continuing Audio source. Explicit user/notification Pause, changed lectures and Video authority cannot trigger duplicate Audio |
+| Native API 34 Home | Audible advancing native Audio; instead Audio was paused while the foreground Video commit was still busy | Home cancels the foreground readiness/audibility transaction. Late foreground completion/rollback cannot restart Video, clear background Audio or seek its clock |
+| Native API 30 notification timer | Visible elapsed timer advances; actual Android 11 shade showed a collapsed media card with controls but no timer | Expand actual Quick Settings before asserting the visible timer. The elapsed/advancing timer assertion remains active; no status-clock substitution |
+| Native API 30/36 offline confirmation | Physical OK closes dialog and deletes file; actual screenshots still show the confirmation and JavaScript observation times out | Require two consistent actual native dialog bounds before one physical OK tap, then observe actual dialog dismissal before inspecting paused JavaScript. Failed confirmation stays failed and is cancelled only to allow independent later checks |
+| Native API 34 slow transport | Video retains native VIDEO ownership; decoded Video moved but native snapshot became an empty AUDIO session | Further log inspection identifies ERROR_CODE_IO_FILE_NOT_FOUND after the active native shadow retained the deleted offline MP3. Replace that native URI before unlinking the file; real rerun proof remains pending |
+| Logged-in API 30/34/35/36 | Valid QA login and real account/playback scenarios; native login failed and independent requests returned HTTP 500 Login failed | Shared server failure remains unresolved. Incorrect password UI/API rejection passed. Account features and signed-in playback were not executed and cannot be marked passed |
+
+The source also swallowed native offline-file deletion errors and removed the
+saved record/toasted success anyway. A real deletion failure now retains the
+record and reports failure. The emulator test additionally verifies the actual
+MP3 path exists before deletion and is absent afterwards using Android's app
+storage access; removing only the UI entry is insufficient.
+
+Later inspector errors on API 30/36 follow the still-open synchronous dialog and
+are not independent proof of failed network/speed/layout behaviour. Later API 35
+errors follow the parked stopped source. They remain failed/unverified, not
+silently passed. The new physical-confirmation checks never use a synthetic OK
+response, repeat a destructive tap or disable file-deletion assertions.
+
+Server log correlation for the valid-login HTTP 500s (UTC):
+- API 30: 2026-10-12 10:05:55, Cloudflare `a49549f33941277d-SEA`.
+- API 34: 2026-10-12 10:12:06, Cloudflare `a49552fe8b5490db-SEA`.
+- API 35: 2026-10-12 10:17:20, Cloudflare `a4955aa9df15e6c7-IAD`.
+- API 36: 2026-10-12 10:28:56, Cloudflare `a4956ba7dff66be3-DFW`.
+
+The actual Worker exception is still required to diagnose that server operation;
+no server authentication fix is claimed. Native account API 34's process loss
+from #77 did not recur here; its old exit cause remains unverified.
+
+Next-head validation: **131 local checks passed, zero skipped**, including the
+actual production Java focus-loss guard, user-Pause/source-change guards, initial
+prewarm reconciliation, foreground/Home cancellation, native confirmation
+settling and deletion failure retention. Vite build, script/Bash syntax,
+workflow YAML and whitespace checks passed. Complete new real emulator
+compilation/runtime results remain pending. PR #35 remains draft and unmerged.
+
+
+### Confirmed source of the API 34 empty native session
+
+Additional inspection of #78's actual native trace identified the cause, rather
+than leaving the empty session unexplained. At 10:09:31 UTC, native loadLecture
+selected the downloaded `file://` MP3. After offline deletion and a later video
+seek, the log at 10:10:06 records **ERROR_CODE_IO_FILE_NOT_FOUND**, then “Native
+player disabled for this session; using HTML audio fallback” and stopAudio with
+clearLecture=true. The moving Video survived, but the native session was cleared.
+
+Before unlinking a download, the native engine now replaces that exact active
+file URI with its HTTPS audio source in the existing player. It preserves the
+current Video or Audio position/play intent, leaves the Video shadow silent,
+and never changes another lecture's source. The native main-thread swap must
+acknowledge before Filesystem.deleteFile runs. If swapping fails, deletion is
+not attempted and the saved record remains. The current Audio item is updated
+to its actual network source so a later Play cannot select the removed file.
+
+The production Java method is tested against the observed post-deletion seek,
+unchanged native player/item count, Video shadow silence and paused Audio intent.
+These are local source regressions; the complete real emulator rerun is still
+required and no new runtime pass is claimed.

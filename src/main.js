@@ -595,12 +595,27 @@ async function saveOffline(kind, id) {
 async function deleteOffline(key, options = {}) {
   const record = state.offlineDownloads.get(String(key || ''));
   if (!record) return;
-  try { await Filesystem.deleteFile({ directory:Directory.Data, path:record.path }); } catch (_) {}
+  try {
+    if (usesNativeUnifiedAudio() && record.uri) {
+      const networkUrl = audioUrl(record.sourceId || record.id);
+      await nativeMediaPlugin().replaceOfflineAudioSource({fileUrl:record.uri,networkUrl});
+      if (state.current?.offlineKey === record.key) {
+        state.current = { ...state.current, url:networkUrl, networkUrl, nativeBackgroundUrl:'', offline:false, offlineKey:'' };
+      }
+    }
+    await Filesystem.deleteFile({ directory:Directory.Data, path:record.path });
+  }
+  catch (error) {
+    console.warn('Offline file deletion failed', error);
+    setToast(currentLanguage() === 'he' ? 'לא היה אפשר למחוק את העותק הלא מקוון. נסו שוב.' : 'Could not delete the offline copy. Please try again.');
+    return false;
+  }
   state.offlineDownloads.delete(record.key);
   persistOfflineDownloads();
   setToast(currentLanguage() === 'he' ? 'העותק הלא מקוון הוסר.' : 'Offline copy removed.');
   if (state.screen === 'library' && state.librarySection === 'downloads' && !options.stayHere) render();
   else { refreshInteractiveUi(); refreshOfflineButtonsForKey(record.key); }
+  return true;
 }
 
 async function playOfflineRecord(key) {
@@ -4809,12 +4824,13 @@ async function setVimeoHandoffMuted(player, muted) {
 }
 
 
-async function confirmVideoAudibleAfterAuthority(player, timeoutMs = 6500) {
+async function confirmVideoAudibleAfterAuthority(player, timeoutMs = 6500, isCurrent = () => true) {
   const deadline = Date.now() + timeoutMs;
   // An Android focus transaction can briefly unmute the WebView and then
   // re-mute it a fraction of a second later. Require stable audible playback.
   let audibleSince = 0;
   while (Date.now() < deadline) {
+    if (!isCurrent()) return false;
     const element = player?.getVideoElement?.();
     if (element) {
       // Modern Android WebView can re-mute or suspend the media element during
@@ -4860,6 +4876,11 @@ async function confirmVideoAudibleAfterAuthority(player, timeoutMs = 6500) {
 
 async function finishAudioToVideoHandoff(videoKey, player = state.watchVimeo) {
   const key = String(videoKey || '');
+  const generation = state.watchVimeoGeneration;
+  const isCurrent = () => state.watchVimeoGeneration === generation && state.watchVimeo === player &&
+    state.watchMode === 'video' && state.watchAudioToVideoHandoff &&
+    String(state.watchAudioToVideoHandoffId || '') === key && !state.nativeBackgroundHandoff &&
+    (!document.hidden || state.systemPipActive);
   // Vimeo's play event and the readiness waiter can hit this simultaneously. If
   // they are finishing the same lecture, share the transaction. If an older
   // lecture is still winding down, wait for it before evaluating the new handoff
@@ -4870,6 +4891,7 @@ async function finishAudioToVideoHandoff(videoKey, player = state.watchVimeo) {
   }
   if (!state.watchAudioToVideoHandoff) return state.watchMode === 'video';
   if (state.watchAudioToVideoHandoffId && String(state.watchAudioToVideoHandoffId) !== key) return false;
+  if (!isCurrent()) return false;
 
   state.watchAudioToVideoCommitBusy = true;
   state.watchAudioToVideoCommitPromiseId = key;
@@ -4878,12 +4900,15 @@ async function finishAudioToVideoHandoff(videoKey, player = state.watchVimeo) {
       if (usesNativeUnifiedAudio()) {
         const position = await Promise.resolve(player?.getCurrentTime?.()).catch(()=>state.watchResumeSeconds||0);
         const duration = await Promise.resolve(player?.getDuration?.()).catch(()=>Number(state.watchVideo?.duration)||0);
+        if (!isCurrent()) return false;
         // Keep Vimeo muted until Media3 confirms VIDEO authority. If native authority
         // cannot switch, native audio remains the only audible source and the caller
         // can safely restore Audio mode without ever producing double audio.
         await PlaybackController.switchAuthorityToVideo(position, duration, true);
+        if (!isCurrent()) return false;
         await setVimeoHandoffMuted(player, false);
-        if (!await confirmVideoAudibleAfterAuthority(player)) {
+        if (!await confirmVideoAudibleAfterAuthority(player, 6500, isCurrent)) {
+          if (!isCurrent()) return false;
           throw new Error('Native VIDEO authority was confirmed but the picture is paused or muted');
         }
       } else {
@@ -4892,6 +4917,7 @@ async function finishAudioToVideoHandoff(videoKey, player = state.watchVimeo) {
         await setVimeoHandoffMuted(player, false);
         if (!audio.paused) audio.pause();
       }
+      if (!isCurrent()) return false;
       state.current = null;
       state.playerOpen = false;
       state.audioLastHistoryAt = 0;
@@ -4985,19 +5011,35 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
         // advancing clock. Seeking as soon as metadata/currentTime resolve
         // repeatedly discards the destination's pending keyframe on API 35.
         if (player?.getSourceType?.() === 'hls' && element) {
-          // The initial HLS seek can take seconds to decode a keyframe. Another
-          // seek discards that progress. Catch up while its decoded picture
-          // keeps moving, then restore the requested speed before committing.
-          const requestedRate = Number(state.playbackSpeed) || 1;
-          catchupElement = element;
-          const drift = stillSource - again;
-          const remainingSeconds = Math.max(.5, (deadline - Date.now()) / 1000);
-          // A ten-second keyframe delay leaves ten seconds of live Audio lead.
-          // Fixed 2x needs another ten seconds and misses the unchanged 15s
-          // transaction deadline. Adapt the catch-up rate to the observed drift.
-          element.playbackRate = drift > 0
-            ? Math.min(4, requestedRate + Math.max(1, drift / Math.min(2, remainingSeconds)))
-            : Math.max(.25, requestedRate / 2);
+          const sourceStopped = usesNativeUnifiedAudio() && state.nativePlayback?.mode === 'AUDIO' &&
+            state.nativePlayback.audioIsPlaying === false && state.nativePlayback.audioPlayWhenReady === false;
+          if (sourceStopped) {
+            // WebView focus can park Audio while muted HLS is preparing. A
+            // slowed moving picture cannot catch a stationary source clock.
+            // Correct only after real decode/motion, keeping the 1s limit.
+            element.playbackRate = Number(state.playbackSpeed) || 1;
+            if (Date.now() - lastSeekCorrectionAt >= 1500) {
+              lastSeekCorrectionAt = Date.now();
+              await Promise.race([
+                Promise.resolve(player.setCurrentTime(stillSource)).catch(()=>null),
+                new Promise(resolve=>setTimeout(()=>resolve(null),900))
+              ]);
+            }
+          } else {
+            // The initial HLS seek can take seconds to decode a keyframe. Another
+            // seek discards that progress. Catch up while its decoded picture
+            // keeps moving, then restore the requested speed before committing.
+            const requestedRate = Number(state.playbackSpeed) || 1;
+            catchupElement = element;
+            const drift = stillSource - again;
+            const remainingSeconds = Math.max(.5, (deadline - Date.now()) / 1000);
+            // A ten-second keyframe delay leaves ten seconds of live Audio lead.
+            // Fixed 2x needs another ten seconds and misses the unchanged 15s
+            // transaction deadline. Adapt the catch-up rate to the observed drift.
+            element.playbackRate = drift > 0
+              ? Math.min(4, requestedRate + Math.max(1, drift / Math.min(2, remainingSeconds)))
+              : Math.max(.25, requestedRate / 2);
+          }
         } else if (!element?.seeking && Date.now() - lastSeekCorrectionAt >= 1500) {
           lastSeekCorrectionAt = Date.now();
           await Promise.race([
@@ -5288,6 +5330,7 @@ async function switchVideoToAudioSeamlessly(video, id) {
 
 async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
   const player = state.watchVimeo;
+  const generation = state.watchVimeoGeneration;
   if (!player) return false;
   if (usesNativeUnifiedAudio()) {
     const audioItem = state.current;
@@ -5328,7 +5371,10 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
         if (readyPosition == null || !Number.isFinite(Number(readyPosition))) throw new Error('Vimeo did not become ready at the synchronized position');
         current = Number(readyPosition);
         const finished = await finishAudioToVideoHandoff(id, player);
-        if (!finished && state.watchAudioToVideoHandoff) throw new Error('Video handoff did not commit');
+        if (!finished) {
+          if (state.nativeBackgroundHandoff || (document.hidden && !state.systemPipActive)) return false;
+          throw new Error('Video handoff did not commit');
+        }
         state.watchVideoPlaying = true;
       } else {
         await Promise.resolve(player.pause()).catch(()=>{});
@@ -5344,6 +5390,7 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
       refreshPersistentMiniVideoChrome();
       return true;
     } catch (error) {
+      if (generation !== state.watchVimeoGeneration || state.watchVimeo !== player || state.watchMode !== 'video') return false;
       console.warn('[Playback] AUDIO -> VIDEO aborted; native audio remains source', error);
       state.watchAudioToVideoHandoff = false;
       state.watchAudioToVideoHandoffId = '';
@@ -5353,6 +5400,9 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
       setPlaybackAuthorityFence('AUDIO', id, 5000);
       await setVimeoHandoffMuted(player, true);
       try { await player.pause(); } catch (_) {}
+      // Home has already started the native background transaction. A late
+      // foreground readiness failure must not restart or seek its Audio owner.
+      if (state.nativeBackgroundHandoff || (document.hidden && !state.systemPipActive)) return false;
       // Native authority may have changed before a commit error. Restore the
       // audible source and its live shadow clock, rather than rendering Audio
       // over a silent VIDEO owner with a cleared current item.
@@ -7816,6 +7866,9 @@ function reconcileNativeWatchAudio(snapshot) {
   // AUDIO remains the owner while the foreground destination seeks/buffers.
   // Its position callbacks must not park that destination or replace its view.
   if (state.watchAudioToVideoHandoff && String(state.watchAudioToVideoHandoffId || '') === String(snapshot.lectureId || '')) return;
+  // Initial MP3 prewarming publishes AUDIO before Video can decode. That
+  // metadata callback is not a user Audio selection or a completed Home handoff.
+  if (state.watchMode === 'video' && snapshot.audioAuthorityCommitted !== true && !state.nativeBackgroundHandoff && !document.hidden) return;
   const wasVideo = state.watchMode === 'video';
   ensureNativeAudioCurrentForWatch(snapshot);
   state.nativeBackgroundHandoff = false;
@@ -8095,6 +8148,9 @@ const PlaybackController = {
       return;
     }
     state.nativeBackgroundHandoff = true;
+    state.watchAudioToVideoHandoff = false;
+    state.watchAudioToVideoHandoffId = '';
+    state.watchAudioToVideoTargetSeconds = 0;
     const id = state.watchVideo ? videoId(state.watchVideo) : state.nativePlayback?.lectureId;
     setPlaybackAuthorityFence('AUDIO', id, 5000);
     await state.watchVimeo.pause();
@@ -8382,6 +8438,10 @@ async function preserveWatchTime() {
 
 async function closeWatch(save = true) {
   if (!state.watchVideo) return;
+  const closingPlayer = state.watchVimeo;
+  const generation = state.watchVimeoGeneration;
+  const continuingAudioId = usesNativeUnifiedAudio() && state.watchMode === 'audio' && !playbackIsPaused()
+    ? String(state.current?.id || '') : '';
   if (save) await preserveWatchTime();
   if (state.watchMode === 'video' && state.watchVideo && save) {
     let duration = 0;
@@ -8395,7 +8455,20 @@ async function closeWatch(save = true) {
     if (snapshot) saveAudioHistorySnapshot(snapshot, false, { reconcile:true }).catch(error =>
       console.warn('Could not save Audio history after closing Watch', error));
   }
-  try { if (state.watchVimeo) await state.watchVimeo.destroy(); } catch (_) {}
+  if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
+  try { if (closingPlayer) await closingPlayer.destroy(); } catch (_) {}
+  if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
+  if (continuingAudioId) {
+    // Removing a parked WebView decoder can deliver AUDIO_FOCUS_LOSS to the
+    // still-playing Media3 source. The native guard preserves explicit Pause.
+    await new Promise(resolve => setTimeout(resolve,150));
+    if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
+    if (state.watchMode === 'audio' && String(state.current?.id || '') === continuingAudioId) {
+      await nativeMediaPlugin().restoreAudioAfterVideoTeardown({lectureId:continuingAudioId}).catch(()=>{});
+      await PlaybackController.refreshFromNative().catch(()=>{});
+    }
+  }
+  if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
   if (state.watchMode === 'video') {
     clearCurrentAudioStateForVideo();
     clearNativeMediaSession();
@@ -8580,7 +8653,8 @@ async function finishInitializedNativeVideoHandoff(player, video, videoKey) {
   // decoded-frame and bounded rollback transaction as a parked Video switch.
   const transferred = await resumeParkedVideoFromAudio(video, videoKey, true);
   if (generation !== state.watchVimeoGeneration || state.watchVimeo !== player ||
-      videoId(state.watchVideo) !== videoKey || state.watchMode !== 'video') return false;
+      videoId(state.watchVideo) !== videoKey || state.watchMode !== 'video' || state.nativeBackgroundHandoff ||
+      (document.hidden && !state.systemPipActive)) return false;
   if (!transferred) {
     state.watchMode = 'audio';
     state.watchVideoPlaying = false;

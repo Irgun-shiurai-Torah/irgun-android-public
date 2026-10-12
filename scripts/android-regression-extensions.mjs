@@ -3,7 +3,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
-import {fullscreenEducationTapPoint,mediaNotificationClock} from './android-system-ui-observation.mjs';
+import {fullscreenEducationTapPoint,mediaNotificationClock,offlineConfirmationTapPoint,settledOfflineConfirmationPoint} from './android-system-ui-observation.mjs';
 
 // Run after android-emulator-mp4.mjs: the actual reported shiur is already
 // playing in native AUDIO mode. All UI actions below are physical ADB events.
@@ -132,13 +132,21 @@ async function tapWithScroll(selector) {
   throw new Error('Required control was not visible after native scrolling: '+selector);
 }
 async function tapPositiveAndroidDialog(){
-  const xml=nativeHierarchy('emulator-report/irgun-offline-delete-dialog.xml');
-  const nodes=xml.match(/<node\b[^>]*>/g)||[];
-  const positive=nodes.find(n=>/text="(OK|Yes|Delete|Remove)"/i.test(n)&&/clickable="true"/.test(n));
-  const rect=positive?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
-  assert.ok(rect&&rect[2]>rect[0]&&rect[3]>rect[1],
-    'Actual Android offline-file deletion confirmation must be visible');
-  adb('shell','input','tap',String(Math.round((rect[0]+rect[2])/2)),String(Math.round((rect[1]+rect[3])/2)));
+  const readHierarchy=()=>nativeHierarchy('emulator-report/irgun-offline-delete-dialog.xml');
+  const point=await settledOfflineConfirmationPoint({readHierarchy,delay});
+  report.offlineConfirmation={physicalTap:point,dialogClosed:false};save();
+  adb('shell','input','tap',...point.map(String));
+  // A native confirm pauses WebView JavaScript. Observe its actual dismissal
+  // through Android before asking the JavaScript inspector for file deletion.
+  for(let i=0;i<8;i++) {
+    await delay(250);
+    const xml=nativeHierarchy('emulator-report/offline-confirmation-after-tap.xml');
+    if(!offlineConfirmationTapPoint(xml)){report.offlineConfirmation.dialogClosed=true;save();return;}
+  }
+  // Cancel this still-open modal so later independent checks can run. The
+  // failed positive tap/file-deletion assertion remains a failure.
+  adb('shell','input','keyevent','KEYCODE_BACK');
+  throw new Error('Actual positive confirmation tap did not close the offline deletion dialog');
 }
 function checks(label,details={}) {report.checks.push({label,...details});save();}
 async function section(name,fn){
@@ -445,6 +453,12 @@ try{
     await wait(s=>!s.native.audioIsPlaying,'Physical notification Pause must stop actual Media3 audio');
     await nativeNotificationTap(/(?:content-desc="Play"|resource-id="[^"]*actionPlayPause")/,'play');
     const playing=await wait(s=>s.native.audioIsPlaying,'Physical notification Play must resume actual Media3 audio');
+    if(report.androidApi===30) {
+      // Android 11's notification shade shows a collapsed media card. Expand
+      // real Quick Settings before requiring its visible seek-bar timer.
+      adb('shell','cmd','statusbar','expand-settings');await delay(1000);
+      screenshot('expanded-android11-media-timer');
+    }
     const clockBefore=await notificationClock();await delay(3500);const clockAfter=await notificationClock();
     assert.ok(clockAfter>=clockBefore+2,'The visible Android notification timer must advance, not remain at 0:00');
     await nativeNotificationTap(/(?:content-desc="Forward 15 seconds"|resource-id="[^"]*actionNext")/,'forward');
@@ -549,6 +563,10 @@ try{
     const saved=await wait(s=>s.offline.some(x=>x.id===before.watchId&&x.bytes>0),'Audio file was not downloaded to Android local storage',180000);
     const record=saved.offline.find(x=>x.id===before.watchId);
     assert.ok(record?.uri&&record.bytes>0,'Offline download requires a verified local URI and file size');
+    const savedPath=record.uri.replace(/^file:\/\//,'');
+    assert.ok(savedPath.startsWith('/data/user/0/'+pkg+'/files/irgun-offline/')&&!savedPath.includes('..'),
+      'Downloaded file must be within this app\'s private offline directory');
+    adb('shell','run-as',pkg,'ls',savedPath);
     const beforeAudio=await read();
     assert.ok(beforeAudio.video&&!beforeAudio.video.paused&&beforeAudio.native.mode==='VIDEO',
       'Downloading an offline file interrupted an actively playing video before switching to Audio');
@@ -585,6 +603,11 @@ try{
     await tap('[data-save-offline-kind="video"][data-save-offline-id="'+before.watchId+'"]');
     await tapPositiveAndroidDialog();
     await wait(s=>!s.offline.some(x=>x.key===record.key),'Offline file was not deleted after user confirmation',25000);
+    let deletionError;
+    try{adb('shell','run-as',pkg,'ls',savedPath);}catch(error){deletionError=error;}
+    assert.ok(deletionError,'The actual MP3 file must be absent from Android storage, not only removed from the UI');
+    assert.match([deletionError.stderr,deletionError.stdout,deletionError.message].map(value=>String(value||'')).join('\n'),/No such file or directory/,
+      'File absence must be confirmed by Android, not a permission or observer failure');
     checks('Offline download was deleted by physical Android UI with server playback unaffected');
   });
 

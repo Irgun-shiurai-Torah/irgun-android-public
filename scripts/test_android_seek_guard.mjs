@@ -50,12 +50,15 @@ public final class PlaybackAuthorityRegression {
   public static void main(String[] args) {
     PlaybackAuthorityGuard guard = new PlaybackAuthorityGuard();
     require(guard.acceptsVideoUpdate(true), "A new initial Video must be able to start");
+    require(!guard.isAudioCommitted(), "A prewarmed Audio snapshot must not describe an Audio authority commit");
     guard.commitAudio();
+    require(guard.isAudioCommitted(), "A real Home/Audio transaction must publish its committed owner");
     require(!guard.acceptsVideoUpdate(true), "Delayed Video callback must not mute Audio after Home");
     require(!guard.acceptsVideoUpdate(false), "Non-authoritative updates must not claim Video");
     require(!guard.acceptsVideoUpdate(true), "The Audio owner must survive notification reopening and delays");
     guard.allowVideo();
     require(guard.acceptsVideoUpdate(true), "Explicit synchronized Audio-to-Video commit may change owner");
+    require(!guard.isAudioCommitted(), "Committed Video clears Audio ownership in its snapshot");
     guard.commitAudio();
     require(!guard.acceptsVideoUpdate(true), "Rollback must restore the Audio fence");
     guard.allowVideo();
@@ -134,4 +137,97 @@ public final class NativeMetadataRegression {
     const output=execFileSync('java',['-cp',dir,'org.irgunshiuraitorah.app.NativeMetadataRegression'],{encoding:'utf8'});
     assert.match(output,/passed/);
   } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+test('actual native teardown recovery distinguishes observed focus loss from user Pause and another source',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'irgun-teardown-'));
+  try {
+    const source=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java','utf8');
+    const start=source.indexOf('    private void restoreAudioAfterVideoTeardownInternal(');
+    const method=source.slice(start,source.indexOf('    public static void restoreAudioAfterVideoTeardown(',start));
+    assert.ok(start>=0&&method.includes('player.play()'));
+    const path=join(dir,'NativeTeardownRegression.java');
+    writeFileSync(path,`package org.irgunshiuraitorah.app;
+public final class NativeTeardownRegression {
+  enum PlaybackMode { AUDIO, VIDEO }
+  static final class Player {
+    static final int PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS=2;
+    boolean wanted; int plays; boolean getPlayWhenReady(){return wanted;}
+    void play(){wanted=true;plays++;}
+  }
+  static final class Log {static void d(String tag,String message){}}
+  final String TAG="QA"; Player player=new Player(); String lectureId="lecture";
+  PlaybackMode playbackMode=PlaybackMode.AUDIO; int lastPlayIntentReason=2;
+  static String cleanStatic(String value){return value==null?"":value.trim();}
+  ${method}
+  static void require(boolean value,String message){if(!value)throw new AssertionError(message);}
+  public static void main(String[] args) {
+    NativeTeardownRegression s=new NativeTeardownRegression();
+    s.restoreAudioAfterVideoTeardownInternal("lecture");
+    require(s.player.plays==1&&s.player.wanted,"Observed focus-loss stop must resume the same Audio without seeking");
+    s.restoreAudioAfterVideoTeardownInternal("lecture");require(s.player.plays==1,"Playing Audio must not restart");
+    s.player.wanted=false;s.lastPlayIntentReason=1;
+    s.restoreAudioAfterVideoTeardownInternal("lecture");require(s.player.plays==1&&!s.player.wanted,"Subsequent user/notification Pause must stay paused");
+    s.lastPlayIntentReason=2;s.lectureId="different";
+    s.restoreAudioAfterVideoTeardownInternal("lecture");require(s.player.plays==1,"Closing the old decoder cannot play another lecture");
+    s.lectureId="lecture";s.playbackMode=PlaybackMode.VIDEO;
+    s.restoreAudioAfterVideoTeardownInternal("lecture");require(s.player.plays==1,"A Video owner cannot gain duplicate native sound");
+    s.restoreAudioAfterVideoTeardownInternal(null);s.player=null;
+    s.restoreAudioAfterVideoTeardownInternal("lecture");
+    System.out.println("Actual native focus-loss repair, user Pause, source supersession and duplicate-sound guards passed");
+  }
+}`);
+    execFileSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,path],{stdio:'pipe'});
+    assert.match(execFileSync('java',['-cp',dir,'org.irgunshiuraitorah.app.NativeTeardownRegression'],{encoding:'utf8'}),/passed/);
+  }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('actual native source replacement prevents the observed deleted-MP3 seek while preserving Video and paused Audio',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'irgun-offline-source-'));
+  try {
+    const source=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java','utf8');
+    const start=source.indexOf('    private boolean replaceOfflineAudioSourceInternal(');
+    const method=source.slice(start,source.indexOf('    public static boolean replaceOfflineAudioSourceNow(',start));
+    assert.ok(start>=0&&method.includes('player.clearMediaItems()'));
+    const path=join(dir,'OfflineSourceRegression.java');
+    writeFileSync(path,`package org.irgunshiuraitorah.app;
+public final class OfflineSourceRegression {
+  enum PlaybackMode { AUDIO, VIDEO }
+  static final class Uri {String scheme;static Uri parse(String value){Uri u=new Uri();u.scheme=java.net.URI.create(value).getScheme();return u;}String getScheme(){return scheme;}}
+  static final class Log {static void d(String tag,String message){}}
+  static final class Player {
+    String uri="file:///private/lecture.mp3";long position=12000;boolean wanted=true;float volume=0;int items=1;
+    long getCurrentPosition(){return position;}boolean getPlayWhenReady(){return wanted;}
+    void clearMediaItems(){items=0;}void setVolume(float value){volume=value;}void prepare(){}
+    void setPlayWhenReady(boolean value){wanted=value;}
+    void seekTo(long value){if(uri.startsWith("file:"))throw new AssertionError("ERROR_CODE_IO_FILE_NOT_FOUND after deletion");position=value;}
+  }
+  final String TAG="QA";Player player=new Player();String audioUrl=player.uri;
+  long externalVideoPositionMs=201465;boolean externalVideoPlaying=true,syncingVideoShadow=false,focus;
+  PlaybackMode playbackMode=PlaybackMode.VIDEO;float logicalVolume=1;
+  static String cleanStatic(String s){return s==null?"":s.trim();}
+  void suppressVideoMirrorCallbacks(){}void publishNativeState(){}
+  void setCandidateAudioFocus(boolean value){focus=value;}
+  void ensureAudioMediaItemInternal(long position){player.uri=audioUrl;player.position=position;player.items=1;}
+  ${method}
+  static void require(boolean value,String message){if(!value)throw new AssertionError(message);}
+  public static void main(String[] args) {
+    String network="https://api.example/audio/lecture";OfflineSourceRegression s=new OfflineSourceRegression();Player same=s.player;
+    require(s.replaceOfflineAudioSourceInternal(s.audioUrl,network),"The active offline URI must be replaced before deletion");
+    require(s.player==same&&s.player.items==1,"Source replacement must retain exactly one native player/item");
+    require(s.playbackMode==PlaybackMode.VIDEO&&s.player.volume==0&&!s.focus,"Background shadow must remain silent while Video owns sound");
+    require(s.player.position==201465&&s.player.wanted,"Use the real Video clock and play intent when replacing the shadow source");
+    s.player.seekTo(203716);require(s.player.position==203716,"Later HLS/network seek must read HTTPS rather than a deleted MP3");
+    require(!s.replaceOfflineAudioSourceInternal("file:///other.mp3",network),"Deleting an unused download must not replace current playback");
+    s=new OfflineSourceRegression();s.playbackMode=PlaybackMode.AUDIO;s.player.wanted=false;s.player.position=711560;
+    s.replaceOfflineAudioSourceInternal(s.audioUrl,network);
+    require(!s.player.wanted&&s.player.position==711560&&s.player.volume==1,"Paused Audio must keep its actual position and Pause intent");
+    s=new OfflineSourceRegression();try{s.replaceOfflineAudioSourceInternal(s.audioUrl,"file:///other.mp3");throw new AssertionError("Invalid replacement accepted");}catch(IllegalArgumentException expected){}
+    require(s.player.uri.startsWith("file:")&&s.player.items==1,"Invalid replacement must retain the existing saved source");
+    System.out.println("Actual offline source swap, post-deletion seek, one player, silent shadow and Pause preservation passed");
+  }
+}`);
+    execFileSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,path],{stdio:'pipe'});
+    assert.match(execFileSync('java',['-cp',dir,'org.irgunshiuraitorah.app.OfflineSourceRegression'],{encoding:'utf8'}),/passed/);
+  }finally{rmSync(dir,{recursive:true,force:true});}
 });
