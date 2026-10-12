@@ -92,6 +92,28 @@ test('frozen HLS catch-up retargets one fragment without rebuilding the video or
     assert.equal(video.paused,false);
   }});
 });
+test('Android HLS handoff can resume one decoder-generated pause, never a user Pause or repeated resume',async()=>{
+  await fixture(recoverySources,'1233236785:585d5d53db',600,{Hls:RecoveringHls,onReady:async player=>{
+    const video=player.getVideoElement();
+    let plays=0;
+    video.play=async()=>{plays++;video.paused=false;};
+    // The first actual HLS frame was already shown, and Audio is still the
+    // audible owner while the video is muted for the transaction.
+    await player.setMuted(true);
+    await player.play();
+    video.dispatchEvent(new Event('playing'));
+    video.paused=true;
+    assert.equal(await player.resumeStalledHandoff(),true,'Decoder-generated HLS pause should resume once while still muted');
+    assert.equal(plays,2,'One actual HLS resume must occur after initial Play');
+    video.paused=true;
+    assert.equal(await player.resumeStalledHandoff(),false,'Do not retry the same decoder endlessly');
+    assert.equal(plays,2);
+    await player.pause();
+    assert.equal(player.getPlaybackIntent(),false,'Explicit Pause removes playback intent');
+    assert.equal(await player.resumeStalledHandoff(),false,'Explicit Pause can never be undone by handoff retry');
+    assert.equal(plays,2);
+  }});
+});
 test('pausing during an HLS visual retry cannot restart parked video or select MP4',async t=>{
   t.mock.timers.enable({apis:['setTimeout','setInterval','Date']});
   await fixture(recoverySources,'1233236785:585d5d53db',0,{Hls:RecoveringHls,onReady:async player=>{
