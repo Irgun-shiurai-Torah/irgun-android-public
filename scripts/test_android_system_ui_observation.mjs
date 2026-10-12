@@ -1,5 +1,5 @@
 import {test} from 'node:test';
-import {mediaNotificationControlPoint} from './android-system-ui-observation.mjs';
+import {mediaNotificationControlPoint,unbufferedVideoSeekTarget} from './android-system-ui-observation.mjs';
 import assert from 'node:assert/strict';
 import {fullscreenEducationTapPoint, mediaNotificationClock, offlineConfirmationTapPoint, settledOfflineConfirmationPoint} from './android-system-ui-observation.mjs';
 
@@ -65,4 +65,11 @@ test('the observed Android 14 Play icon must never be tapped as notification Pau
  const pause=play.replace('content-desc="Play"','content-desc="Pause"');
  assert.deepEqual(mediaNotificationControlPoint(pause,'pause',pattern),[264,280]);
  assert.throws(()=>mediaNotificationControlPoint(pause.replace('com.android.systemui" clickable','org.irgunshiuraitorah.app" clickable'),'pause',pattern),/button must be present/);
+});
+
+test('an interruption seeks beyond every actual cached range and fails when no such position exists',()=>{
+ assert.equal(unbufferedVideoSeekTarget({time:600,duration:3663,buffered:[[600,900],[1000,1100]]}),1160);
+ assert.equal(unbufferedVideoSeekTarget({time:600,duration:3663,buffered:[[600,612]]}),780);
+ assert.throws(()=>unbufferedVideoSeekTarget({time:3500,duration:3663,buffered:[[3500,3663]]}),/unbuffered position/);
+ assert.throws(()=>unbufferedVideoSeekTarget(null),/Actual video/);
 });

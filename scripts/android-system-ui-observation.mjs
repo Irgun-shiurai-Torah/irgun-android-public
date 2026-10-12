@@ -67,3 +67,15 @@ export async function settledOfflineConfirmationPoint({readHierarchy, delay, sam
   }
   throw new Error('Actual offline confirmation did not settle; no tap was performed');
 }
+
+export function unbufferedVideoSeekTarget(video) {
+  assert.ok(video && Number.isFinite(video.duration) && video.duration>0 &&
+    Number.isFinite(video.time) && Array.isArray(video.buffered),
+    'Actual video clock, duration and buffered ranges are required');
+  const bufferedEnd=Math.max(video.time,...video.buffered.map(range=>range[1]));
+  const target=Math.max(video.time+180,bufferedEnd+60);
+  assert.ok(target<video.duration-20,'A real unbuffered position before the lecture end is required');
+  assert.ok(!video.buffered.some(range=>range[0]<=target&&range[1]>=target),
+    'Internet interruption must seek beyond all actual cached video ranges');
+  return target;
+}

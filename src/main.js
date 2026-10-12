@@ -2052,7 +2052,7 @@ function restoreOfflineAccount(){
   const cached=readCachedAccount(localStorage,state.token);
   if(cached){state.user=cached;state.isAdmin=false;state.adminChecked=false;}
 }
-function rememberVerifiedAccount(){if(state.token&&state.user)rememberCachedAccount(localStorage,state.token,state.user);}
+function rememberVerifiedAccount(){if(Capacitor.getPlatform()==='android'&&state.token&&state.user)rememberCachedAccount(localStorage,state.token,state.user);}
 
 function resetUserState() {
   state.user = null;

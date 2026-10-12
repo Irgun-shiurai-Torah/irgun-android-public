@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
 import {startMediaRequest,completeMediaRequest,failedDuringOffline} from './android-network-evidence.mjs';
-import {fullscreenEducationTapPoint,mediaNotificationClock,mediaNotificationControlPoint} from './android-system-ui-observation.mjs';
+import {fullscreenEducationTapPoint,mediaNotificationClock,mediaNotificationControlPoint,unbufferedVideoSeekTarget} from './android-system-ui-observation.mjs';
 
 // Run after android-emulator-mp4.mjs: the actual reported shiur is already
 // playing in native AUDIO mode. All UI actions below are physical ADB events.
@@ -644,7 +644,9 @@ try{
       await wait(s=>s.video&&!s.video.paused&&s.video.time>start.video.time+140,'Slow real HLS transport did not recover at requested position',65000);
       await sampleMovingVideo();
       assert.ok(report.networkEvidence.some(x=>x.phase==='slow'&&!x.error&&x.bytes>0&&x.elapsedMs>=650),'A real HLS request must transfer bytes under measured latency; accepting a throttle command alone is not a pass');
-      const beforeLoss=await read(),target=beforeLoss.video.time+180;
+      const actualBuffer=JSON.parse(await evaluate('JSON.stringify((()=>{const v=document.querySelector("#watchDirectHlsVideo");return v?{time:v.currentTime,duration:v.duration,buffered:Array.from({length:v.buffered.length},(_,i)=>[v.buffered.start(i),v.buffered.end(i)])}:null;})())'));
+      const target=unbufferedVideoSeekTarget(actualBuffer);
+      report.unbufferedInterruption={...actualBuffer,target};
       networkPhase='offline';
       await command('Network.emulateNetworkConditions',{offline:true,latency:0,downloadThroughput:-1,uploadThroughput:-1});
       await seekVideo(target);

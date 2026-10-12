@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createAndroidHlsPlayer } from '../src/android-hls-video.js';
 import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } from '../src/offline-validation.js';
 import { downloadOfflineAudio } from '../src/offline-download.js';
+import {KEY as ACCOUNT_CACHE_KEY,rememberCachedAccount,readCachedAccount,clearCachedAccount} from '../src/android-offline-account.js';
 
 class Element extends EventTarget {
   constructor(tag) {
@@ -924,7 +925,7 @@ test('the observed paused MP4 two-second preload is primed silently and starts o
   await settleRecovery();
   t.mock.timers.tick(1600);await settleRecovery();
   assert.equal(plays.length,1);assert.equal(plays[0].muted,true,'Decoder priming must not emit speech before enough bytes exist');
-  video.currentTime=724;video.dispatchEvent(new Event('timeupdate'));assert.deepEqual(events,[],'Hidden priming must not publish playback/history at a different position');
+  video.currentTime=724;video.dispatchEvent(new Event('timeupdate'));assert.equal(await player.getCurrentTime(),723);assert.equal(await player.getPaused(),true);assert.deepEqual(events,[],'Hidden priming must not publish playback/history at a different position');
   end=739;t.mock.timers.tick(200);await settleRecovery();t.mock.timers.tick(1);await settleRecovery();await first;
   assert.equal(plays.length,2);assert.equal(plays[1].muted,false);assert.equal(plays[1].time,723,'Actual media seek restores the requested position');
   assert.deepEqual(events,[{kind:'play',time:723}]);assert.equal(video.dataset.startupBufferPhase,'ready');
@@ -1124,4 +1125,23 @@ test('actual QA session accessor reads the module token without putting it in th
  assert.doesNotMatch(source.slice(end),/sessionToken:|token:state\.token|return state\.token/);
  const script=readFileSync('scripts/android-emulator-account.mjs','utf8');
  assert.match(script,/window\.ISTAccountTest\.sessionToken\(\)/);assert.doesNotMatch(script,/JSON\.stringify\(state\.token\)/);
+});
+
+test('actual Android offline startup restores only the same-token profile; logout and real 401 clear it',async()=>{
+ const saved=new Map(),state={token:'actual-session',user:{id:'qa',name:'QA Name',email:'qa@example.test'},isAdmin:true};
+ const context={state,TOKEN_KEY:'token',TypeError,navigator:{onLine:false},rememberCachedAccount,readCachedAccount,clearCachedAccount,
+  Capacitor:{getPlatform:()=> 'android'},localStorage:{getItem:key=>saved.get(key),setItem:(k,v)=>saved.set(k,v),removeItem:key=>saved.delete(key)},
+  apiJson:async()=>{throw Object.assign(new Error('Revoked'),{status:401});},resetUserState(){state.user=null;state.isAdmin=false;},
+  loadUserCollections:async()=>{},checkAdminStatus:async()=>{},warmNativePaidCatalog(){}};
+ const tokenStart=mainSource.indexOf('function setToken('),tokenEnd=mainSource.indexOf('function resetUserState()',tokenStart);
+ const restoreStart=mainSource.indexOf('async function restoreSession('),restoreEnd=mainSource.indexOf('async function loadUserCollections()',restoreStart);
+ runInNewContext(mainSource.slice(tokenStart,tokenEnd)+mainSource.slice(restoreStart,restoreEnd)+
+  '\nthis.cache=rememberVerifiedAccount;this.restore=restoreOfflineAccount;this.restoreSession=restoreSession;this.token=setToken;',context);
+ context.cache();state.user=null;
+ context.restore();assert.equal(state.user.name,'QA Name');assert.equal(state.isAdmin,false,'Offline identity cannot restore admin authorization');
+ state.token='other-session';state.user=null;context.restore();assert.equal(state.user,null,'Another login must never see the previous account');
+ state.token='actual-session';context.restore();assert.equal(state.user.name,'QA Name');await context.restoreSession();
+ assert.equal(state.token,'');assert.equal(state.user,null);assert.equal(saved.has(ACCOUNT_CACHE_KEY),false,'Real server revocation still clears the cached identity');
+ state.token='next-session';state.user={name:'Next'};context.cache();context.token('');state.user=null;context.restore();assert.equal(state.user,null);assert.equal(saved.has(ACCOUNT_CACHE_KEY),false);
+ context.Capacitor.getPlatform=()=> 'ios';state.token='ios-session';state.user={name:'iOS'};context.cache();assert.equal(saved.has(ACCOUNT_CACHE_KEY),false,'This change is Android only');
 });

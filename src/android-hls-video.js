@@ -290,7 +290,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     muteButton.setAttribute('aria-label', window.IST_I18N?.t?.(muted ? 'Unmute' : 'Mute') || (muted ? 'Unmute' : 'Mute'));
     volumeControl.value = String(video.volume);
   };
-  video.addEventListener('timeupdate', updateTimeline);
+  video.addEventListener('timeupdate', () => { if (!startupPrime) updateTimeline(); });
   video.addEventListener('durationchange', updateTimeline);
   video.addEventListener('play', () => { updatePlayIcon(); if (!hasVisibleFrame) loading.hidden = false; });
   video.addEventListener('pause', updatePlayIcon);
@@ -754,6 +754,8 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   })();
   const adapter = makePlayerAdapter(video, stage, () => hls, readyPromise);
   adapter.pause = pausePlayback;
+  adapter.getCurrentTime = () => Promise.resolve(startupPrime ? startupPrime.position : Math.max(0, Number(video.currentTime) || 0));
+  adapter.getPaused = () => Promise.resolve(Boolean(startupPrime) || video.paused);
   adapter.setMuted = muted => {
     desiredMuted = Boolean(muted);
     video.muted = startupPrime ? true : desiredMuted;
@@ -773,7 +775,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
         video.dataset.startupBufferPhase = 'loading';
         const startupStartedAt = Date.now();
         const startPosition = Number(video.currentTime) || 0;
-        const prime = {intent};
+        const prime = {intent,position:startPosition};
         let priming = false, primingError;
         let buffered;
         try {

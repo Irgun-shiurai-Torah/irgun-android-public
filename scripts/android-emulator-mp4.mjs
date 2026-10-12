@@ -214,8 +214,8 @@ try {
     adb('shell','input','tap',String(Math.round(left+p.x*(right-left)/p.width)),String(Math.round(top+p.y*(bottom-top)/p.height)));
   };
   const initialPlay=await read();
-  if(initialPlay.video.paused&&initialPlay.video.startup.phase!=='loading')await tapPlayPause();
-  await wait(s=>s.video&&!s.video.paused&&s.video.time>0);
+  if(initialPlay.video.paused&&!['loading','priming'].includes(initialPlay.video.startup.phase))await tapPlayPause();
+  await wait(s=>s.video&&!s.video.paused&&!s.video.muted&&s.video.volume>0&&s.video.time>0&&s.video.startup.phase==='ready');
   const moving=async label=>{
     const before=await read();await delay(3500);const after=await read();
     report.checks.push({label,before,after});

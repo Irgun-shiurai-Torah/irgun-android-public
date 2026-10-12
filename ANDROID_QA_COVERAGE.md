@@ -495,3 +495,84 @@ account needed), time-based expiry distinct from tested actual revocation,
 physical Bluetooth/headset/call behavior and manufacturer battery restrictions,
 all translation pages, and a full 30-minute session. The 15-minute pass must not
 be reported as 30 minutes or proof of no possible memory leak.
+
+
+## Run #82: runtime progress, offline identity and remaining switching failures
+
+[Regression #82](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38310846812)
+on `4ef3c8e013637d3ed42e9407c7be6e636abfc253` finished **5 successful jobs and
+10 failed jobs**. All ten actual failed job logs and all available failure
+artifacts were inspected. [Startup #122](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38310846929)
+passed. Native API 34/35 never started their emulators and produced no media
+artifacts: SDK downloads failed with `Error on ZipFile unknown archive`.
+These are unexecuted tests, not app playback failures.
+
+Actual runtime progress:
+- All four account reports again completed **27 checks**, including actual
+  native login, comment/playlist cleanup, persistence, logout/relogin and actual
+  externally revoked session rejection. Separate signed-in playback now executes:
+  API 30/34 completed 11 baseline checks and 21/22 extension checks before failure;
+  API 35 completed 9 baseline checks; API 36 completed 5 baseline checks.
+- API 30 notification timer/buttons/reopening passed. API 36 Hebrew/English
+  reopen, actual offline download/play/restart, Cancel/Remove/file absence,
+  network loss/recovery, locks, notification permissions, focus/Doze, small-screen
+  layouts and all selected speeds through handoffs/restart passed. The same
+  features passed API 30 except the later 1.5x Audio-to-Video transition.
+  This confirms the #81 native network shutdown/timer/RTL fixes on these devices.
+- HLS API 30/34 passed actual HLS moving-picture/quality/position checks. HLS
+  API 35/36 did not execute any playback checks. MP3 bytes and HLS HTTP passed.
+- Mixed reliability again passed **900,098 ms**, 11 checks, with PSS baseline
+  144,051 KB / peak 148,690 KB within the declared budget.
+
+| Failed device/scenario | Expected versus actual; evidence and next action |
+| --- | --- |
+| Native API 34/35 emulator setup | Actual Android runtime tests; instead Google SDK system-image/emulator ZIP installation failed before emulator launch. No app test ran. Retry the complete new-head matrix; no application regression is inferred |
+| HLS API 35 initial foreground | App must own the physical tap window. No gestures/checks executed because focus was absent. `lastanr` names the Launcher focused-window timeout, not an Irgun ANR. Exact focus-stealing cause remains unverified; rerun and retain this failure |
+| HLS API 36 after Home search submit | Physical Watch target must remain in the app. Search succeeded, then keyboard dismissal sent Back and lost native app focus. Retain concurrent commit e922841 removing the stale-IME Back gesture and asserting actual search-screen/foreground ownership. New runtime pending |
+| Signed-in API 30/34 offline process restart | The declared signed-in account must remain available without internet. Token remains saved, but user identity is absent because startup restores `/me` only after online catalog loading. Preserve the concurrently added display-only profile cache, bound to the current token tag, with a 30-day cache limit and offline startup restoration. Reconnect still validates `/me`; real 401/logout/new token clears the profile, and cached identity cannot restore admin rights. New runtime pending |
+| Native API 30/36 slow/unbuffered HLS interruption | A real disconnected request must fail. Actual trace contains `net::ERR_INTERNET_DISCONNECTED`, but the request was labelled `slow` because it began before offline activation. Record completion phase too and still require that exact real network error during offline operation. Select a target beyond every observed buffered range, with actual duration/end bounds. New runtime pending |
+| Signed-in API 35 ten-minute Audio-to-Video | Moving audible Video at live Audio position; actual HLS stopped around 614.536s while Audio advanced, then transaction honestly rolled back. This remains unresolved; no fix/pass is claimed for this device |
+| Signed-in API 36 initial playback and Audio switch | Account resume used MP4. The initial test accepted silent decoder priming as moving playback and then pressed Pause/Play before preparation finished; later Audio remained paused. Strengthen initial emulator verification to require actual ready, unmuted moving playback before controls. During priming, adapter reads/UI retain requested position and paused state rather than exposing preparatory motion. Original five completed checks do not prove audible initial playback. New runtime pending |
+| Native API 30 1.5x Audio-to-Video after restart | Selected 1.5x survives moving audible handoff. Actual HLS stopped near 527.202s, later rolled back to Audio; overlapping overlay count was two. Remains unresolved pending trace investigation; no pass claimed |
+
+Signed-in API 30/34's later network/locks/speed failures follow the offline
+account assertion stopping before reopening the downloaded shiur. Those later
+scenarios remain unverified, rather than independent confirmed failures of
+all these features. HLS API 35/36 zero-check runs remain failures.
+
+Next-head validation: **152 local checks passed, zero skipped**, including the
+actual Android profile cache/restore methods reconciled with concurrent commits, token mismatch/logout/real 401
+invalidation and disabled admin restoration, and unbuffered target bounds.
+All prior Java/source regressions still pass. Vite build, changed script syntax
+and whitespace checks passed. These local tests do not replace emulator results.
+No failing assertion was removed; initial playback and real network error
+assertions are stricter. PR #35 stays draft and unmerged. Further emulator
+results and the two outstanding handoff investigations remain required.
+
+Concurrent commits through `b776399f352d3984e924c4d6fb692ae89b00352a` already
+implemented the display-only offline profile cache, real HLS completion-phase
+evidence and four additional tests wired into CI. They were retained; duplicate
+local implementations were discarded. Current-head checks below supersede the
+152-check count above.
+
+Reconciled-head validation: **156 local checks passed, zero skipped**, plus
+Vite build, script syntax and whitespace checks. The startup fixture now includes
+the actual online navigator state required by the concurrent bootstrap change;
+its original account-ready assertions remain unchanged. New emulator results
+remain pending.
+
+Concurrent commits through `959721b90b4878f88c34732ca05b8224b651a56e` also
+add bounded SDK package installation retries and one-shot HLS fragment retargeting
+at the live Audio clock for the two stalled handoffs above. These changes were
+reviewed and retained; their real runtime outcome is pending. Combined validation
+now passes **157 local checks, zero skipped**, plus Vite build, JavaScript syntax,
+SDK preflight shell syntax and whitespace checks. No emulator pass is inferred.
+
+The isolated review branch is based on `355d27e47548599637c527455df690ac72696d1b`,
+retaining the newer HLS-search focus fix and live-clock retarget regression. Its
+additional changes require actual audible startup, hide silent priming from
+public clock/paused observations, require a truly unbuffered interruption target,
+keep profile caching Android-only, and test actual profile restore/401/logout.
+Combined validation: **158 local checks passed, zero skipped**; actual new-head
+emulator results remain pending. The separate draft PR must not be merged until
+important real runtime results pass.
