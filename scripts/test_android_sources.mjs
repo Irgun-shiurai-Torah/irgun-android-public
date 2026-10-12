@@ -703,6 +703,37 @@ test('reconnected server rejection clears already-displayed offline identity wit
       'HTTP 403 must make the cached display identity unavailable on a later offline restart');
   }
 });
+test('Android cold offline restart restores only verified identity even if network flag incorrectly says online',async()=>{
+  const start=mainSource.indexOf('async function bootstrap(options');
+  const script=mainSource.slice(start,mainSource.indexOf('async function restoreSession(',start))+
+    '\nthis.bootstrap=bootstrap;';
+  for(const reportsOnline of [true,false]) {
+    const state={libraryReady:false,loading:false,error:'',offlineMode:false,
+      usingCachedLibrary:false,offlineCacheSavedAt:0,
+      user:null,token:'previously-verified-session',isAdmin:false,screen:'home'};
+    let restores=0,sessionRequests=0,renderedAccount=false;
+    const context={state,navigator:{onLine:reportsOnline},console:{error(){},warn(){}},
+      bootstrapInFlight:false,
+      initNativeDownloader:async()=>{},
+      loadMetadata:async()=>{throw new TypeError('Network unavailable');},
+      restoreOfflineAccount:()=>{
+        restores++;state.user={name:'Verified listener',email:'listener@example.test'};
+        state.isAdmin=false;return true;
+      },
+      restoreSession:async()=>{sessionRequests++;},
+      render:()=>{renderedAccount ||= Boolean(state.user);},
+      updateReconnectTimer:()=>{}};
+    runInNewContext(script,context);
+    await context.bootstrap({initial:true});
+    assert.equal(restores,1,
+      'Real catalog failure must attempt offline restore regardless of navigator.onLine');
+    assert.equal(sessionRequests,0,'A failed catalog may prevent /me and must not invent server authorization');
+    assert.equal(state.user?.name,'Verified listener');
+    assert.equal(state.isAdmin,false,'Offline profile must not grant elevated privileges');
+    assert.equal(renderedAccount,true,'Cached display identity must render on offline startup');
+    assert.equal(state.loading,false,'A failed cold startup must stop displaying its loading indicator');
+  }
+});
 test('ready catalog and restored account remain usable while secondary startup feeds are pending',async()=>{
   const state={libraryReady:false,loading:true,counter:1,trends:{},screen:'home'};
   const rendered=[];const stalled=new Promise(()=>{});
