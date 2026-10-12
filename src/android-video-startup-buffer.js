@@ -1,5 +1,8 @@
-export function bufferedVideoSecondsAhead(video) {
-  const position = Number(video.currentTime) || 0;
+export function bufferedVideoSecondsAhead(video, fromSeconds = Number(video.currentTime) || 0) {
+  // MP4 silent priming advances its hidden decoder while downloading the
+  // beginning of the lecture. Measure actual buffered bytes at the original
+  // intended start, not just the shrinking runway ahead of the hidden decoder.
+  const position = Math.max(0, Number(fromSeconds) || 0);
   for (let index = 0; index < video.buffered.length; index++) {
     const start = video.buffered.start(index), end = video.buffered.end(index);
     // HLS can begin two encoded frames after the requested time (0.066666s
@@ -13,18 +16,21 @@ export function bufferedVideoSecondsAhead(video) {
 
 // Wait for real media bytes before the first Play. Never advance/fake the clock.
 export async function waitForInitialVideoBuffer(video, {seconds = 6, timeoutMs = 25000,
-  isCancelled = () => false, onSample = () => {}, now = () => Date.now(),
+  isCancelled = () => false, onSample = () => {},
+  bufferFromSeconds = () => Number(video.currentTime) || 0,
+  now = () => Date.now(),
   delay = ms => new Promise(resolve => setTimeout(resolve, ms))} = {}) {
   const started = now();
   while (now() - started < timeoutMs) {
     if (isCancelled()) return null;
     if (video.error) throw new Error('Video failed while preparing its initial buffer');
     const rate = Math.max(.25, Number(video.playbackRate) || 1);
+    const fromSeconds = Math.max(0, Number(bufferFromSeconds()) || 0);
     const duration = Number(video.duration);
     const remaining = Number.isFinite(duration) && duration > 0
-      ? Math.max(0, duration - (Number(video.currentTime) || 0)) : Infinity;
+      ? Math.max(0, duration - fromSeconds) : Infinity;
     const required = Math.min(seconds * rate, remaining);
-    const ahead = bufferedVideoSecondsAhead(video);
+    const ahead = bufferedVideoSecondsAhead(video, fromSeconds);
     const sample = {ahead, required, elapsedMs:now() - started};
     onSample(sample);
     if (!video.seeking && video.readyState >= 2 && required > 0 && ahead + .02 >= required) return sample;
