@@ -3,6 +3,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {startMediaRequest,completeMediaRequest,failedDuringOffline} from './android-network-evidence.mjs';
 import {fullscreenEducationTapPoint,mediaNotificationClock,mediaNotificationControlPoint} from './android-system-ui-observation.mjs';
 
 // Run after android-emulator-mp4.mjs: the actual reported shiur is already
@@ -43,13 +44,13 @@ async function connect() {
   socket.addEventListener('message',ev=>{
     const message=JSON.parse(ev.data);
     if(message.method==='Network.requestWillBeSent') {
-      const data=message.params,url=new URL(data.request.url);
-      if(/\/media\//.test(url.pathname))networkRequests.set(data.requestId,{path:url.pathname,started:data.timestamp,phase:networkPhase});
+      const data=message.params,request=startMediaRequest(data,networkPhase);
+      if(request)networkRequests.set(data.requestId,request);
       return;
     }
     if(message.method==='Network.loadingFinished'||message.method==='Network.loadingFailed') {
       const data=message.params,request=networkRequests.get(data.requestId);
-      if(request&&request.phase!=='normal')report.networkEvidence.push({...request,elapsedMs:Math.round((data.timestamp-request.started)*1000),bytes:Number(data.encodedDataLength||0),error:data.errorText||null});
+      if(request&&(request.phase!=='normal'||networkPhase!=='normal'))report.networkEvidence.push(completeMediaRequest(request,data,networkPhase));
       networkRequests.delete(data.requestId);return;
     }
     const p=pending.get(message.id);
@@ -646,8 +647,10 @@ try{
       const beforeLoss=await read(),target=beforeLoss.video.time+180;
       networkPhase='offline';
       await command('Network.emulateNetworkConditions',{offline:true,latency:0,downloadThroughput:-1,uploadThroughput:-1});
-      await seekVideo(target);await delay(5000);
-      assert.ok(report.networkEvidence.some(x=>x.phase==='offline'&&x.error),'Unbuffered HLS must really encounter a failed network request');
+      await seekVideo(target);
+      const failureDeadline=Date.now()+10000;
+      while(Date.now()<failureDeadline&&!report.networkEvidence.some(failedDuringOffline)) await delay(300);
+      assert.ok(report.networkEvidence.some(failedDuringOffline),'Unbuffered HLS must really encounter a failed network request');
       networkPhase='reconnected';
       await command('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});
       await wait(s=>s.video&&!s.video.paused&&s.video.time>target-20,'Playback must recover close to the interrupted seek position',65000);
