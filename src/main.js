@@ -2481,8 +2481,15 @@ async function restoreSession() {
     warmNativePaidCatalog();
   } catch (error) {
     if (error.status === 401) {
+      // Server-confirmed revocation always wins over any cached display name.
       setToken('');
       resetUserState();
+    } else if (!state.user && (!Number(error?.status) || Number(error.status) >= 500)) {
+      // navigator.onLine can stay true on an emulator after Wi-Fi and mobile
+      // data have both been disconnected. A failed /me fetch may restore ONLY
+      // the previously verified, token-bound display identity. No privileges
+      // or collections are cached; every server action still requires /me.
+      restoreOfflineAccount();
     }
   }
 }
