@@ -202,6 +202,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let ignoreClickUntil = 0;
   let visualCheck = 0;
   let playbackIntent = 0;
+  let stalledHandoffResumes = 0;
   let playbackWanted = false;
   let initialPlaybackStarted = false;
   let startupPlayTask = null;
@@ -220,6 +221,9 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   const pausePlayback = () => {
     playbackWanted = false;
     ++playbackIntent;
+    // Audio mode parks this video. A future deliberate Audio -> Video switch
+    // receives its own one permitted HLS decoder resume.
+    stalledHandoffResumes = 0;
     ++visualCheck;
     clearTimeout(qualityMotionTimer);
     cancelQualityRecovery();
@@ -769,7 +773,6 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     }
   })();
   const adapter = makePlayerAdapter(video, stage, () => hls, readyPromise);
-  let stalledHandoffResumes = 0;
   adapter.resumeStalledHandoff = async () => {
     // An Android HLS decoder may unexpectedly pause after displaying its
     // first frame. Resume only an *already-started*, still-requested and
