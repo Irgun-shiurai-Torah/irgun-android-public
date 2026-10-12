@@ -120,3 +120,26 @@ Local validation for this attempt: 104 checks passed with zero skips, including
 real-function regression models for a ten-second decoder delay, native key loss,
 fullscreen exit, initial byte buffering, cancellation and timeout. Vite build,
 syntax/YAML and whitespace checks pass. These are not emulator passes.
+
+## Run #76: shared startup-buffer regression
+
+The expanded matrix contains 15 jobs rather than the original 12 because the
+single API 30 account job was expanded to sequential account/playback jobs on
+API 30/34/35/36. Several red jobs can share one cause; a red job is not a count
+of distinct application bugs. Independent login/comment/session probes repeat
+one actual authentication-server HTTP 500 across those account jobs.
+
+I introduced an initial HLS-buffer regression in the previous commit. The real
+failed reports show currentTime=0, readyState=4 and buffered media spanning
+**[0.066666, 60.013333]**. The helper allowed only a 50ms gap, so it measured zero
+available buffer and never released Play even with almost one minute available.
+HLS and soak could not start, and native baseline jobs stopped before later
+scenarios. Those later scenarios remain unverified, not passed.
+
+The correction accepts only a small encoding/priming gap up to 100ms, counts
+actual buffered media from max(currentTime, rangeStart), and never changes the
+media clock. The six-second requirement, real moving-picture checks, stall
+assertions and timeout failures remain active. Regression tests use the actual
+failed 66ms/60s range and also reject short media buffers and distant ranges.
+Local validation: 106 checks passed, zero skips; Vite build passed. The new
+emulator result is pending. This correction is not merged.

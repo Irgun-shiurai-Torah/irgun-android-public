@@ -1,8 +1,12 @@
 export function bufferedVideoSecondsAhead(video) {
   const position = Number(video.currentTime) || 0;
   for (let index = 0; index < video.buffered.length; index++) {
-    if (video.buffered.start(index) <= position + .05 && video.buffered.end(index) > position)
-      return video.buffered.end(index) - position;
+    const start = video.buffered.start(index), end = video.buffered.end(index);
+    // HLS can begin two encoded frames after the requested time (0.066666s
+    // in the failed real runs). That small priming gap is not missing media.
+    // Count only the real buffered span; never include the unbuffered gap.
+    if (start <= position + .1 && end > position)
+      return end - Math.max(position, start);
   }
   return 0;
 }

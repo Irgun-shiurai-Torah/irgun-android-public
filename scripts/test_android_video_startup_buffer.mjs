@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {waitForInitialVideoBuffer} from '../src/android-video-startup-buffer.js';
+import {bufferedVideoSecondsAhead, waitForInitialVideoBuffer} from '../src/android-video-startup-buffer.js';
 
 function media(ahead=0) {
   return {currentTime:30,duration:3600,playbackRate:1,readyState:4,seeking:false,
@@ -27,4 +27,23 @@ test('an exhausted initial buffering wait fails instead of starting from insuffi
   const video=media(1);let clock=0;
   await assert.rejects(waitForInitialVideoBuffer(video,{timeoutMs:300,now:()=>clock,delay:async()=>{clock+=150;}}),/enough to start smoothly/);
   assert.equal(video.currentTime,30);
+});
+
+test('the actual HLS range beginning at 0.066666 seconds releases real buffered startup without changing time',async()=>{
+  const video=media();video.currentTime=0;
+  video.buffered={length:1,start:()=>.066666,end:()=>60.013333};
+  const result=await waitForInitialVideoBuffer(video);
+  assert.ok(result.ahead>59.9);assert.equal(result.required,6);
+  assert.equal(video.currentTime,0,'Buffer observation must not manufacture progress');
+});
+test('a priming gap never counts as buffered bytes and a distant range cannot release startup',async()=>{
+  const video=media();video.currentTime=0;
+  video.buffered={length:1,start:()=>.066666,end:()=>5.966666};
+  assert.ok(Math.abs(bufferedVideoSecondsAhead(video)-5.9)<.000001);
+  for(const start of [.066666,1]) {
+    video.buffered={length:1,start:()=>start,end:()=>start===1?60:5.966666};
+    let clock=0;
+    await assert.rejects(waitForInitialVideoBuffer(video,{timeoutMs:300,now:()=>clock,delay:async()=>{clock+=150;}}),/enough to start smoothly/);
+  }
+  assert.equal(video.currentTime,0);
 });
