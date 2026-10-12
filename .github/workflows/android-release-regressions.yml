@@ -13,6 +13,8 @@ on:
       - 'scripts/test_android_adb_observer.mjs'
       - 'scripts/android-native-text-entry.mjs'
       - 'scripts/test_android_native_text_entry.mjs'
+      - 'scripts/android-system-ui-observation.mjs'
+      - 'scripts/test_android_system_ui_observation.mjs'
       - 'scripts/android-native-tap-point.mjs'
       - 'scripts/test_android_native_tap_point.mjs'
       - 'scripts/android-emulator-prepare.py'
@@ -72,7 +74,7 @@ jobs:
           node --check scripts/android-hls-delivery-probe.mjs
       - name: Check source and gesture unit regressions
         timeout-minutes: 2
-        run: node --test scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs scripts/test_android_probes.mjs scripts/test_android_seek_guard.mjs scripts/test_android_adb_observer.mjs scripts/test_android_native_tap_point.mjs scripts/test_android_native_text_entry.mjs scripts/test_android_video_startup_buffer.mjs
+        run: node --test scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs scripts/test_android_probes.mjs scripts/test_android_seek_guard.mjs scripts/test_android_adb_observer.mjs scripts/test_android_native_tap_point.mjs scripts/test_android_native_text_entry.mjs scripts/test_android_video_startup_buffer.mjs scripts/test_android_system_ui_observation.mjs
       - name: Prepare selected launcher icon
         run: |
           sudo apt-get update -qq

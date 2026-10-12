@@ -1,8 +1,9 @@
 # Android QA coverage and verification
 
 This is a coverage audit, not a claim that the expanded suite has passed.
-All new emulator checks below are pending on the PR head until their actual
-reports, logs and screenshots are inspected. Local unit checks are separate.
+The latest inspected runtime evidence is recorded below. Checks on a newer PR
+head remain pending until its actual reports, logs and screenshots are inspected.
+Local unit checks are separate.
 Do not merge this PR based on unit tests or a green subset of matrix jobs.
 
 ## Evidence checked
@@ -143,3 +144,73 @@ assertions and timeout failures remain active. Regression tests use the actual
 failed 66ms/60s range and also reject short media buffers and distant ranges.
 Local validation: 106 checks passed, zero skips; Vite build passed. The new
 emulator result is pending. This correction is not merged.
+
+
+## Run #77: real HLS recovery, fresh-decoder failure and test observations
+
+[Regression #77](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38229934572)
+on `b946cfca1cff333353113ab2e2aac5e408a3a996` finished **7 jobs passed, 8 failed**.
+All eight failed job logs and their reports were read. The separate
+[startup #117](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38229934580)
+passed its actual baseline playback and English/Hebrew physical tab tests.
+
+Verified successes in #77:
+- HLS on API 30/34/35/36: seven actual checks each, including moving decoded
+  video/quality selection with Vimeo requests blocked. Initial playback had
+  11.946667 seconds of real buffer, preparation took 1215/1508/3103/2737 ms
+  respectively, and six subsequent samples showed no initial waiting stalls.
+- Downloadable MP3 and HLS HTTP/CORS delivery passed their real responses.
+- The mixed API 30 reliability report records **900,071 ms**, 16 samples,
+  Audio/Video plus mini/full changes at minutes 2/7/11, actual locks at 4/9/13,
+  Home/reopen at 6/12 and an unchanged process. PSS baseline was 139,699 KB,
+  peak 149,356 KB, within the declared budget. This is not a 30-minute/leak claim.
+- Native API 30/34/36 baseline completed all 11 clock/frame/single-output checks.
+  Repeated switches, near-end seeking and Video speed handoffs passed on those
+  devices. Fullscreen/Back, rotation and PiP passed on API 30/34.
+- Real transient audio focus and Doze passed on API 30/34/36; notification
+  permission revoke/grant passed on API 34/36. API 30 actually downloaded
+  60,268,750 bytes and reopened the local file after an offline process restart.
+  Its later online Video/delete scenario failed, so the offline section as a
+  whole remains failed. API 34 did not complete offline reopening.
+
+Confirmed failures and corrections on the next head:
+- API 30/34: after closing Watch from Audio and changing language, a newly
+  created Video decoder remained moving but muted while native Audio continued.
+  The fresh-player initialization used a separate 4.2-second readiness path,
+  and an unresolved Play promise/readiness timeout could leave the handoff flag
+  active indefinitely. Reopened native Video now uses the existing 15-second
+  live-clock/decoded-frame transaction, adaptive catch-up and explicit rollback.
+  This fixes the shared path, not merely the language test. Actual emulator
+  rerun proof is pending; later errors on the stuck state are not independent
+  verified bugs or passes.
+- API 36 fullscreen failure screenshot shows Android's first-use "Viewing full
+  screen" / "Got it" help overlay holding focus. The test now identifies that
+  exact SystemUI prompt and physically taps Got it, then requires app focus
+  before testing actual Back. It never dismisses ANRs or unidentified dialogs.
+  Fullscreen/Back and moving-frame assertions are unchanged.
+- API 36 notification timer was present in the real accessibility hierarchy as
+  **"12 minutes, 29 seconds of 1 hour, 1 minute, 3 seconds"**. The old parser
+  required colon text and incorrectly failed. The parser now reads that actual
+  spoken elapsed duration or a visible media elapsed-time node, never the status
+  clock. The advancing timer and physical button assertions remain mandatory.
+
+Unresolved failures:
+- API 35 native job completed zero baseline checks: the screenshot shows an
+  Irgun ANR dialog. ActivityManager identifies SplashActivity focus-loss input
+  dispatch timeout after 5000 ms, with heavy CPU/memory pressure. An empty Java
+  crash buffer does not clear this real ANR. Its blocking main-thread stack was
+  not included in the original artifact; new runs collect last-ANR/exit reason
+  and a logged-out bugreport when an Irgun ANR occurs. No ANR fix is claimed.
+- Native account login on API 30/35/36 failed, and API 34 lost its app process
+  during login observation. Its original native crash buffer is empty; the
+  process-exit cause remains unverified and new capture records exit reasons.
+- All four independent account/comment session probes still report server
+  **HTTP 500 Login failed** for valid QA credentials. Wrong-password UI/API
+  rejection passed. New probes record only status/date/Cloudflare request IDs
+  for server-log correlation, never passwords, cookies or session tokens.
+  Valid login, account features and the signed-in media suite remain failed or
+  unexecuted. The actual Worker exception is needed to diagnose the server.
+
+Next-head local validation: **115 checks passed, zero skipped**, Vite build,
+script syntax, workflow YAML and whitespace checks passed. These corrections
+remain draft and unmerged pending a new complete real emulator run.

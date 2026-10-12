@@ -9,6 +9,8 @@ capture() {
     wait "$log_pid" 2>/dev/null || true
   fi
   adb logcat -d -b crash > emulator-report/android-crashes.log || true
+  adb shell dumpsys activity lastanr > emulator-report/android-last-anr.txt || true
+  adb shell dumpsys activity exit-info org.irgunshiuraitorah.app > emulator-report/android-process-exits.txt || true
   adb exec-out screencap -p > emulator-report/startup.png || true
 
 }

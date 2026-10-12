@@ -650,7 +650,7 @@ function resumeFixture({ready=600.35,commitFails=false,focusStopped=false,readyW
   const context={state,console:{debug(){},warn(){}},setTimeout(){},usesNativeUnifiedAudio:()=>true,
     playbackPositionSeconds:()=>600,setVimeoHandoffMuted:async(_,muted)=>events.push(muted?'mute':'unmute'),
     waitForVimeoHandoffReady:async(...args)=>{events.push('verify');return readyWait?readyWait(...args):ready;},
-    finishAudioToVideoHandoff:async()=>{events.push('commit');state.current=null;state.nativePlayback.mode='VIDEO';if(commitFails)throw Error('native error');return true;},
+    finishAudioToVideoHandoff:async()=>{events.push('commit');state.current=null;state.nativePlayback.mode='VIDEO';if(commitFails)throw Error('native error');state.watchAudioToVideoHandoff=false;return true;},
     nativeMediaPlugin:()=>({getState:async()=>({...state.nativePlayback,audioPositionMs:603000})}),
     setPlaybackAuthorityFence:mode=>events.push(mode),
     PlaybackController:{startAudioAt:async(position,playing,options)=>{events.push({position,playing,volume:options.volume});Object.assign(state.nativePlayback,{mode:'AUDIO',audioIsPlaying:playing,audioPlayWhenReady:playing});}},
@@ -662,6 +662,42 @@ function resumeFixture({ready=600.35,commitFails=false,focusStopped=false,readyW
 test('pending WebView play promise does not abort a destination with moving frames',async()=>{
   const f=resumeFixture();assert.equal(await f.resume(),true);
   assert.ok(f.events.indexOf('verify')<f.events.indexOf('commit'));
+});
+function initializedHandoffFixture(transaction) {
+  const {state}=transaction;
+  state.watchVimeoGeneration=3;state.watchVideo={id:'lecture'};state.watchMode='video';
+  const ui=[];
+  const context={state,videoId:video=>video?.id, resumeParkedVideoFromAudio:()=>transaction.resume(),
+    parkHostedVideoForAudio:()=>ui.push('park'),render:()=>ui.push('render'),updatePlayerUi:()=>ui.push('controls')};
+  const start=mainSource.indexOf('async function finishInitializedNativeVideoHandoff(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function initWatchVimeo(',start))+'\nthis.finish=finishInitializedNativeVideoHandoff;',context);
+  return {ui,finish:()=>context.finish(state.watchVimeo,state.watchVideo,'lecture')};
+}
+test('fresh decoder after closing Watch uses the real bounded native handoff, including slow decoded frames',async()=>{
+  const clock=handoffFixture({framesReadyAfterMs:9000});
+  const transaction=resumeFixture({readyWait:(_,id,budget)=>clock.wait(clock.player,id,budget)});
+  const initialized=initializedHandoffFixture(transaction);
+  assert.equal(await initialized.finish(),true);
+  assert.equal(transaction.state.nativePlayback.mode,'VIDEO');
+  assert.equal(transaction.state.watchAudioToVideoHandoff,false);
+  assert.ok(transaction.events.indexOf('verify')<transaction.events.indexOf('commit'));
+  assert.deepEqual(initialized.ui,[]);
+});
+test('fresh decoder readiness failure rolls back visible Audio and clears the pending handoff',async()=>{
+  const transaction=resumeFixture({ready:null});const initialized=initializedHandoffFixture(transaction);
+  assert.equal(await initialized.finish(),false);
+  assert.equal(transaction.state.nativePlayback.mode,'AUDIO');
+  assert.equal(transaction.state.watchMode,'audio');
+  assert.equal(transaction.state.current,transaction.item);
+  assert.equal(transaction.state.watchAudioToVideoHandoff,false);
+  assert.ok(!transaction.events.includes('commit'));
+  assert.deepEqual(initialized.ui,['park','render','controls']);
+});
+test('fresh decoder cannot repaint a later lecture when its handoff finishes',async()=>{
+  const transaction=resumeFixture({readyWait:()=>{transaction.state.watchVimeoGeneration++;return null;}});
+  const initialized=initializedHandoffFixture(transaction);
+  assert.equal(await initialized.finish(),false);
+  assert.deepEqual(initialized.ui,[]);
 });
 test('failed readiness keeps the current Audio item and never commits VIDEO',async()=>{
   const f=resumeFixture({ready:null});assert.equal(await f.resume(),false);

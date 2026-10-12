@@ -8574,6 +8574,23 @@ function loadWatchVimeoSdk() {
 // into two different HLS stages. A fallback increments the generation, so it
 // starts a fresh initialization after the failed player has been destroyed.
 let watchVimeoInitFlight = null;
+async function finishInitializedNativeVideoHandoff(player, video, videoKey) {
+  const generation = state.watchVimeoGeneration;
+  // Reopening Watch creates a new decoder. It needs the same live-clock,
+  // decoded-frame and bounded rollback transaction as a parked Video switch.
+  const transferred = await resumeParkedVideoFromAudio(video, videoKey, true);
+  if (generation !== state.watchVimeoGeneration || state.watchVimeo !== player ||
+      videoId(state.watchVideo) !== videoKey || state.watchMode !== 'video') return false;
+  if (!transferred) {
+    state.watchMode = 'audio';
+    state.watchVideoPlaying = false;
+    parkHostedVideoForAudio();
+    render();
+    updatePlayerUi();
+  }
+  return transferred;
+}
+
 function initWatchVimeo(userInitiated = false) {
   if (state.watchVimeo) return Promise.resolve();
   const generation = state.watchVimeoGeneration;
@@ -8792,7 +8809,9 @@ async function initWatchVimeoOnce(userInitiated = false) {
     }
 
     if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video') return;
-    if (audioToVideoHandoff && state.watchAudioToVideoHandoff && state.watchAudioToVideoHandoffId === videoKey && !playbackIsPaused()) {
+    if (audioToVideoHandoff && state.watchAudioToVideoHandoff && state.watchAudioToVideoHandoffId === videoKey && !playbackIsPaused() && usesNativeUnifiedAudio()) {
+      if (!await finishInitializedNativeVideoHandoff(player, video, videoKey)) return;
+    } else if (audioToVideoHandoff && state.watchAudioToVideoHandoff && state.watchAudioToVideoHandoffId === videoKey && !playbackIsPaused()) {
       // Vimeo is now initialized. Chase the live audio clock once, while muted,
       // so switching after listening in Audio mode never replays the loading gap.
       const liveTarget = Math.max(0, playbackPositionSeconds() || requestedResume);

@@ -3,6 +3,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {fullscreenEducationTapPoint,mediaNotificationClock} from './android-system-ui-observation.mjs';
 
 // Run after android-emulator-mp4.mjs: the actual reported shiur is already
 // playing in native AUDIO mode. All UI actions below are physical ADB events.
@@ -82,7 +83,7 @@ async function wait(test,message,timeout=45000) {
   const deadline=Date.now()+timeout;
   let last, lastError;
   while(Date.now()<deadline) {
-    try {last=await read();if(test(last))return last;}catch(e){lastError=String(e.message);}
+    try {last=await read();if(await test(last))return last;}catch(e){lastError=String(e.message);}
     await delay(600);
   }
   throw new Error(message+'; last='+JSON.stringify(last||{})+'; error='+String(lastError||'none'));
@@ -249,13 +250,19 @@ async function verifyOfflineServerHistory(id) {
 }
 async function notificationClock() {
   const xml=nativeHierarchy('emulator-report/notification-clock.xml');
-  const matches=[...xml.matchAll(/(?:text|content-desc)="(\d{1,2}:\d{2}(?::\d{2})?)(?: of [^"]*)?"/g)].map(x=>x[1]);
-  // Prefer the real media progress SeekBar description; never use the status-bar clock.
-  const bar=(xml.match(/<node\b[^>]*>/g)||[]).find(n=>/(?:media_progress_bar|android.widget.SeekBar)/.test(n)&&/visible="true"/.test(n));
-  const clock=bar?.match(/content-desc="(\d{1,2}:\d{2}(?::\d{2})?)/)?.[1];
-  const elapsed=clock||(xml.match(/resource-id="[^"]*(?:elapsedTime|elapsed_time)[^"]*"/)?matches[0]:null);
-  assert.ok(elapsed,'Actual Android notification must expose its elapsed media timer');
-  return elapsed.split(':').reduce((total,value)=>total*60+Number(value),0);
+  return mediaNotificationClock(xml);
+}
+async function dismissFullscreenEducation() {
+  const geometry=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+  if(geometry.focused)return;
+  const xml=nativeHierarchy('emulator-report/fullscreen-education.xml');
+  const point=fullscreenEducationTapPoint(xml);
+  assert.ok(point,'Fullscreen window is covered by an unidentified dialog; Back behaviour is unverified');
+  screenshot('fullscreen-education');
+  adb('shell','input','tap',String(point[0]),String(point[1]));
+  await wait(async()=>Boolean((await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})")).focused),
+    'Actual Got it tap must return foreground focus to the fullscreen app');
+  checks('First-use Android fullscreen education dismissed with physical Got it tap');
 }
 async function setOnline(online){
   adb('shell','svc','wifi',online?'enable':'disable');
@@ -334,6 +341,7 @@ try{
     for(let i=0;i<2;i++) {
       const before=await read();await tap('[data-hls-fullscreen]');
       const full=await wait(s=>s.fullscreen,'Fullscreen button must enter actual Android WebView fullscreen');
+      await delay(700);await dismissFullscreenEducation();
       await delay(2200);const moving=await read();audibleVideo(moving);
       assert.ok(moving.video.frames>full.video.frames+2,'Actual fullscreen picture must continue moving');
       screenshot('video-fullscreen-'+i);

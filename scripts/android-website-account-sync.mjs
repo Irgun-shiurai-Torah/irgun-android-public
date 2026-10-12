@@ -33,6 +33,7 @@ async function api(client,path,{method='GET',body,authenticated=true}={}) {
         continue;
       }
       const data=await response.json().catch(()=>({}));
+      if(path==='/login') (report.loginResponses||=[]).push({client,status:response.status,cfRay:response.headers.get('cf-ray'),date:response.headers.get('date')});
       return {status:response.status,data,response};
     }catch(error){
       const details=String(error.message||error);
