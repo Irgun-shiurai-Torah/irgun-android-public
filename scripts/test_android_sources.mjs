@@ -472,6 +472,44 @@ test('HLS handoff gives a distant segment time to decode without relaxing frame 
   const transaction=resumeFixture({readyWait:(_,id,budget)=>f.wait(f.player,id,budget)});
   assert.equal(await transaction.resume(),true,'A synchronized HLS picture decoding after nine seconds must complete the handoff');
 });
+test('API 35 HLS decoder stall retargets the live Audio segment once and requires real moving frames',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
+  let position=590,frames=50,lastAt=0,rate=1,retargets=0,retargeted=false,seeks=0;
+  const advance=()=>{
+    const until=retargeted?Date.now():Math.min(Date.now(),1800);
+    const ms=Math.max(0,until-lastAt);
+    if(ms){position+=ms/1000*rate;frames+=Math.floor(ms*30/1000);lastAt=until;}
+  };
+  const element={paused:false,seeking:false,readyState:4,videoWidth:640,
+    buffered:{length:1,start:()=>580,end:()=>602},
+    get playbackRate(){return rate;},set playbackRate(next){advance();rate=next;},
+    getVideoPlaybackQuality(){advance();return {totalVideoFrames:frames};}};
+  const player={getSourceType:()=> 'hls',getVideoElement:()=>element,getPaused:async()=>false,
+    getCurrentTime:async()=>{advance();return position;},
+    setCurrentTime:async n=>{seeks++;position=n;return n;},
+    retargetStalledHandoff:async target=>{
+      assert.equal(retargets,0,'Only one new fragment request is allowed per stalled handoff');
+      assert.ok(target>=606,'The new fragment must use the actual live Audio clock');
+      retargets++;retargeted=true;position=target;lastAt=Date.now();
+      element.buffered={length:1,start:()=>target-1,end:()=>target+20};
+      return true;
+    }};
+  const state={playbackSpeed:1,watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',
+    nativePlayback:{mode:'AUDIO',audioIsPlaying:true,audioPlayWhenReady:true}};
+  const context={state,Date,setTimeout,console:{warn(){}},usesNativeUnifiedAudio:()=>true,
+    playbackPositionSeconds:()=>606+Date.now()/1000};
+  const start=mainSource.indexOf('async function waitForVimeoHandoffReady(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function videoAudioPlaybackItem(',start))+'\nthis.wait=waitForVimeoHandoffReady;',context);
+  let settled=false,result;const task=context.wait(player,'lecture',15000).then(v=>{result=v;settled=true;});
+  for(let i=0;i<170&&!settled;i++){t.mock.timers.tick(100);for(let j=0;j<12;j++)await Promise.resolve();}
+  await task;
+  assert.equal(retargets,1,'A stalled HLS catch-up must retarget the live segment exactly once');
+  assert.equal(seeks,0,'Do not repeatedly discard decoding progress with regular seeks');
+  assert.ok(result>606,'Destination must decode moving video before readiness is accepted');
+  assert.ok(Math.abs(result-context.playbackPositionSeconds())<=1.8,'Video must be synchronized with the advancing Audio clock');
+  assert.equal(state.nativePlayback.mode,'AUDIO','Native Audio must remain authoritative until readiness is proven');
+  assert.equal(element.playbackRate,1,'Temporary catch-up speed must be restored');
+});
 for(const [cancel,decodeDelay] of [[false,6000],[true,6000],[false,10000]])test('HLS catch-up preserves decoded progress and restores requested speed, cancel='+cancel+', decode='+decodeDelay,async t=>{
   t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
   const rate=decodeDelay===10000?1:1.5,seeks=[],rates=[];let decodeAt=decodeDelay,lastAt=decodeAt,position=606,frames=0,currentRate=rate;
