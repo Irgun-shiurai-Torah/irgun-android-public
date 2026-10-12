@@ -76,3 +76,47 @@ None of those production fixes has a new emulator pass until the new run finishe
   extension report. Logs and reports must be read before final Pass/Fail claims.
 - Temporary comments/playlists created by this run are removed; credentials and
   actual app tokens remain in memory and are never written to artifacts.
+
+## Run #75 failures and the next fix attempt
+
+[Run #75](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38223770685)
+is a failed attempt, not proof that the expanded checklist passes.
+The actual reports/logs and failure images establish:
+
+| Device/job | Expected | Actual evidence | New change; runtime result pending |
+| --- | --- | --- | --- |
+| API 30 and 34 native media | Back exits true video fullscreen and retains the lecture | Activity destroyed after Back; WebView observer disconnects. Later scenarios cannot be counted as executed playback passes | Consume native Back during fullscreen and call the actual document fullscreen exit |
+| API 35 native media | Audio to Video at the ten-minute position completes with moving synchronized picture | First frames appeared about ten seconds after the seek. Fixed 2x catch-up was still behind Audio when the unchanged 15s deadline expired; it rolled back to Audio | Adapt bounded catch-up to measured clock drift; restore user speed; tighten synchronization to one second |
+| API 36 native media | Physical keyboard enters IST-DL6067 completely | Actual focused input contained I-DL6067, missing S/T; zero baseline playback checks completed | Defer background Home renders while the original input connection is focused; observe each real native key without retries or DOM text setters |
+| API 30 startup | Read-only search/playback state exists in the disposable APK | Startup workflow never appended the observer now required by the shared baseline; screen/query were undefined | Append the same read-only observer before building the startup APK |
+| Native QA account and independent comment/session probes | Valid login returns HTTP 200 and creates a real session | Native UI login failed and independent API requests returned HTTP 500, Login failed. Wrong-password rejection passed | Still blocked by the shared authentication server; Android-side success must not be substituted. Actual backend exception is required to confirm its cause |
+
+Run #75's API 30 and 34 baseline reports contain 11 completed real playback
+checks. Their repeated-switch, near-end seek and Video-selected speed handoff
+scenarios passed before fullscreen Back destroyed the Activity. Later failures
+from the disconnected observer are consequences of that original failure,
+not independent verified failures of every playback feature.
+API 35's baseline completed nine checks before the real handoff rollback.
+Actual moving HLS/quality changes with blocked Vimeo transport passed on API
+30/34/35 in the reviewed reports; all production changes below require a new run.
+
+## Initial video loading request
+
+The user reported Play for a second, wait, Play briefly, wait again, then stable
+playback. The new initial Play transaction waits for **six seconds of actual
+buffered media at 1x**, twelve at 2x, or the remaining duration for a near-end
+resume. Metadata or a resolved Play promise alone cannot release it.
+Play requests while preparing the same buffer share one transaction. Pause,
+Home and Audio handoff cancel the pending Play. Buffer timeout remains a real
+failure with a visible retry message; there is no forced successful response.
+
+The new real HLS test records required buffer/actual buffer at first Play and
+then requires moving decoded frames/clock without repeated waiting during
+initial playback. Those emulator assertions remain pending until the new run.
+The six-second buffer reduces startup stop/start behavior; it cannot guarantee
+uninterrupted playback through every later network outage.
+
+Local validation for this attempt: 104 checks passed with zero skips, including
+real-function regression models for a ten-second decoder delay, native key loss,
+fullscreen exit, initial byte buffering, cancellation and timeout. Vite build,
+syntax/YAML and whitespace checks pass. These are not emulator passes.

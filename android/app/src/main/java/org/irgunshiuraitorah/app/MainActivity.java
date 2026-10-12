@@ -16,6 +16,7 @@ import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 import com.google.firebase.FirebaseApp;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
@@ -24,6 +25,7 @@ public class MainActivity extends BridgeActivity {
     private static volatile boolean instanceAlive = false;
     private boolean videoFullscreen = false;
     private boolean irgunPipActive = false;
+    private OnBackPressedCallback fullscreenBackCallback;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -36,6 +38,24 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(IrgunPictureInPicturePlugin.class);
         registerPlugin(IrgunAnalyticsPlugin.class);
         super.onCreate(savedInstanceState);
+        fullscreenBackCallback = new OnBackPressedCallback(false) {
+            @Override public void handleOnBackPressed() {
+                if (!videoFullscreen) {
+                    setEnabled(false);
+                    getOnBackPressedDispatcher().onBackPressed();
+                    return;
+                }
+                // DOM fullscreen does not add an Activity back-stack entry.
+                // Consume Back here so Android cannot destroy the moving player.
+                if (getBridge() != null && getBridge().getWebView() != null) {
+                    getBridge().getWebView().evaluateJavascript(
+                        "window.__irgunExitDocumentFullscreen && window.__irgunExitDocumentFullscreen().catch(e => console.warn('Fullscreen exit failed', e));",
+                        null
+                    );
+                }
+            }
+        };
+        getOnBackPressedDispatcher().addCallback(this, fullscreenBackCallback);
         IrgunAnalyticsReporter.get(this).setForeground(true);
         try {
             // Media is only created after the user explicitly opens a shiur. Allow
@@ -64,6 +84,7 @@ public class MainActivity extends BridgeActivity {
      */
     public void setVideoFullscreen(boolean enabled) {
         videoFullscreen = enabled;
+        if (fullscreenBackCallback != null) fullscreenBackCallback.setEnabled(enabled);
         if (enabled) {
             hideSystemBarsForVideo();
         } else if (!isIrgunPipVisible()) {

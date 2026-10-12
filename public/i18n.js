@@ -856,6 +856,7 @@
     "Unmute": "ביטול השתקה",
     "Auto": "אוטומטי",
     "Preparing video…": "מכין וידאו…",
+    "Connection is slow. Tap Play to retry.": "החיבור איטי. לחצו על הפעלה כדי לנסות שוב.",
     "Sleep timer": "טיימר שינה",
     "Close full player": "סגירת הנגן המלא",
     "Loading all original flyers...": "טוען את כל המודעות המקוריות...",

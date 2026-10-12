@@ -54,9 +54,22 @@ function syncDocumentFullscreenToNative() {
   setNativeVideoFullscreen(Boolean(element));
 }
 
+window.__irgunExitDocumentFullscreen = async () => {
+  if (document.fullscreenElement) await document.exitFullscreen();
+  else if (document.webkitFullscreenElement && document.webkitExitFullscreen) document.webkitExitFullscreen();
+};
+
 document.addEventListener('fullscreenchange', syncDocumentFullscreenToNative);
 document.addEventListener('webkitfullscreenchange', syncDocumentFullscreenToNative);
 window.addEventListener('pagehide', () => { setNativeVideoFullscreen(false); });
+let homeSearchRenderDeferred = false;
+// Complete deferred feed rendering after the real click handler. Rendering on
+// blur/pointerdown would remove the Search button before its click is delivered.
+document.addEventListener('click', () => {
+  if (!homeSearchRenderDeferred || document.activeElement?.id === 'homeLibrarySearch') return;
+  homeSearchRenderDeferred = false;
+  if (state.screen === 'home') render();
+});
 const APP_PUSH_TOKEN_KEY = 'istAppFcmToken';
 const ADMIN_MODE_KEY = 'istAppAdminMode';
 const SPONSOR_DEDICATION_TYPES = [
@@ -4967,7 +4980,7 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
         }
       }
       if (Number.isFinite(again) && again > videoNow + 0.05 && movingPicture && bufferedAhead) {
-        if (synchronized(again, stillSource, 1.8)) return again;
+        if (synchronized(again, stillSource, 1.0)) return again;
         // Let the first seek decode and actually play before chasing Audio's
         // advancing clock. Seeking as soon as metadata/currentTime resolve
         // repeatedly discards the destination's pending keyframe on API 35.
@@ -4977,8 +4990,13 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
           // keeps moving, then restore the requested speed before committing.
           const requestedRate = Number(state.playbackSpeed) || 1;
           catchupElement = element;
-          element.playbackRate = again < stillSource
-            ? Math.min(4, Math.max(requestedRate * 2, requestedRate + 1))
+          const drift = stillSource - again;
+          const remainingSeconds = Math.max(.5, (deadline - Date.now()) / 1000);
+          // A ten-second keyframe delay leaves ten seconds of live Audio lead.
+          // Fixed 2x needs another ten seconds and misses the unchanged 15s
+          // transaction deadline. Adapt the catch-up rate to the observed drift.
+          element.playbackRate = drift > 0
+            ? Math.min(4, requestedRate + Math.max(1, drift / Math.min(2, remainingSeconds)))
             : Math.max(.25, requestedRate / 2);
         } else if (!element?.seeking && Date.now() - lastSeekCorrectionAt >= 1500) {
           lastSeekCorrectionAt = Date.now();
@@ -6073,6 +6091,13 @@ function preserveAuthFormDraft() {
 
 function render() {
   if (tabSwipeRenderGate.shouldDefer()) return;
+  // Keep the actual focused input/Android IME connection alive. Copying the
+  // value into a replacement field still drops native keys queued for the old one.
+  if (state.screen === 'home' && !state.loading && !state.error && document.activeElement?.id === 'homeLibrarySearch') {
+    homeSearchRenderDeferred = true;
+    return;
+  }
+  homeSearchRenderDeferred = false;
   usageAnalytics.setScreen(analyticsScreenLabel());
   if (['live','live-boro','live-flatbush'].includes(state.screen)) usageAnalytics.event('livestream_opened', { dedupeKey:'livestream-open', cooldownMs:60000 });
   if (state.loading) {

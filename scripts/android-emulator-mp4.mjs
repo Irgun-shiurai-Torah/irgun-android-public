@@ -3,6 +3,7 @@ import { writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {observedAdb} from './android-adb-observer.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {typeObservedNativeText} from './android-native-text-entry.mjs';
 
 // Read the real WebView through CDP, but perform every navigation gesture with
 // Android input events. No DOM clicks or synthetic touch events stand in for UI.
@@ -91,6 +92,7 @@ try {
       iframeSrc:document.querySelector('#watchVimeoFrame')?.getAttribute('src'),
       video:v?{src:v.currentSrc||v.src,time:v.currentTime,paused:v.paused,ready:v.readyState,width:v.videoWidth,muted:v.muted,volume:v.volume,
         frames:v.getVideoPlaybackQuality?.().totalVideoFrames??v.webkitDecodedFrameCount,error:v.error?.code,
+        startup:{phase:v.dataset.startupBufferPhase||'',required:Number(v.dataset.startupBufferRequired||0),bufferAtStart:Number(v.dataset.startupBufferAtStart||0),waitMs:Number(v.dataset.startupBufferWaitMs||0),waitingCount:Number(v.dataset.startupWaitingCount||0)},
         seeking:v.seeking,rate:v.playbackRate,buffered:Array.from({length:v.buffered.length},(_,i)=>[v.buffered.start(i),v.buffered.end(i)]),
         rect:r?{x:r.x,y:r.y,width:r.width,height:r.height}:null,
         stage:stage?{x:stage.x,y:stage.y,width:stage.width,height:stage.height}:null}:null,
@@ -168,7 +170,10 @@ try {
   for(let i=0;i<30;i++) {observedSearch=await searchState();if(observedSearch.focused==='homeLibrarySearch')break;await delay(150);}
   report.searchBeforeTyping=observedSearch;
   assert.equal(observedSearch.focused,'homeLibrarySearch','Actual Android tap must focus Home search before sending text');
-  adb('shell','input','text',code);
+  await typeObservedNativeText({value:code,delay,
+    readValue:async()=>{const s=await searchState();assert.equal(s.focused,'homeLibrarySearch','Each real native key must target the focused Home search');return s.value;},
+    typeCharacter:character=>adb('shell','input','text',character)
+  });
   observedSearch=await searchState();report.searchAfterTyping=observedSearch;
   assert.equal(observedSearch.focused,'homeLibrarySearch','Feed refresh must preserve Home input focus');
   assert.equal(observedSearch.value,code,'Native keyboard text must remain in the actual Home search input');
@@ -211,7 +216,8 @@ try {
     assert.ok(p,'Visible, hit-tested play control required');
     adb('shell','input','tap',String(Math.round(left+p.x*(right-left)/p.width)),String(Math.round(top+p.y*(bottom-top)/p.height)));
   };
-  if((await read()).video.paused)await tapPlayPause();
+  const initialPlay=await read();
+  if(initialPlay.video.paused&&initialPlay.video.startup.phase!=='loading')await tapPlayPause();
   await wait(s=>s.video&&!s.video.paused&&s.video.time>0);
   const moving=async label=>{
     const before=await read();await delay(3500);const after=await read();

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {observedAdb} from './android-adb-observer.mjs';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {typeObservedNativeText} from './android-native-text-entry.mjs';
 
 // Read the real WebView through CDP, but perform every navigation gesture with
 // Android input events. No DOM clicks or synthetic touch events stand in for UI.
@@ -95,6 +96,7 @@ try {
         hlsRecoveryAttempts:v.dataset.hlsRecoveryAttempts||null,
         hlsQualityRecovery:v.dataset.hlsQualityRecovery||null,
         hlsCurrentLevel:v.dataset.hlsCurrentLevel??null,hlsBufferedLevel:v.dataset.hlsBufferedLevel??null,
+        startup:{phase:v.dataset.startupBufferPhase||'',required:Number(v.dataset.startupBufferRequired||0),bufferAtStart:Number(v.dataset.startupBufferAtStart||0),waitMs:Number(v.dataset.startupBufferWaitMs||0),waitingCount:Number(v.dataset.startupWaitingCount||0)},
         seeking:v.seeking,rate:v.playbackRate,buffered:Array.from({length:v.buffered.length},(_,i)=>[v.buffered.start(i),v.buffered.end(i)]),
         rect:r?{x:r.x,y:r.y,width:r.width,height:r.height}:null,
         stage:stage?{x:stage.x,y:stage.y,width:stage.width,height:stage.height}:null}:null,
@@ -164,7 +166,10 @@ try {
   for(let i=0;i<30;i++) {observedSearch=await searchState();if(observedSearch.focused==='homeLibrarySearch')break;await delay(150);}
   report.searchBeforeTyping=observedSearch;
   assert.equal(observedSearch.focused,'homeLibrarySearch','Actual Android tap must focus Home search before sending text');
-  adb('shell','input','text',code);
+  await typeObservedNativeText({value:code,delay,
+    readValue:async()=>{const s=await searchState();assert.equal(s.focused,'homeLibrarySearch','Each real native key must target the focused Home search');return s.value;},
+    typeCharacter:character=>adb('shell','input','text',character)
+  });
   observedSearch=await searchState();report.searchAfterTyping=observedSearch;
   assert.equal(observedSearch.focused,'homeLibrarySearch','Feed refresh must preserve Home input focus');
   assert.equal(observedSearch.value,code,'Native keyboard text must remain in the actual Home search input');
@@ -203,7 +208,8 @@ try {
     assert.ok(p,'Visible, hit-tested play control required');
     adb('shell','input','tap',String(Math.round(left+p.x*(right-left)/p.width)),String(Math.round(top+p.y*(bottom-top)/p.height)));
   };
-  if((await read()).video.paused)await tapPlayPause();
+  const initialPlay=await read();
+  if(initialPlay.video.paused&&initialPlay.video.startup.phase!=='loading')await tapPlayPause();
   await wait(s=>s.video&&!s.video.paused&&s.video.time>0);
   const moving=async label=>{
     const before=await read();await delay(3500);const after=await read();
@@ -213,6 +219,20 @@ try {
     assert.equal(after.video.error,undefined);assert.equal(after.diagnostic,false,'Internal fallback banner must be absent');
   };
   await moving('Reported shiur starts with moving direct video');
+  const steadyStart=await read();
+  assert.ok(steadyStart.video.startup.required>=6,'Initial 1x video must wait for at least six seconds of actual buffered media');
+  assert.ok(steadyStart.video.startup.bufferAtStart+.1>=steadyStart.video.startup.required,'Actual initial Play must not precede the required real media buffer');
+  report.initialPlaybackSamples=[];
+  let previous=steadyStart;
+  for(let i=0;i<6;i++) {
+    await delay(2000);const current=await read();
+    report.initialPlaybackSamples.push({time:current.video.time,frames:current.video.frames,ready:current.video.ready,waitingCount:current.video.startup.waitingCount});
+    assert.ok(!current.video.paused&&current.video.ready>=2,'Initial playback must remain playing after its single preparation period');
+    assert.ok(current.video.time>previous.video.time+.5&&current.video.frames>previous.video.frames,'Initial picture and media clock must keep advancing');
+    assert.equal(current.video.startup.waitingCount,0,'Video must not repeat waiting/loading in the first fifteen seconds of actual playback');
+    previous=current;
+  }
+  report.checks.push({label:'Actual HLS starts after real six-second buffer and avoids repeated initial loading stalls',startup:steadyStart.video.startup,samples:report.initialPlaybackSamples.length});
 
   const initial=await read();
   assert.equal(initial.sourceType,'hls','Actual app playback must use HLS, NOT direct MP4 or Vimeo fallback');

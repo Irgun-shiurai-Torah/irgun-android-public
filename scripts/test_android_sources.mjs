@@ -9,7 +9,8 @@ class Element extends EventTarget {
     super(); this.tagName = tag; this.children = []; this.nodes = new Map(); this.dataset = {};
     this.classList = { add(){}, remove(){}, contains(){return false;}, toggle(){} };
     this.style = { setProperty(){}, removeProperty(){} };
-    this.readyState = 1; this.duration = 3663; this.currentTime = 0; this.paused = true; this.volume = 1;
+    this.readyState = 4; this.duration = 3663;
+    this.buffered = {length:1,start:()=>0,end:()=>this.duration}; this.currentTime = 0; this.paused = true; this.volume = 1;
   }
   setAttribute(){} removeAttribute(){} load(){} pause(){this.paused = true;}
   add(){}
@@ -317,7 +318,7 @@ function authRenderFixture({busy=false,mode='login'}={}) {
   const document={activeElement:fields.get('authPassword'),getElementById:id=>id==='authForm'?form():fields.get(id)};
   fields.get('authEmail').value='qa@example.test';fields.get('authPassword').value='typed-in-dom';
   const app={set innerHTML(_){fields=new Map(['authEmail','authPassword'].map(id=>[id,field(id)]));document.activeElement=null;}};
-  const context={state,document,app,tabSwipeRenderGate:{shouldDefer:()=>false},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
+  const context={state,document,app,homeSearchRenderDeferred:false,tabSwipeRenderGate:{shouldDefer:()=>false},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
     accountHtml:()=>'',shell:x=>x,playlistPickerHtml:()=>'',bind(){},syncLivePlaybackAnalytics(){},updatePlayerUi(){},refreshOfflineButtonsForKey(){}};
   const start=mainSource.indexOf('function preserveHomeSearchDraft(');
   const renderStart=mainSource.indexOf('function render()');
@@ -455,9 +456,9 @@ test('HLS handoff gives a distant segment time to decode without relaxing frame 
   const transaction=resumeFixture({readyWait:(_,id,budget)=>f.wait(f.player,id,budget)});
   assert.equal(await transaction.resume(),true,'A synchronized HLS picture decoding after nine seconds must complete the handoff');
 });
-for(const cancel of [false,true])test('HLS catch-up preserves decoded progress and restores requested speed, cancel='+cancel,async t=>{
+for(const [cancel,decodeDelay] of [[false,6000],[true,6000],[false,10000]])test('HLS catch-up preserves decoded progress and restores requested speed, cancel='+cancel+', decode='+decodeDelay,async t=>{
   t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
-  const rate=1.5,decodeDelay=6000,seeks=[],rates=[];let decodeAt=decodeDelay,lastAt=decodeAt,position=606,frames=0,currentRate=rate;
+  const rate=decodeDelay===10000?1:1.5,seeks=[],rates=[];let decodeAt=decodeDelay,lastAt=decodeAt,position=606,frames=0,currentRate=rate;
   const state={playbackSpeed:rate,watchAudioToVideoHandoff:true,watchAudioToVideoHandoffId:'lecture',nativePlayback:{mode:'AUDIO',audioIsPlaying:true,audioPlayWhenReady:true}};
   const element={paused:false,seeking:false,readyState:1,videoWidth:640,
     get playbackRate(){return currentRate;},set playbackRate(value){currentRate=value;rates.push(value);if(cancel&&value>rate)state.watchAudioToVideoHandoff=false;}};
@@ -479,7 +480,7 @@ for(const cancel of [false,true])test('HLS catch-up preserves decoded progress a
   await transaction;
   assert.ok(rates.some(value=>value>rate),'The delayed moving destination must catch up without replacing its keyframe');
   assert.equal(seeks.length,0,'Repeated seeks must not discard a decoded HLS destination');
-  assert.equal(element.playbackRate,rate,'Success and cancellation must restore the selected 1.5x speed');
+  assert.equal(element.playbackRate,rate,'Success and cancellation must restore the selected speed');
   if(cancel)assert.equal(result,null);
   else {assert.ok(result>606);assert.ok(Math.abs(result-context.playbackPositionSeconds())<=1.8,'Only synchronized advancing playback can finish');}
 });
@@ -750,12 +751,12 @@ test('A paused/stalled HLS seek is not restarted continuously while Audio contin
 
 function homeSearchRenderFixture() {
   const state={screen:'home',scheduleDataLoaded:true,liveStatusLoaded:true};
-  const field=()=>({value:'',selectionStart:4,selectionEnd:4,
+  const field=()=>({id:'homeLibrarySearch',value:'',selectionStart:4,selectionEnd:4,
     focus(){document.activeElement=this;},setSelectionRange(a,b){this.selectionStart=a;this.selectionEnd=b;}});
   let input=field();input.value='IST-DL6067';
   const document={activeElement:input,getElementById:id=>id==='homeLibrarySearch'?input:null};
   const app={set innerHTML(_){input=field();document.activeElement=null;}};
-  const context={state,document,app,tabSwipeRenderGate:{shouldDefer:()=>false},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
+  const context={state,document,app,homeSearchRenderDeferred:false,tabSwipeRenderGate:{shouldDefer:()=>false},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
     homeHtml:()=>'',accountHtml:()=>'',shiurimHtml:()=>'',shell:x=>x,playlistPickerHtml:()=>'',bind(){},
     syncLivePlaybackAnalytics(){},updatePlayerUi(){},refreshOfflineButtonsForKey(){},setTimeout(){}};
   const start=mainSource.indexOf('function preserveHomeSearchDraft('),end=mainSource.indexOf('function syncOpenFilterChecks(',start);
@@ -779,4 +780,41 @@ test('a user HLS speed change updates the shared rate; internal catch-up rates d
   runInNewContext(source.slice(begin,end),{video,speedSelect,onSpeedChange:rate=>calls.push(rate)});
   handler();assert.equal(video.playbackRate,1.5);assert.deepEqual(calls,[1.5]);
   video.playbackRate=1.18;assert.deepEqual(calls,[1.5]);
+});
+
+test('native Home search keeps the original focused input connection while feed renders are deferred',()=>{
+ const f=homeSearchRenderFixture(),original=f.input();f.render();
+ assert.equal(f.input(),original,'Pending native keys must keep their original input node');
+ original.value+='9';f.document.activeElement=null;f.render();
+ assert.notEqual(f.input(),original);assert.equal(f.input().value,'IST-DL60679');
+});
+test('Android fullscreen Back exits the actual document fullscreen without changing the lecture',async()=>{
+ const begin=mainSource.indexOf('window.__irgunExitDocumentFullscreen ='),end=mainSource.indexOf("document.addEventListener('fullscreenchange'",begin);
+ for(const webkit of [false,true]) {
+  const lecture={id:'lecture',time:641},window={};let exits=0;
+  const document=webkit?{webkitFullscreenElement:{},webkitExitFullscreen(){exits++;this.webkitFullscreenElement=null;}}:{fullscreenElement:{},async exitFullscreen(){exits++;this.fullscreenElement=null;}};
+  runInNewContext(mainSource.slice(begin,end),{document,window});await window.__irgunExitDocumentFullscreen();
+  assert.equal(exits,1);assert.deepEqual(lecture,{id:'lecture',time:641});
+ }
+});
+
+test('initial video Play waits for real bytes, deduplicates requests, and Pause cancels it',async t=>{
+ t.mock.timers.enable({apis:['setTimeout','setInterval','Date']});
+ await fixture(recoverySources,'lecture',0,{onReady:async player=>{
+  const video=player.getVideoElement();video.readyState=4;video.currentTime=0;let buffered=1,plays=0;
+  video.buffered={length:1,start:()=>0,end:()=>buffered};
+  video.play=()=>{plays++;video.paused=false;return Promise.resolve();};
+  const first=player.play(),second=player.play();assert.equal(first,second,'Pending initial Play must be one transaction');
+  await settleRecovery();t.mock.timers.tick(300);await settleRecovery();assert.equal(plays,0,'One buffered second must not start and stall playback');
+  await player.pause();t.mock.timers.tick(300);await first;assert.equal(plays,0,'Pause must cancel startup before any real Play');
+  buffered=8;await player.play();assert.equal(plays,1,'Sufficient actual media buffer releases exactly one Play');
+ }});
+});
+
+test('initial buffered Play remains allowed in actual system PiP while the Activity is hidden',async()=>{
+ await fixture(recoverySources,'lecture',0,{isPictureInPicture:()=>true,onReady:async player=>{
+  document.hidden=true;
+  await player.play();
+  assert.equal(player.getVideoElement().paused,false,'PiP must not be cancelled as a normal Home transition');
+ }});
 });

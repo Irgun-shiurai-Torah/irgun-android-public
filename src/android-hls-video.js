@@ -1,3 +1,4 @@
+import {bufferedVideoSecondsAhead, waitForInitialVideoBuffer} from './android-video-startup-buffer.js';
 const hlsLibraryPromises = new Map();
 
 function loadHls(apiBase) {
@@ -134,7 +135,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   video.className = 'watch-frame watch-direct-hls-video';
   video.controls = false;
   video.playsInline = true;
-  video.preload = 'metadata';
+  video.preload = 'auto';
   video.defaultPlaybackRate = 1;
   video.playbackRate = 1;
   video.setAttribute('playsinline', '');
@@ -174,6 +175,15 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let visualCheck = 0;
   let playbackIntent = 0;
   let playbackWanted = false;
+  let initialPlaybackStarted = false;
+  let startupPlayTask = null;
+  let startupPlayIntent = null;
+  let initialPlayingAt = 0;
+  video.dataset.startupWaitingCount = '0';
+  video.addEventListener('waiting', () => {
+    if (initialPlayingAt && Date.now() - initialPlayingAt < 15000)
+      video.dataset.startupWaitingCount = String(Number(video.dataset.startupWaitingCount || 0) + 1);
+  });
   let qualityMotionTimer = 0;
   let cancelQualityRecovery = () => {};
   const playVideo = () => { playbackWanted = true; return video.play(); };
@@ -253,7 +263,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     seekControl.value = duration ? String(Math.round(current / duration * 1000)) : '0';
   };
   const updatePlayIcon = () => {
-    const playing = !video.paused && !video.ended;
+    const playing = (!video.paused && !video.ended) || (playbackWanted && !initialPlaybackStarted);
     playButton.textContent = playing ? 'Ⅱ' : '▶';
     playButton.setAttribute('aria-label', window.IST_I18N?.t?.(playing ? 'Pause' : 'Play') || (playing ? 'Pause' : 'Play'));
   };
@@ -274,7 +284,8 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   video.addEventListener('canplay', () => { if (hasVisibleFrame) loading.hidden = true; });
   video.addEventListener('volumechange', updateVolumeIcon);
   updateVolumeIcon();
-  const togglePlayback = () => video.paused ? playVideo().catch(() => {}) : pausePlayback();
+  const togglePlayback = () => video.paused && (initialPlaybackStarted || !playbackWanted)
+    ? adapter.play().catch(() => {}) : pausePlayback();
   playButton.addEventListener('click', togglePlayback);
   video.addEventListener('pointerdown', event => {
     if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
@@ -503,7 +514,14 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   };
   // A play event can fire before a remote HLS segment has arrived. Start the
   // visual deadline only once the browser reports actual playback.
-  video.addEventListener('playing', () => { if (!hasVisibleFrame && !recoveryInProgress) void checkVisualPlayback(); });
+  video.addEventListener('playing', () => {
+    if (!initialPlaybackStarted) {
+      initialPlaybackStarted = true;
+      initialPlayingAt = Date.now();
+      video.dataset.startupBufferAtStart = String(bufferedVideoSecondsAhead(video));
+    }
+    if (!hasVisibleFrame && !recoveryInProgress) void checkVisualPlayback();
+  });
   const onVisibilityChange = () => {
     if (document.hidden && !isPictureInPicture() && !destroyed) {
       // Android may pause the element without cancelling a queued play or HLS
@@ -719,9 +737,41 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   adapter.pause = pausePlayback;
   adapter.play = () => {
     const intent = playbackIntent;
-    return readyPromise.then(() => {
-      if (!destroyed && intent === playbackIntent) return playVideo();
-    });
+    if (startupPlayTask && startupPlayIntent === intent) return startupPlayTask;
+    playbackWanted = true;
+    updatePlayIcon();
+    startupPlayIntent = intent;
+    const cancelled = () => destroyed || intent !== playbackIntent || (document.hidden && !isPictureInPicture());
+    const task = readyPromise.then(async () => {
+      if (cancelled()) return;
+      if (!initialPlaybackStarted) {
+        loading.hidden = false;
+        video.dataset.startupBufferPhase = 'loading';
+        const buffered = await waitForInitialVideoBuffer(video, {
+          isCancelled:cancelled,
+          onSample:sample => {
+            video.dataset.startupBufferRequired = String(sample.required);
+            video.dataset.startupBufferAhead = String(sample.ahead);
+          }
+        });
+        if (!buffered || cancelled()) return;
+        video.dataset.startupBufferPhase = 'ready';
+        video.dataset.startupBufferWaitMs = String(buffered.elapsedMs);
+      }
+      if (!cancelled()) return playVideo();
+    }).catch(error => {
+      if (!cancelled()) {
+        playbackWanted = false;
+        updatePlayIcon();
+        video.dataset.startupBufferPhase = 'failed';
+        loading.hidden = false;
+        const label = 'Connection is slow. Tap Play to retry.';
+        loading.textContent = window.IST_I18N?.t?.(label) || label;
+      }
+      throw error;
+    }).finally(() => { if (startupPlayTask === task) startupPlayTask = null; });
+    startupPlayTask = task;
+    return task;
   };
   // Keep the adapter's reference to the HLS instance current after attachment and recovery.
   adapter.destroy = () => { destroyed = true; clearInterval(stalledPlaybackWatchdog); ++visualCheck; clearTimeout(qualityMotionTimer); cancelQualityRecovery(); clearTimeout(singleTapTimer); clearTimeout(seekHintTimer); document.removeEventListener('visibilitychange', onVisibilityChange); try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
