@@ -19,6 +19,7 @@ on:
       - 'scripts/test_android_native_tap_point.mjs'
       - 'scripts/android-emulator-prepare.py'
       - 'scripts/test_android_emulator_prepare.mjs'
+      - 'scripts/android-emulator-sdk-preflight.sh'
       - 'scripts/test_android_offline_account.mjs'
       - 'scripts/test_android_network_evidence.mjs'
       - 'scripts/android-network-evidence.mjs'
@@ -100,6 +101,8 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      - name: Validate emulator SDK download for Android API ${{ matrix.api-level }}
+        run: bash scripts/android-emulator-sdk-preflight.sh ${{ matrix.api-level }}
       - name: Logged-out Android media, interruptions, notification controls, offline restart, rotation and speed
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -159,6 +162,8 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      - name: Validate Android 11 emulator SDK download
+        run: bash scripts/android-emulator-sdk-preflight.sh 30
       - name: Play a real shiur continuously for 15 minutes with screen locks and Home reopening
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -271,6 +276,8 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      - name: Validate emulator SDK download for Android API ${{ matrix.api-level }}
+        run: bash scripts/android-emulator-sdk-preflight.sh ${{ matrix.api-level }}
       - name: Native account and separate logged-in playback, offline restart and history sync
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -339,6 +346,8 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      - name: Validate emulator SDK download for Android API ${{ matrix.api-level }}
+        run: bash scripts/android-emulator-sdk-preflight.sh ${{ matrix.api-level }}
       - name: Prove moving HLS video frames and native quality change, no MP4 fallback
         uses: reactivecircus/android-emulator-runner@v2
         with:
