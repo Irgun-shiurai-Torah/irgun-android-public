@@ -28,10 +28,10 @@ function durationSeconds(value) {
 
 export function mediaNotificationClock(xml) {
   const visible = nodes(xml).filter(node => systemNode(node) && /visible="true"/.test(node));
-  const bar = visible.find(node => /media_progress_bar|android.widget.SeekBar/.test(node));
+  const bar = visible.find(node => /media_progress_bar/.test(attribute(node, 'resource-id')));
   const elapsedNode = visible.find(node => /elapsedTime|elapsed_time/.test(attribute(node, 'resource-id')));
   const value = bar ? attribute(bar, 'content-desc') : elapsedNode ? attribute(elapsedNode, 'text') : '';
-  const seconds = durationSeconds(value);
+  const seconds = durationSeconds(value) ?? (elapsedNode ? durationSeconds(attribute(elapsedNode, 'text')) : null);
   assert.ok(seconds != null, 'Actual Android notification must expose its elapsed media timer');
   return seconds;
 }

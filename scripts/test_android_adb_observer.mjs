@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {observedAdb} from './android-adb-observer.mjs';
+import {observedAdb, discoverAppWebView} from './android-adb-observer.mjs';
 
 const offline=()=>Object.assign(new Error('adb: device offline'),{stderr:'adb: device offline'});
 test('a transient keyboard-state read resumes only after the same Irgun process returns',()=>{
@@ -31,4 +31,22 @@ test('a permanent ADB disconnect remains failed and no input command is repeated
   assert.throws(()=>adb('shell','dumpsys','input_method'),/offline/);
   const before=calls.length;assert.throws(()=>adb('shell','input','tap','20','30'),/offline/);
   assert.equal(calls.length,before+1,'A failed gesture must never be repeated');
+});
+
+test('post-account WebView discovery waits for the same actual socket and never restarts the app',async()=>{
+ const calls=[],report={};let reads=0;
+ const adb=(...args)=>{calls.push(args.join(' '));return args[1]==='pidof'?'2396':'';};
+ const page={type:'page',url:'https://localhost',webSocketDebuggerUrl:'ws://actual'};
+ const result=await discoverAppWebView({adb,report,delay:async()=>{},fetchImpl:async()=>{
+  if (++reads===1) throw Object.assign(new TypeError('fetch failed'),{cause:{code:'ECONNRESET'}});
+  return {ok:true,json:async()=>reads===2?[]:[page]};
+ }});
+ assert.equal(result,page);assert.equal(reads,3);assert.equal(report.webViewDiscovery.length,2);
+ assert.ok(calls.every(x=>!x.includes('am start')&&!x.includes('force-stop')&&!x.includes('input')));
+});
+test('permanent socket failure, process change and HTTP errors remain failures',async()=>{
+ const adb=(...args)=>args[1]==='pidof'?'2396':'';
+ await assert.rejects(discoverAppWebView({adb,report:{},attempts:2,delay:async()=>{},fetchImpl:async()=>{throw new TypeError('fetch failed');}}),/bounded discovery/);
+ let n=0;await assert.rejects(discoverAppWebView({adb:(...args)=>args[1]==='pidof'?String(++n===1?2396:4000):'',report:{}}),/process changed/);
+ await assert.rejects(discoverAppWebView({adb,report:{},fetchImpl:async()=>({ok:false,status:500})}),/HTTP 500/);
 });

@@ -4,29 +4,15 @@ const hlsLibraryPromises = new Map();
 function loadHls(apiBase) {
   if (window.Hls) return Promise.resolve(window.Hls);
   if (hlsLibraryPromises.has(apiBase)) return hlsLibraryPromises.get(apiBase);
-  const promise = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = `${apiBase}/media-player/hls.js`;
-    script.async = true;
-    const timer = setTimeout(() => {
-      script.remove();
-      hlsLibraryPromises.delete(apiBase);
-      reject(new Error('HLS player library timed out'));
-    }, 12000);
-    script.onload = () => {
-      clearTimeout(timer);
-      if (window.Hls) resolve(window.Hls);
-      else {
-        hlsLibraryPromises.delete(apiBase);
-        reject(new Error('HLS player library unavailable'));
-      }
-    };
-    script.onerror = () => {
-      clearTimeout(timer);
-      hlsLibraryPromises.delete(apiBase);
-      reject(new Error('HLS player library failed to load'));
-    };
-    document.head.appendChild(script);
+  // Ship the decoder SDK (including its inline worker) with the APK. Starting
+  // a supported HLS lecture must not depend on another remote script request.
+  const promise = import('hls.js/dist/hls.min.js').then(module => {
+    const Hls = module.default || window.Hls;
+    if (typeof Hls?.isSupported !== 'function') throw new Error('Bundled HLS player library unavailable');
+    return Hls;
+  }).catch(error => {
+    hlsLibraryPromises.delete(apiBase);
+    throw error;
   });
   hlsLibraryPromises.set(apiBase, promise);
   return promise;
@@ -35,6 +21,7 @@ function loadHls(apiBase) {
 function makePlayerAdapter(video, stage, getHls, readyPromise) {
   const listeners = new Map();
   const emit = (name, data) => {
+    if (video.dataset.startupBufferPhase === 'priming' && ['play','pause','timeupdate','ended'].includes(name)) return;
     for (const callback of listeners.get(name) || []) {
       try { callback(data); } catch (error) { console.warn('HLS player listener failed', error); }
     }
@@ -178,6 +165,8 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let initialPlaybackStarted = false;
   let startupPlayTask = null;
   let startupPlayIntent = null;
+  let desiredMuted = Boolean(video.muted);
+  let startupPrime = null;
   let initialPlayingAt = 0;
   video.dataset.startupWaitingCount = '0';
   video.addEventListener('waiting', () => {
@@ -194,6 +183,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     clearTimeout(qualityMotionTimer);
     cancelQualityRecovery();
     video.pause();
+    if (startupPrime) { startupPrime = null; video.muted = desiredMuted; }
     return Promise.resolve();
   };
   let hasVisibleFrame = false;
@@ -341,10 +331,10 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     const duration = Number(video.duration) || 0;
     if (duration) video.currentTime = duration * Number(seekControl.value) / 1000;
   });
-  muteButton.addEventListener('click', () => { video.muted = !video.muted; });
+  muteButton.addEventListener('click', () => { desiredMuted = !desiredMuted; video.muted = startupPrime ? true : desiredMuted; });
   volumeControl.addEventListener('input', () => {
     video.volume = Number(volumeControl.value);
-    if (video.volume > 0) video.muted = false;
+    if (video.volume > 0) { desiredMuted = false; video.muted = Boolean(startupPrime); }
   });
   speedSelect.addEventListener('change', () => {
     const rate = Number(speedSelect.value) || 1;
@@ -515,6 +505,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   // A play event can fire before a remote HLS segment has arrived. Start the
   // visual deadline only once the browser reports actual playback.
   video.addEventListener('playing', () => {
+    if (video.dataset.startupBufferPhase === 'priming') return;
     if (!initialPlaybackStarted) {
       initialPlaybackStarted = true;
       initialPlayingAt = Date.now();
@@ -527,6 +518,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       // Android may pause the element without cancelling a queued play or HLS
       // recovery. Cancel that intent before Home suspends JS, so revealing this
       // WebView cannot steal audio focus back from the native Audio owner.
+      desiredMuted = true;
       video.muted = true;
       void pausePlayback();
       return;
@@ -535,7 +527,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   };
   document.addEventListener('visibilitychange', onVisibilityChange);
   stalledPlaybackWatchdog = setInterval(() => {
-    if (destroyed || recoveryInProgress || document.hidden || video.paused || video.ended ||
+    if (destroyed || recoveryInProgress || video.dataset.startupBufferPhase === 'priming' || document.hidden || video.paused || video.ended ||
         !activeSource || video.seeking || video.readyState < 2) {
       lastMotionAt = Date.now();
       previousClock = Number(video.currentTime) || 0;
@@ -722,6 +714,8 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       if (sources.hls) {
         try { await attachSource(sources.hls, true); }
         catch (hlsError) {
+          video.dataset.hlsFallbackReason = String(hlsError?.message || hlsError);
+          console.warn('[Playback] HLS attachment failed', hlsError);
           if (!sources.mp4) throw hlsError;
           await attachSource(sources.mp4, false);
         }
@@ -735,6 +729,11 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   })();
   const adapter = makePlayerAdapter(video, stage, () => hls, readyPromise);
   adapter.pause = pausePlayback;
+  adapter.setMuted = muted => {
+    desiredMuted = Boolean(muted);
+    video.muted = startupPrime ? true : desiredMuted;
+    return Promise.resolve(desiredMuted);
+  };
   adapter.play = () => {
     const intent = playbackIntent;
     if (startupPlayTask && startupPlayIntent === intent) return startupPlayTask;
@@ -747,16 +746,48 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       if (!initialPlaybackStarted) {
         loading.hidden = false;
         video.dataset.startupBufferPhase = 'loading';
-        const buffered = await waitForInitialVideoBuffer(video, {
-          isCancelled:cancelled,
-          onSample:sample => {
-            video.dataset.startupBufferRequired = String(sample.required);
-            video.dataset.startupBufferAhead = String(sample.ahead);
+        const startupStartedAt = Date.now();
+        const startPosition = Number(video.currentTime) || 0;
+        const prime = {intent};
+        let priming = false, primingError;
+        let buffered;
+        try {
+          buffered = await waitForInitialVideoBuffer(video, {
+            isCancelled:cancelled,
+            onSample:sample => {
+              if (primingError) throw primingError;
+              video.dataset.startupBufferRequired = String(sample.required);
+              video.dataset.startupBufferAhead = String(sample.ahead);
+              // Some WebViews preload only ~2 seconds of MP4 while paused,
+              // despite preload=auto. Prime that real decoder silently under the
+              // loading cover, then restore the exact requested start position.
+              if (!priming && activeSource !== sources.hls && sample.elapsedMs >= 1500) {
+                priming = true;
+                startupPrime = prime;
+                video.dataset.startupBufferPhase = 'priming';
+                video.muted = true;
+                void video.play().catch(error => { primingError = error; });
+              }
+            }
+          });
+          if (priming && startupPrime === prime) {
+            video.pause();
+            if (!cancelled()) {
+              video.currentTime = startPosition;
+              await new Promise(resolve => setTimeout(resolve, 0));
+              buffered = await waitForInitialVideoBuffer(video, {timeoutMs:3000,isCancelled:cancelled});
+            }
           }
-        });
+        } finally {
+          if (priming && startupPrime === prime) {
+            video.pause();
+            startupPrime = null;
+            video.muted = desiredMuted;
+          }
+        }
         if (!buffered || cancelled()) return;
         video.dataset.startupBufferPhase = 'ready';
-        video.dataset.startupBufferWaitMs = String(buffered.elapsedMs);
+        video.dataset.startupBufferWaitMs = String(Date.now() - startupStartedAt);
       }
       if (!cancelled()) return playVideo();
     }).catch(error => {

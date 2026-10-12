@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import {observedAdb} from './android-adb-observer.mjs';
+import {observedAdb, discoverAppWebView} from './android-adb-observer.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
 import {typeObservedNativeText} from './android-native-text-entry.mjs';
 
@@ -12,11 +12,7 @@ const report = { gestures: [], checks: [] };
 const adb = observedAdb(report);
 let ws;
 try {
-  const pid = adb('shell', 'pidof', 'org.irgunshiuraitorah.app').split(/\s+/)[0];
-  adb('forward', 'tcp:9222', `localabstract:webview_devtools_remote_${pid}`);
-  const pages = await (await fetch('http://127.0.0.1:9222/json/list')).json();
-  const page = pages.find(p => p.type === 'page' && /localhost/.test(p.url));
-  assert.ok(page?.webSocketDebuggerUrl, 'App WebView must be inspectable');
+  const page = await discoverAppWebView({adb,report});
   ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('CDP connection timeout')), 10000);

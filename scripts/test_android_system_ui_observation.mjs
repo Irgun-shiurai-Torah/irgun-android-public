@@ -21,6 +21,17 @@ test('notification never substitutes status bar clock or hidden media timer', ()
 test('notification supports separately visible elapsed-time text', () => {
   assert.equal(mediaNotificationClock(node('resource-id="com.android.systemui:id/elapsedTime" text="12:29"')),749);
 });
+
+test('actual Android 11 brightness slider and unlabeled media bar use the visible media elapsed text',()=>{
+ const xml=node('resource-id="com.android.systemui:id/slider" class="android.widget.SeekBar" text="Display brightness" content-desc=""')+
+   node('resource-id="com.android.systemui:id/media_progress_bar" class="android.widget.SeekBar" content-desc=""')+
+   node('resource-id="com.android.systemui:id/media_elapsed_time" text="12:28"')+
+   node('resource-id="com.android.systemui:id/media_total_time" text="1:01:03"');
+ assert.equal(mediaNotificationClock(xml),748);
+ assert.equal(mediaNotificationClock(xml.replace('12:28','12:32')),752);
+ assert.throws(()=>mediaNotificationClock(node('resource-id="com.android.systemui:id/slider" class="android.widget.SeekBar" content-desc="12:32"')),
+   /elapsed media timer/,'Brightness/status clocks must never masquerade as playback time');
+});
 test('fullscreen education dismisses only the real identified SystemUI prompt', () => {
   const xml=node('text="Viewing full screen"')+node('text="Got it" clickable="true" bounds="[212,181][296,230]"');
   assert.deepEqual(fullscreenEducationTapPoint(xml),[254,206]);

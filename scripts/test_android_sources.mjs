@@ -10,7 +10,7 @@ class Element extends EventTarget {
     this.classList = { add(){}, remove(){}, contains(){return false;}, toggle(){} };
     this.style = { setProperty(){}, removeProperty(){} };
     this.readyState = 4; this.duration = 3663;
-    this.buffered = {length:1,start:()=>0,end:()=>this.duration}; this.currentTime = 0; this.paused = true; this.volume = 1;
+    this.buffered = {length:1,start:()=>0,end:()=>this.duration}; this.currentTime = 0; this.paused = true; this.volume = 1; this.muted = false;
   }
   setAttribute(){} removeAttribute(){} load(){} pause(){this.paused = true;}
   add(){}
@@ -852,6 +852,44 @@ test('initial buffered Play remains allowed in actual system PiP while the Activ
   document.hidden=true;
   await player.play();
   assert.equal(player.getVideoElement().paused,false,'PiP must not be cancelled as a normal Home transition');
+ }});
+});
+
+test('the observed paused MP4 two-second preload is primed silently and starts once at the requested position',async t=>{
+ t.mock.timers.enable({apis:['setTimeout','setInterval','Date']});
+ await fixture({video:{mp4:'https://media.example.test/video.mp4'}},'lecture',723,{onReady:async player=>{
+  const video=player.getVideoElement();video.readyState=4;video.videoWidth=1920;let end=725.282667;
+  video.buffered={length:1,start:()=>723,end:()=>end};const plays=[],events=[];
+  player.on('play',()=>events.push({kind:'play',time:video.currentTime}));
+  player.on('timeupdate',()=>events.push({kind:'time',time:video.currentTime}));
+  video.play=()=>{video.paused=false;plays.push({muted:video.muted,time:video.currentTime});video.dispatchEvent(new Event('play'));video.dispatchEvent(new Event('playing'));return Promise.resolve();};
+  const first=player.play(),duplicate=player.play();assert.equal(first,duplicate);
+  await settleRecovery();
+  t.mock.timers.tick(1600);await settleRecovery();
+  assert.equal(plays.length,1);assert.equal(plays[0].muted,true,'Decoder priming must not emit speech before enough bytes exist');
+  video.currentTime=724;video.dispatchEvent(new Event('timeupdate'));assert.deepEqual(events,[],'Hidden priming must not publish playback/history at a different position');
+  end=739;t.mock.timers.tick(200);await settleRecovery();t.mock.timers.tick(1);await settleRecovery();await first;
+  assert.equal(plays.length,2);assert.equal(plays[1].muted,false);assert.equal(plays[1].time,723,'Actual media seek restores the requested position');
+  assert.deepEqual(events,[{kind:'play',time:723}]);assert.equal(video.dataset.startupBufferPhase,'ready');
+  assert.ok(Number(video.dataset.startupBufferAtStart)>=6,'Start still requires actual media runway');
+ }});
+});
+
+for (const cancellation of ['pause','home','audio']) test('MP4 decoder priming respects '+cancellation+' and cannot pause a newer Play',async t=>{
+ t.mock.timers.enable({apis:['setTimeout','setInterval','Date']});
+ await fixture({video:{mp4:'https://media.example.test/video.mp4'}},'lecture',723,{onReady:async player=>{
+  const video=player.getVideoElement();let end=725;video.buffered={length:1,start:()=>723,end:()=>end};
+  const first=player.play();await settleRecovery();t.mock.timers.tick(1600);await settleRecovery();
+  assert.equal(video.muted,true);assert.equal(video.paused,false);
+  if(cancellation==='home'){document.hidden=true;document.dispatchEvent(new Event('visibilitychange'));}
+  else {if(cancellation==='audio')await player.setMuted(true);await player.pause();}
+  assert.equal(video.paused,true);assert.equal(video.muted,cancellation!=='pause');
+  if(cancellation==='pause') {
+   end=739;await player.play();assert.equal(video.paused,false);assert.equal(video.muted,false);
+  }
+  t.mock.timers.tick(200);await settleRecovery();await first;
+  assert.equal(video.paused,cancellation!=='pause','Cancelled priming cannot stop a newer foreground playback');
+  assert.equal(video.muted,cancellation!=='pause','Only the intended playback owner may produce speech');
  }});
 });
 

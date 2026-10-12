@@ -5,12 +5,59 @@ import {mkdtempSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
+test('actual native network recovery retains the engine, source, authority and user Pause with bounded attempts',()=>{
+ const source=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java','utf8');
+ const start=source.indexOf('    private void cancelNetworkRecovery()'),end=source.indexOf('    @Override\n    public void onCreate()',start);
+ const methods=source.slice(start,end);assert.ok(methods.includes('ERROR_CODE_IO_NETWORK_CONNECTION_FAILED'));
+ assert.match(source,/if \(scheduleNetworkRecovery\(error.errorCode\)\) return;/);
+ assert.match(source,/if \(networkRecoveryPending && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST\)/);
+ assert.match(source,/if \(networkRecoveryPending && player.getPlayerError\(\) == null\) cancelNetworkRecovery\(\)/);
+ assert.match(source,/registerDefaultNetworkCallback\(networkCallback\)/);
+ assert.match(readFileSync('android/app/src/main/AndroidManifest.xml','utf8'),/android.permission.ACCESS_NETWORK_STATE/);
+ const dir=mkdtempSync(join(tmpdir(),'irgun-network-'));
+ try {
+  const path=join(dir,'NativeNetworkRegression.java');
+  writeFileSync(path,`public class NativeNetworkRegression {
+   enum PlaybackMode {VIDEO,AUDIO}
+   static class PlaybackException {static final int ERROR_CODE_IO_NETWORK_CONNECTION_FAILED=2001,ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT=2002;}
+   static class ExoPlayer {long position=24933;boolean wanted=true;int prepares;float volume=0;boolean getPlayWhenReady(){return wanted;}long getCurrentPosition(){return position;}void setVolume(float v){volume=v;}void seekTo(long p){position=p;}void prepare(){prepares++;}void setPlayWhenReady(boolean v){wanted=v;}}
+   static class Handler {Runnable pending;void removeCallbacks(Runnable r){if(pending==r)pending=null;}void postDelayed(Runnable r,long delay){pending=r;}}
+   static class Log {static void d(String tag,String text){}}
+   static final String TAG="test";ExoPlayer player=new ExoPlayer();Handler mainHandler=new Handler();
+   String lectureId="lecture",audioUrl="https://api.example/audio/lecture";PlaybackMode playbackMode=PlaybackMode.VIDEO;
+   boolean networkRecoveryPending,networkRecoveryWanted,syncingVideoShadow,externalVideoPlaying=true;float logicalVolume=1;long networkRecoveryPositionMs,networkRecoveryGeneration,externalVideoPositionMs=28690;int networkRecoveryAttempts;Runnable networkRecoveryRunnable;
+   void suppressVideoMirrorCallbacks(){}void setCandidateAudioFocus(boolean value){}void publishNativeState(){}void refreshMediaNotification(){}
+   ${methods}
+   static void require(boolean value,String message){if(!value)throw new AssertionError(message);}
+   void run(){Runnable task=mainHandler.pending;require(task!=null,"Actual retry must be queued");mainHandler.pending=null;task.run();}
+   public static void main(String[] args){
+    NativeNetworkRegression s=new NativeNetworkRegression();ExoPlayer engine=s.player;
+    require(s.scheduleNetworkRecovery(2001),"Observed Wi-Fi disconnect is recoverable");s.run();
+    require(s.player==engine&&s.player.position==28690&&s.player.volume==0&&s.player.wanted,"Video recovery uses its real clock in the same silent shadow");
+    require(s.lectureId.equals("lecture")&&s.playbackMode==PlaybackMode.VIDEO,"A network failure cannot clear or replace the visible lecture");
+    s.scheduleNetworkRecovery(2001);s.run();s.scheduleNetworkRecovery(2002);s.run();s.scheduleNetworkRecovery(2001);
+    require(s.player.prepares==3&&s.mainHandler.pending==null&&s.networkRecoveryPending,"Exhaustion waits for real connectivity; no fake readiness or endless retry");
+    s.networkRecoveryAttempts=0;s.queueNetworkRecovery(250);s.run();require(s.player.prepares==4,"Actual network return can restart the bounded retry budget");
+    s.cancelNetworkRecovery();s.playbackMode=PlaybackMode.AUDIO;s.player.position=743000;s.player.wanted=true;s.scheduleNetworkRecovery(2001);
+    s.networkRecoveryWanted=false;s.run();require(s.player.position==743000&&!s.player.wanted&&s.player.volume==1,"User Pause while disconnected must remain Pause at its saved Audio position");
+    s.cancelNetworkRecovery();s.scheduleNetworkRecovery(2001);Runnable stale=s.mainHandler.pending;int before=s.player.prepares;s.cancelNetworkRecovery();stale.run();require(s.player.prepares==before,"Stop cancels old asynchronous recovery");
+    s.scheduleNetworkRecovery(2001);stale=s.mainHandler.pending;s.audioUrl="https://api.example/audio/another";stale.run();require(s.player.prepares==before,"Stale callbacks cannot restart another source");s.cancelNetworkRecovery();
+    require(!s.scheduleNetworkRecovery(2004)&&!s.scheduleNetworkRecovery(2005),"HTTP/file failures are not fabricated network successes");
+    s.audioUrl="file:///private/lecture.mp3";require(!s.scheduleNetworkRecovery(2001),"File corruption cannot be retried as transport failure");
+    System.out.println("passed");
+   }
+  }`);
+  execFileSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,path],{stdio:'pipe'});
+  assert.match(execFileSync('java',['-cp',dir,'NativeNetworkRegression'],{encoding:'utf8'}),/passed/);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
 test('actual native Home readiness accepts an advancing shadow and rebinds only the session view',()=>{
  const source=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java','utf8');
  const begin=source.indexOf('    private void continueBackgroundHandoffIfReady()');
  const home=source.slice(begin,source.indexOf('    private void confirmBackgroundVideoPausedInternal(',begin));
  const refreshStart=source.indexOf('    private void refreshMediaNotification()');
- const refresh=source.slice(refreshStart,source.indexOf('    @Override',refreshStart));
+ const refresh=source.slice(refreshStart,source.indexOf('\n    }\n',refreshStart)+7);
  const callbackStart=source.indexOf('public void onIsPlayingChanged('),callbackEnd=source.indexOf('                @Override',callbackStart);
  assert.match(source.slice(callbackStart,callbackEnd),/if \(isPlaying && pendingBackgroundHandoff\) continueBackgroundHandoffIfReady\(\)/,
   'READY may precede isPlaying: the actual listener must resume the waiting handoff');
@@ -156,6 +203,7 @@ public final class NativeMetadataRegression {
   static String cleanStatic(String value) {return value==null?"":value.trim();}
   static float clamp01(float value) {return Math.max(0,Math.min(1,value));}
   void publishNativeState() {} void suppressVideoMirrorCallbacks() {} void setCandidateAudioFocus(boolean committed) {}
+  void cancelNetworkRecovery() {}
   void ensureAudioMediaItemInternal(long target) {if(player.items==0){player.items=1;player.position=target;}}
   ${method}
   void load(String id,String url,long position) {

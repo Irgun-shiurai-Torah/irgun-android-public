@@ -434,3 +434,64 @@ the observed HLS catch-up stall with/without cached media. Vite build, script
 syntax and whitespace checks passed. Full SDK compilation and new emulator
 results remain pending. No failing assertion was disabled or changed to a fake
 success. PR #35 remains draft and unmerged.
+
+
+## Run #81: completed results and transport/startup corrections
+
+[Regression #81](https://github.com/Irgun-shiurai-Torah/irgun-android-public/actions/runs/38305569143)
+on `cc445512fafe8a62e644243f8c81ccb8279d705a` finished **6 successful jobs and
+9 failed jobs**. All nine actual failed job logs were read, along with their
+JSON evidence, relevant Android traces and failure screenshots. Job conclusions
+are not substituted for individual scenario verification.
+
+Actual verified results:
+- All four logged-out native baselines completed all **11 checks**, including
+  actual ten-minute Audio/Video synchronization and moving audible picture.
+- HLS API 30/34/36 each passed seven checks with moving decoded picture,
+  buffered startup, real quality changes preserving position and blocked Vimeo.
+  HLS API 35 failed and is not counted as passed. MP3 bytes and HLS HTTP passed.
+- All four native account reports completed **27 checks**: wrong-password denial,
+  real QA login/name, Like/Unlike, Watch Later, Follow/Unfollow, comment CRUD and
+  deletion surviving restart, playlist create/add/remove, name/flags/history
+  persistence, logout/relogin, actual-token external revocation/401 and cleared
+  session after restart. QA comments/playlists were cleaned. Independent
+  authenticated comments and account/session probes passed on all four versions.
+  This does not imply the separate signed-in playback matrix passed.
+- Native API 30/34/35 verified actual MP3 download, offline advancing playback,
+  process restart offline, physical Cancel retaining the file while Video moves,
+  physical Remove and actual filesystem absence. API 36 did not complete these.
+- API 34/35/36 background notification buttons, advancing visible timer and
+  notification reopening passed. API 30's timer observation failed as below.
+- The API 30 mixed reliability session passed **900,097 ms**, including repeated
+  Audio/Video and mini/full transitions, Home, locks, unchanged app process and
+  moving media. PSS baseline 142,230 KB / peak 149,584 KB stayed within its budget.
+
+| Failed job/device and actual scenario | Expected versus observed; likely cause | Correction; next runtime status |
+| --- | --- | --- |
+| Native API 30: Home notification timer | Actual elapsed media time must be readable and advance. XML exposes 12:28, but the parser selected the brightness SeekBar, whose description is empty | Select only the actual media progress resource; read its visible elapsed text where the progress description is empty. Brightness/status clocks still fail. Pending emulator rerun |
+| Native API 30/34/35: network interruption, subsequent slow transport/locks/speed | The same native lecture must survive disconnection and recover. Logs show `ERROR_CODE_IO_NETWORK_CONNECTION_FAILED` followed by JavaScript disabling native playback for the session and `stopAudio(clearLecture:true)`; later snapshots have an empty lecture despite moving WebView video | Bounded same-engine HTTPS transport recovery, plus a real connectivity-return callback. Keep actual position, Pause intent and Audio/Video volume ownership; cancel stale source/Stop callbacks. HTTP/file errors still fail normally. Pending emulator rerun |
+| HLS API 35: actual HLS picture/source and initial buffer | HLS-supported lecture must remain HLS with moving picture. Actual source fell back to MP4, paused at zero with only 2.282667 seconds buffered, never meeting six-second startup requirement. Original HLS attachment error was not captured, so its exact cause is unverified | Bundle the HLS SDK/inline worker in the APK, capture actual attachment failure reasons, and silently prepare a stalled paused MP4 decoder under the loading cover before restoring its requested position. The HLS-only assertion stays unchanged. Pending emulator rerun |
+| Account API 30 and native API 36: Hebrew/English reopen, followed by media scenarios | Reopened Video should regain moving audible authority. Actual fresh MP4 stayed paused/muted with only a short preload while native Audio advanced; later dependent media scenarios failed. No pass is claimed for these downstream scenarios | Silent initial MP4 decoder preparation still requires real six-second buffered media, restores the actual position, suppresses preparatory playback/history events, and respects Pause/Home/Audio/new Play cancellation. Pending emulator rerun |
+| Account API 34/35/36: separate signed-in playback baseline | Baseline must execute actual checks. All three stopped with `TypeError: fetch failed`, zero checks and no CDP/catalog/source observations, immediately after account cleanup's process relaunch | Bounded read-only discovery of the same real app process's WebView socket; log actual attempts and fail on process change, HTTP errors or exhausted discovery. No app restart or fake page is used. Pending emulator rerun |
+| Native API 36: offline Library Downloads navigation | Physical Downloads tab must be reachable. Screenshot shows Hebrew RTL tabs, Downloads beyond the left edge; repeated LTR swipes never expose the target | Observe actual tab-strip direction and reverse physical Android swipe for RTL. Still require real settled target, offline playback/restart and file deletion. Pending emulator rerun |
+| Native API 36: small-screen English/Hebrew setup | Both real translated layouts must be tested. A previous failed section left Hebrew active; English-only setup then timed out | Physically restore English when needed before testing both actual layouts. Original failed language/media section remains failed. Pending emulator rerun |
+
+Native API 30/34/35 later failures share the cleared native session; native API
+36 later failures follow failed reopen/offline navigation. These are still
+failed/unverified scenarios, not proof that each dependent feature separately
+has a distinct defect. Signed-in API 34/35/36 playback executed zero checks.
+
+Next-head local validation: **150 checks passed, zero skipped**, including actual
+extracted Java recovery methods, bounded retry/Pause/stale source cancellation,
+MP4 two-second preload and exact-position restore, Pause/Home/Audio cancellation,
+newer-Play ownership, observed Android 11 timer XML, and real-socket discovery
+failure cases. Vite build, changed script syntax and whitespace checks passed.
+Full Android SDK compilation and complete new emulator results remain pending.
+PR #35 remains draft and unmerged. No failing assertion was weakened, disabled,
+or replaced by a fake successful response.
+
+Still unverified: another valid user's comment ownership (second dedicated QA
+account needed), time-based expiry distinct from tested actual revocation,
+physical Bluetooth/headset/call behavior and manufacturer battery restrictions,
+all translation pages, and a full 30-minute session. The 15-minute pass must not
+be reported as 30 minutes or proof of no possible memory leak.

@@ -575,9 +575,9 @@ try{
       assert.equal(restarted.isLoggedIn,process.env.IRGUN_EXPECT_SIGNED_IN==='1','Offline restart must retain the declared account session');
       await tap('.bottom-nav [data-nav="library"]');
       for(let i=0;i<7&&!await hit('[data-library-section="downloads"]');i++) {
-        const strip=JSON.parse(await evaluate('JSON.stringify((()=>{const r=document.querySelector(".library-tabs-scroll")?.getBoundingClientRect();return r?{x:r.x,y:r.y,w:r.width,h:r.height,width:innerWidth,height:innerHeight}:null;})())'));
+        const strip=JSON.parse(await evaluate('JSON.stringify((()=>{const r=document.querySelector(".library-tabs-scroll")?.getBoundingClientRect();return r?{x:r.x,y:r.y,w:r.width,h:r.height,width:innerWidth,height:innerHeight,rtl:getComputedStyle(document.querySelector(".library-tabs-scroll")).direction==="rtl"}:null;})())'));
         assert.ok(strip,'Actual Library tab strip must render offline');
-        const from=nativeXY({x:strip.x+strip.w*.82,y:strip.y+strip.h*.5,width:strip.width,height:strip.height}),to=nativeXY({x:strip.x+strip.w*.18,y:strip.y+strip.h*.5,width:strip.width,height:strip.height});
+        const from=nativeXY({x:strip.x+strip.w*(strip.rtl?.18:.82),y:strip.y+strip.h*.5,width:strip.width,height:strip.height}),to=nativeXY({x:strip.x+strip.w*(strip.rtl?.82:.18),y:strip.y+strip.h*.5,width:strip.width,height:strip.height});
         adb('shell','input','swipe',...from.map(String),...to.map(String),'420');await delay(500);
       }
       await tap('[data-library-section="downloads"]');await tapWithScroll('[data-offline-play="'+record.key+'"]');
@@ -719,6 +719,7 @@ try{
         await tap('[data-close-watch]');
         await wait(s=>!s.watchId,'Watch overlay must close before checking main navigation');
       }
+      if (/^he/.test((await read()).lang)) await tap('[data-language-toggle]');
       const english=await wait(s=>s.ready&&s.lang==='en','English app must render before narrow layout');
       assert.ok(english.ready);
       adb('shell','wm','size','240x320');

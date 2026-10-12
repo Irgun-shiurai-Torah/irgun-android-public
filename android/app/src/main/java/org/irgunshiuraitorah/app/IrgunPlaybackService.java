@@ -3,6 +3,8 @@ package org.irgunshiuraitorah.app;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.net.Uri;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -75,6 +77,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         public final boolean audioIsPlaying;
         public final boolean audioPlayWhenReady;
         public final boolean audioAuthorityCommitted;
+        public final boolean networkRecoveryPending;
 
         Snapshot(
             String lectureId,
@@ -100,7 +103,8 @@ public class IrgunPlaybackService extends MediaSessionService {
             long audioDurationMs,
             boolean audioIsPlaying,
             boolean audioPlayWhenReady,
-            boolean audioAuthorityCommitted
+            boolean audioAuthorityCommitted,
+            boolean networkRecoveryPending
         ) {
             this.lectureId = cleanStatic(lectureId);
             this.vimeoId = cleanStatic(vimeoId);
@@ -126,6 +130,7 @@ public class IrgunPlaybackService extends MediaSessionService {
             this.audioIsPlaying = audioIsPlaying;
             this.audioPlayWhenReady = audioPlayWhenReady;
             this.audioAuthorityCommitted = audioAuthorityCommitted;
+            this.networkRecoveryPending = networkRecoveryPending;
         }
     }
 
@@ -138,6 +143,14 @@ public class IrgunPlaybackService extends MediaSessionService {
     private PlaybackMode sessionPlayerMode = PlaybackMode.AUDIO;
     private MediaSession mediaSession;
     private AudioAttributes mediaAudioAttributes;
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback networkCallback;
+    private boolean networkRecoveryPending;
+    private boolean networkRecoveryWanted;
+    private long networkRecoveryPositionMs;
+    private long networkRecoveryGeneration;
+    private int networkRecoveryAttempts;
+    private Runnable networkRecoveryRunnable;
 
     // One logical playback state shared by native audio and the Vimeo presentation.
     private String lectureId = "";
@@ -272,6 +285,76 @@ public class IrgunPlaybackService extends MediaSessionService {
         }
     }
 
+    private void registerNetworkRecovery() {
+        connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (connectivityManager == null) return;
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override public void onAvailable(Network network) {
+                mainHandler.post(() -> {
+                    if (!networkRecoveryPending || activeInstance != IrgunPlaybackService.this) return;
+                    networkRecoveryAttempts = 0;
+                    queueNetworkRecovery(250L);
+                });
+            }
+        };
+        try { connectivityManager.registerDefaultNetworkCallback(networkCallback); }
+        catch (RuntimeException error) { Log.w(TAG, "[Playback] Network observation unavailable; bounded retries remain active", error); }
+    }
+
+    private void cancelNetworkRecovery() {
+        networkRecoveryPending = false;
+        networkRecoveryGeneration++;
+        networkRecoveryAttempts = 0;
+        if (networkRecoveryRunnable != null) mainHandler.removeCallbacks(networkRecoveryRunnable);
+        networkRecoveryRunnable = null;
+    }
+
+    private boolean scheduleNetworkRecovery(int errorCode) {
+        if (player == null || lectureId.isEmpty() || !audioUrl.startsWith("https://") ||
+            (errorCode != PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED &&
+             errorCode != PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT)) return false;
+        if (!networkRecoveryPending) {
+            networkRecoveryPending = true;
+            networkRecoveryWanted = player.getPlayWhenReady();
+            networkRecoveryPositionMs = Math.max(0L, player.getCurrentPosition());
+            networkRecoveryAttempts = 0;
+        }
+        // A transport interruption must not clear the real lecture or disable
+        // native playback. Exhaustion waits for an actual network return.
+        if (networkRecoveryAttempts < 3) queueNetworkRecovery(500L * (networkRecoveryAttempts + 1));
+        publishNativeState();
+        refreshMediaNotification();
+        return true;
+    }
+
+    private void queueNetworkRecovery(long delayMs) {
+        if (!networkRecoveryPending || player == null || networkRecoveryAttempts >= 3) return;
+        if (networkRecoveryRunnable != null) mainHandler.removeCallbacks(networkRecoveryRunnable);
+        final long generation = ++networkRecoveryGeneration;
+        final ExoPlayer engine = player;
+        final String source = audioUrl;
+        final String lecture = lectureId;
+        networkRecoveryRunnable = () -> {
+            if (!networkRecoveryPending || generation != networkRecoveryGeneration || player != engine ||
+                !lecture.equals(lectureId) || !source.equals(audioUrl)) return;
+            networkRecoveryRunnable = null;
+            networkRecoveryAttempts++;
+            long position = playbackMode == PlaybackMode.VIDEO ? externalVideoPositionMs : networkRecoveryPositionMs;
+            boolean wanted = playbackMode == PlaybackMode.VIDEO ? externalVideoPlaying : networkRecoveryWanted;
+            suppressVideoMirrorCallbacks();
+            syncingVideoShadow = true;
+            try {
+                setCandidateAudioFocus(playbackMode == PlaybackMode.AUDIO);
+                engine.setVolume(playbackMode == PlaybackMode.VIDEO ? 0f : logicalVolume);
+                engine.seekTo(Math.max(0L, position));
+                engine.prepare();
+                engine.setPlayWhenReady(wanted);
+                Log.d(TAG, "[Playback] Real network recovery attempt " + networkRecoveryAttempts + " mode=" + playbackMode);
+            } finally { syncingVideoShadow = false; }
+        };
+        mainHandler.postDelayed(networkRecoveryRunnable, delayMs);
+    }
+
     @Override
     public void onCreate() {
         try {
@@ -295,6 +378,7 @@ public class IrgunPlaybackService extends MediaSessionService {
                 @Override
                 public void onPlaybackStateChanged(int state) {
                     if (state == Player.STATE_READY) {
+                        if (networkRecoveryPending && player.getPlayerError() == null) cancelNetworkRecovery();
                         if (verifyAudioSeekInternal()) return;
                         Log.d(TAG, "[Playback] Audio READY");
                         IrgunPlaybackPlugin.handleAudioReady(snapshot());
@@ -322,6 +406,9 @@ public class IrgunPlaybackService extends MediaSessionService {
                 @Override
                 public void onPlayWhenReadyChanged(boolean playWhenReady, int reason) {
                     lastPlayIntentReason = reason;
+                    if (networkRecoveryPending && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
+                        networkRecoveryWanted = playWhenReady;
+                    }
                     Log.d(TAG, "[Playback] play intent=" + playWhenReady + " reason=" + reason + " mode=" + playbackMode);
                     if (playbackMode == PlaybackMode.VIDEO && videoMirrorCallbackAllowed()) {
                         // Notification/lock-screen/headset controls change the shadow
@@ -361,6 +448,8 @@ public class IrgunPlaybackService extends MediaSessionService {
                 public void onPlayerError(PlaybackException error) {
                     audioSeekGuard.clear();
                     Log.w(TAG, "[Playback] native audio error: " + error.getErrorCodeName());
+                    if (scheduleNetworkRecovery(error.errorCode)) return;
+                    cancelNetworkRecovery();
                     pendingBackgroundHandoff = false;
                     backgroundPauseRequested = false;
                     IrgunPlaybackPlugin.handlePlaybackError("Native audio could not be prepared.");
@@ -425,6 +514,7 @@ public class IrgunPlaybackService extends MediaSessionService {
             refreshMediaNotification();
 
             activeInstance = this;
+            registerNetworkRecovery();
             Log.d(TAG, "[Playback] unified Media3 service created safely");
             drainPendingBridgeCommands();
         } catch (Throwable error) {
@@ -451,6 +541,10 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     @Override
     public void onDestroy() {
+        cancelNetworkRecovery();
+        if (connectivityManager != null && networkCallback != null) {
+            try { connectivityManager.unregisterNetworkCallback(networkCallback); } catch (RuntimeException ignored) {}
+        }
         Log.d(TAG, "[Playback] Media3 service destroyed; mode=" + playbackMode + " lecture=" + lectureId);
         pendingBackgroundHandoff = false;
         backgroundPauseRequested = false;
@@ -515,7 +609,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         return new Snapshot(
             lectureId, vimeoId, title, speaker, image, mediaKind, sourceId, paidAudioId, trackId, audioUrl, videoSource,
             playbackMode, presentationMode, position, duration, playing,
-            logicalSpeed, logicalVolume, audioReadyInternal(), audioPosition, audioDuration, audioPlaying, audioPlayWhenReady, authorityGuard.isAudioCommitted()
+            logicalSpeed, logicalVolume, audioReadyInternal(), audioPosition, audioDuration, audioPlaying, audioPlayWhenReady, authorityGuard.isAudioCommitted(), networkRecoveryPending
         );
     }
 
@@ -547,6 +641,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         boolean sameLecture = cleanStatic(lectureId).equals(this.lectureId);
         boolean sameAudio = cleanStatic(audioUrl).equals(this.audioUrl);
         if (!sameLecture || !sameAudio) {
+            cancelNetworkRecovery();
             audioSeekGuard.clear();
             authorityGuard.allowVideo();
         }
@@ -783,6 +878,14 @@ public class IrgunPlaybackService extends MediaSessionService {
             Log.d(TAG, "[Playback] ignored delayed Video authority update after Audio committed");
         }
 
+        if (networkRecoveryPending) {
+            // Keep the actual WebView clock/authority, but do not turn every
+            // timeupdate into another unbounded failing native prepare().
+            publishNativeState();
+            refreshMediaNotification();
+            return;
+        }
+
         // Mirror Vimeo into the ONE Media3 player silently. This intentionally keeps
         // one lightweight audio stream synchronized while video is playing. Benefits:
         // 1) the Android media notification/session exists during video playback,
@@ -898,6 +1001,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         if (playbackMode == PlaybackMode.AUDIO && player != null) {
             long duration = player.getDuration();
             if (duration != C.TIME_UNSET && duration > 0L) target = Math.min(target, duration);
+            if (networkRecoveryPending) networkRecoveryPositionMs = target;
             audioSeekGuard.begin(target, android.os.SystemClock.elapsedRealtime());
             Log.d(TAG, "[Playback] native Audio seek requested at " + target + "ms");
             player.setVolume(logicalVolume);
@@ -966,6 +1070,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private void stopAudioInternal(boolean clearLecture) {
+        cancelNetworkRecovery();
         audioSeekGuard.clear();
         authorityGuard.commitAudio();
         pendingBackgroundHandoff = false;
@@ -1158,7 +1263,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private static Snapshot emptySnapshot() {
-        return new Snapshot("", "", "", "", "", "", "", "", "", "", "", PlaybackMode.AUDIO, PresentationMode.FULL, 0L, 0L, false, 1f, 1f, false, 0L, 0L, false, false, false);
+        return new Snapshot("", "", "", "", "", "", "", "", "", "", "", PlaybackMode.AUDIO, PresentationMode.FULL, 0L, 0L, false, 1f, 1f, false, 0L, 0L, false, false, false, false);
     }
 
     /**
