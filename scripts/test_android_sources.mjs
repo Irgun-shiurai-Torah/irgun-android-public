@@ -618,6 +618,33 @@ test('restart restores the exact Drive-inclusive catalog cache and retains legac
     assert.equal(state.loading,false);assert.equal(state.videoById.get(video.id),video);
   }
 });
+test('Android session restores only verified offline identity for real /me transport failures, never revoked tokens',async()=>{
+  const start=mainSource.indexOf('async function restoreSession()');
+  const source=mainSource.slice(start,mainSource.indexOf('async function loadUserCollections()',start))
+    + '\nthis.restoreSession=restoreSession;';
+  for(const scenario of [
+    {error:new TypeError('Failed to fetch'),expectedRestored:true,expectedCleared:false},
+    {error:{status:503},expectedRestored:true,expectedCleared:false},
+    {error:{status:401},expectedRestored:false,expectedCleared:true},
+    {error:{status:403},expectedRestored:false,expectedCleared:false}
+  ]){
+    const state={token:'previously-verified-session',user:null};
+    let restores=0,clears=0;
+    const context={
+      state,apiJson:async()=>{throw scenario.error;},
+      restoreOfflineAccount(){restores++;state.user={name:'Cached',email:'cached@example.test'};},
+      setToken:()=>{clears++;state.token='';},
+      resetUserState:()=>{state.user=null;}
+    };
+    runInNewContext(source,context);
+    await context.restoreSession();
+    assert.equal(restores,scenario.expectedRestored,
+      'A network outage may show cached identity but a server rejection must not');
+    assert.equal(clears,scenario.expectedCleared,'Only a confirmed 401 revokes the cached token');
+    assert.equal(Boolean(state.user),scenario.expectedRestored,
+      'Offline identity must never carry over after a rejected session');
+  }
+});
 test('ready catalog and restored account remain usable while secondary startup feeds are pending',async()=>{
   const state={libraryReady:false,loading:true,counter:1,trends:{},screen:'home'};
   const rendered=[];const stalled=new Promise(()=>{});
