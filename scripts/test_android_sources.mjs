@@ -138,6 +138,12 @@ test('Android HLS handoff can resume one decoder-generated pause, never a user P
     assert.equal(player.getPlaybackIntent(),false,'Explicit Pause removes playback intent');
     assert.equal(await player.resumeStalledHandoff(),false,'Explicit Pause can never be undone by handoff retry');
     assert.equal(plays,2);
+    await player.play();
+    video.paused=true;
+    assert.equal(await player.resumeStalledHandoff(),true,
+      'A second deliberate Audio-to-Video switch receives its own single bounded recovery');
+    assert.equal(plays,4,'The second handoff plays once and recovers once without repeated automatic restarts');
+    assert.equal(video.muted,true,'Muted handoff must not create overlapping Audio');
   }});
 });
 test('pausing during an HLS visual retry cannot restart parked video or select MP4',async t=>{
