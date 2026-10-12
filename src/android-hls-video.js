@@ -783,6 +783,11 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
         try {
           buffered = await waitForInitialVideoBuffer(video, {
             isCancelled:cancelled,
+            // During silent MP4 prime the hidden playhead moves with incoming
+            // data and maintains a ~2s live runway. It would never satisfy
+            // a 6s *ahead* check. Measure the real downloaded six seconds
+            // from the intended start, then rewind before audible playback.
+            bufferFromSeconds:() => priming ? startPosition : Number(video.currentTime) || 0,
             onSample:sample => {
               if (primingError) throw primingError;
               video.dataset.startupBufferRequired = String(sample.required);
@@ -804,7 +809,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
             if (!cancelled()) {
               video.currentTime = startPosition;
               await new Promise(resolve => setTimeout(resolve, 0));
-              buffered = await waitForInitialVideoBuffer(video, {timeoutMs:3000,isCancelled:cancelled});
+              buffered = await waitForInitialVideoBuffer(video, {timeoutMs:6000,isCancelled:cancelled});
             }
           }
         } finally {
