@@ -2480,9 +2480,15 @@ async function restoreSession() {
     await checkAdminStatus();
     warmNativePaidCatalog();
   } catch (error) {
-    if (error.status === 401) {
+    if (Number(error?.status) === 401) {
       // Server-confirmed revocation always wins over any cached display name.
       setToken('');
+      resetUserState();
+    } else if (Number(error?.status) === 403) {
+      // Access was explicitly refused by the server. A profile restored while
+      // offline cannot stay visible or reappear from its cache on the next
+      // offline restart, although the token is retained for server re-check.
+      clearCachedAccount(localStorage);
       resetUserState();
     } else if (!state.user && (!Number(error?.status) || Number(error.status) >= 500)) {
       // navigator.onLine can stay true on an emulator after Wi-Fi and mobile
