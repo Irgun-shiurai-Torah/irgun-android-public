@@ -8,6 +8,7 @@ import { FileTransfer } from '@capacitor/file-transfer';
 import { Share } from '@capacitor/share';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { createAndroidHlsPlayer } from './android-hls-video.js';
+import {rememberCachedAccount,readCachedAccount,clearCachedAccount} from './android-offline-account.js';
 import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } from './offline-validation.js';
 import { downloadOfflineAudio } from './offline-download.js';
 import { vimeoEmbedSource } from './vimeoEmbed.js';
@@ -106,7 +107,7 @@ const state = {
   trends: { week: new Map(), month: new Map(), all: new Map() },
   counter: 1124579,
   likeCounts: {},
-  user: null,
+  user: Capacitor.getPlatform()==='android' && navigator.onLine===false ? readCachedAccount(localStorage,localStorage.getItem(TOKEN_KEY)) : null,
   token: localStorage.getItem(TOKEN_KEY) || '',
   myLikes: new Set(),
   watchLater: new Set(),
@@ -2040,10 +2041,18 @@ function setToast(message) {
 }
 
 function setToken(token) {
+  if(!token || String(token)!==state.token)clearCachedAccount(localStorage);
   state.token = String(token || '');
   if (state.token) localStorage.setItem(TOKEN_KEY, state.token);
   else localStorage.removeItem(TOKEN_KEY);
 }
+
+function restoreOfflineAccount(){
+  if(Capacitor.getPlatform()!=='android'||state.user||!state.token)return;
+  const cached=readCachedAccount(localStorage,state.token);
+  if(cached){state.user=cached;state.isAdmin=false;state.adminChecked=false;}
+}
+function rememberVerifiedAccount(){if(state.token&&state.user)rememberCachedAccount(localStorage,state.token,state.user);}
 
 function resetUserState() {
   state.user = null;
@@ -2424,6 +2433,7 @@ async function bootstrap(options = {}) {
     state.likeCounts = likeCounts || {};
     state.error = '';
 
+    if(state.offlineMode||navigator.onLine===false)restoreOfflineAccount();
     // The catalog is complete. Account restoration and secondary feeds must
     // not hold the whole app behind its initial loading screen.
     state.loading = false;
@@ -2443,6 +2453,7 @@ async function bootstrap(options = {}) {
       state.offlineMode = true;
       state.usingCachedLibrary = true;
     }
+    if(state.offlineMode||navigator.onLine===false)restoreOfflineAccount();
   } finally {
     state.loading = false;
     bootstrapInFlight = false;
@@ -2464,6 +2475,7 @@ async function restoreSession() {
       return;
     }
     state.user = data.user;
+    rememberVerifiedAccount();
     await loadUserCollections();
     await checkAdminStatus();
     warmNativePaidCatalog();
@@ -2554,6 +2566,7 @@ async function login(email, password) {
     if (!data.sessionToken) throw new Error('The app Worker is not returning an app session token.');
     setToken(data.sessionToken);
     state.user = data.user || { name: data.name || '', email };
+    rememberVerifiedAccount();
     await loadUserCollections();
     state.adminChecked = false;
     await checkAdminStatus(true);
@@ -2600,6 +2613,7 @@ async function loginWithGoogle() {
     if (!data.sessionToken) throw new Error('The app Worker did not return an app session token.');
     setToken(data.sessionToken);
     state.user = data.user || { name: data.name || nativeResult.name || '', email: nativeResult.email || '' };
+    rememberVerifiedAccount();
     await loadUserCollections();
     state.adminChecked = false;
     await checkAdminStatus(true);
@@ -2637,6 +2651,7 @@ async function loginWithApple() {
     const data=await apiJson('/apple-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({identityToken,givenName,familyName})});
     if(!data.sessionToken)throw new Error('The app Worker did not return an app session token.');
     setToken(data.sessionToken);state.user=data.user||{name:data.name||[givenName,familyName].filter(Boolean).join(' '),email};
+    rememberVerifiedAccount();
     await loadUserCollections();state.adminChecked=false;await checkAdminStatus(true);state.paidLoaded=false;state.paidCatalog=[];state.recurringLoaded=false;state.recurringDonations=[];warmNativePaidCatalog();state.authMessage='';state.authMode='login';setToast('Signed in with Apple.');
   }catch(error){const message=String(error?.message||'Apple sign-in failed.');state.authMessage=/cancel|canceled|cancelled|1001/i.test(message)?'Apple sign-in was cancelled.':message;}
   finally{state.authBusy=false;render();}
@@ -2743,6 +2758,7 @@ async function updateProfile(name, password) {
       body: JSON.stringify({ name, password })
     });
     state.user.name = name;
+    rememberVerifiedAccount();
     setToast('Profile updated.');
   } catch (error) {
     alert(error.message || 'Could not update profile.');
@@ -9248,6 +9264,7 @@ window.addEventListener('online', () => {
   if (state.error || state.offlineMode || state.usingCachedLibrary) bootstrap({ background:true });
 });
 window.addEventListener('offline', () => {
+  restoreOfflineAccount();
   if (state.libraryReady) { state.offlineMode = true; state.usingCachedLibrary = true; }
   else { state.loading = false; state.error = 'offline'; state.offlineMode = true; }
   render();
