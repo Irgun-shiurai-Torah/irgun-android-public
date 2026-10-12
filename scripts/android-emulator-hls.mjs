@@ -213,7 +213,12 @@ try {
   };
   const initialPlay=await read();
   if(initialPlay.video.paused&&initialPlay.video.startup.phase!=='loading')await tapPlayPause();
-  await wait(s=>s.video&&!s.video.paused&&s.video.time>0);
+  // MP4 startup may silently prime its decoder before the six-second buffer
+  // exists. Its internal video.play() is not user-visible playback: require
+  // the completed startup gate, not merely a moving muted priming clock.
+  await wait(s=>s.video && s.video.startup.phase==='ready' &&
+    Number(s.video.startup.bufferAtStart)+.1>=Number(s.video.startup.required) &&
+    !s.video.paused && s.video.time>0);
   const moving=async label=>{
     const before=await read();await delay(3500);const after=await read();
     report.checks.push({label,before,after});
