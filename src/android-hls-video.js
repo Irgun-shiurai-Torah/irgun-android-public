@@ -753,6 +753,10 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     }
   })();
   const adapter = makePlayerAdapter(video, stage, () => hls, readyPromise);
+  // The decoder may be paused while we silently prime an MP4 buffer. That
+  // does not mean the listener pressed Pause. Native Video -> Audio handoff
+  // must preserve the user's requested playback intent.
+  adapter.getPlaybackIntent = () => Boolean(playbackWanted);
   adapter.pause = pausePlayback;
   adapter.setMuted = muted => {
     desiredMuted = Boolean(muted);
