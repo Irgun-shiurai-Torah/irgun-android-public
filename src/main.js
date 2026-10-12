@@ -5080,6 +5080,23 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
           lastDecodedMotionAt = Date.now();
           continue;
         }
+        if (element.readyState >= 2 && Date.now() - lastDecodedMotionAt >= 1400 &&
+            typeof player.retargetStalledHandoff === 'function') {
+          // If the HLS decoder froze *before* fetching Audio's advancing
+          // position, waiting for a buffer that cannot advance is a deadlock.
+          // Request the missing fragment once. Audio remains audible until
+          // real moving frames and a synchronized position are verified.
+          const retargeted = await Promise.race([
+            Promise.resolve(player.retargetStalledHandoff(stillSource)).catch(()=>false),
+            new Promise(resolve=>setTimeout(()=>resolve(false),900))
+          ]);
+          if (retargeted) {
+            recoveredCatchupStall = true;
+            element.playbackRate = Number(state.playbackSpeed) || 1;
+            lastDecodedMotionAt = Date.now();
+            continue;
+          }
+        }
       }
       // A long MP4 seek can present its first frames before the following byte
       // range arrives. Keep Audio audible until the destination has a runway,
