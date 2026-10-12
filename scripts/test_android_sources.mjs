@@ -408,12 +408,13 @@ test('Android Video-to-Audio handoff preserves user Play intent during MP4 primi
     {intent:false,decoderPaused:false,stalePlaying:true,expected:false},
     {intent:null,decoderPaused:false,stalePlaying:false,expected:true}
   ]) {
-    const player={getPaused:async()=>options.decoderPaused,pause:async()=>{}};
+    const errors=[];
+    const player={getPaused:async()=>options.decoderPaused,pause:async()=>{},play:async()=>{}};
     if(options.intent!==null)player.getPlaybackIntent=()=>options.intent;
     const state={watchVimeo:player,watchMode:'video',watchVideoPlaying:options.stalePlaying,
       watchResumeSeconds:605,user:null,current:null,nativePlayback:{}};
     const starts=[],items=[];
-    const context={state,console:{debug(){},warn(){}},usesNativeUnifiedAudio:()=>true,
+    const context={state,console:{debug(){},warn:(_message,error)=>errors.push(String(error?.stack||error))},usesNativeUnifiedAudio:()=>true,
       quickVimeoTime:async()=>605,
       videoAudioPlaybackItem:(_video,id)=>({id,url:'https://media.example.test/audio.mp3'}),
       offlineRecordForAudioItem:()=>null,offlineFileUrl:()=>'',setPlaybackAuthorityFence:()=>{},
@@ -424,7 +425,9 @@ test('Android Video-to-Audio handoff preserves user Play intent during MP4 primi
     const start=mainSource.indexOf('async function switchVideoToAudioSeamlessly(');
     runInNewContext(mainSource.slice(start,mainSource.indexOf('async function resumeParkedVideoFromAudio(',start))+
       '\nthis.switchAudio=switchVideoToAudioSeamlessly;',context);
-    assert.equal(await context.switchAudio({duration:3663},'lecture'),true);
+    const transferred=await context.switchAudio({duration:3663},'lecture');
+    assert.deepEqual(errors,[],'Native Audio switch must not enter rollback: '+errors.join('; '));
+    assert.equal(transferred,true);
     assert.equal(items.length,1,'Real native audio source preparation must happen');
     assert.equal(starts.length,1,'Start Media3 exactly once');
     assert.equal(starts[0].playing,options.expected,'Media3 must use the listener Play/Pause intent, not MP4 decoder paused');
