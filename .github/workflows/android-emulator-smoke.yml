@@ -30,6 +30,13 @@ on:
 permissions:
   contents: read
 
+# The emulator takes several minutes to build and boot. When a PR is updated,
+# cancel only its older startup runs so CI validates the latest app and fixes
+# without burning emulator minutes on obsolete commits.
+concurrency:
+  group: irgun-android-startup-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   startup:
     runs-on: ubuntu-latest
