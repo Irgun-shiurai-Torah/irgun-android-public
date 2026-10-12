@@ -664,11 +664,31 @@ test('Android session restores only verified offline identity for real /me trans
     };
     runInNewContext(source,context);
     await context.restoreSession();
-    assert.equal(restores,scenario.expectedRestored,
+    assert.equal(restores,scenario.expectedRestored ? 1 : 0,
       'A network outage may show cached identity but a server rejection must not');
-    assert.equal(clears,scenario.expectedCleared,'Only a confirmed 401 revokes the cached token');
+    assert.equal(clears,scenario.expectedCleared ? 1 : 0,
+      'Only a confirmed 401 revokes the cached token');
     assert.equal(Boolean(state.user),scenario.expectedRestored,
       'Offline identity must never carry over after a rejected session');
+  }
+});
+test('reconnected server rejection clears already-displayed offline identity without treating HTTP 403 as revoked token',async()=>{
+  const start=mainSource.indexOf('async function restoreSession()');
+  const source=mainSource.slice(start,mainSource.indexOf('async function loadUserCollections()',start))
+    + '\nthis.restoreSession=restoreSession;';
+  for(const [status,revokeToken] of [[401,true],[403,false]]) {
+    const state={token:'previously-verified-session',user:{name:'Cached',email:'cached@example.test'},isAdmin:false};
+    let cleared=0,restored=0,tokenChanges=0;
+    const context={state,apiJson:async()=>{throw {status};},
+      restoreOfflineAccount:()=>restored++,
+      setToken:()=>{state.token='';tokenChanges++;},
+      resetUserState:()=>{state.user=null;cleared++;}};
+    runInNewContext(source,context);
+    await context.restoreSession();
+    assert.equal(restored,0,'Server refusal must not bring back the offline profile');
+    assert.equal(cleared,1,'A previously restored identity must be hidden after /me refuses it');
+    assert.equal(state.user,null);
+    assert.equal(tokenChanges,revokeToken?1:0,'Only HTTP 401 revokes the existing session token');
   }
 });
 test('ready catalog and restored account remain usable while secondary startup feeds are pending',async()=>{
