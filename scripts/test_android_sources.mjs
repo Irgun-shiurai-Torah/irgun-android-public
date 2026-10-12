@@ -512,7 +512,10 @@ test('restart restores the exact Drive-inclusive catalog cache and retains legac
 test('ready catalog and restored account remain usable while secondary startup feeds are pending',async()=>{
   const state={libraryReady:false,loading:true,counter:1,trends:{},screen:'home'};
   const rendered=[];const stalled=new Promise(()=>{});
-  const context={state,Map,console:{error(){},warn(){}},bootstrapInFlight:false,
+  const context={state,Map,navigator:{onLine:true},console:{error(){},warn(){}},bootstrapInFlight:false,
+    // The source slice runs in a VM, so supply the newly introduced offline
+    // account helper even though this particular scenario is online.
+    restoreOfflineAccount:()=>{},
     loadMetadata:async()=>{},initNativeDownloader:async()=>{},
     bootstrapJson:async()=>[{id:'lecture'}],bootstrapJsonOr:async(_,fallback)=>fallback,
     enrichVideo:v=>v,enrichAudio:v=>v,itemDate:()=>0,videoId:v=>v.id,rawAudioId:v=>v.id,
