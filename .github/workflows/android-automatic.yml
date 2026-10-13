@@ -107,7 +107,14 @@ jobs:
           sudo apt-get install -y imagemagick
           bash scripts/prepare_android_icons.sh
 
-      - name: Build web app
+      # Internal Play testing build only. The app's native Media3 Video switch
+      # remains opt-in in source; this specific automatic test build enables it
+      # so real devices can exercise Video <-> Audio without WebView handoffs.
+      # Do not promote this beta build to Production until regression and
+      # physical-device testing is complete.
+      - name: Build web app with native Media3 Video beta
+        env:
+          VITE_ANDROID_MEDIA3_VIDEO_BETA: 'true'
         run: npm run build
 
       - name: Sync Capacitor Android project
