@@ -34,6 +34,7 @@ const persistentVideoMount = document.getElementById('persistentVideoMount');
 const IrgunDownloader = registerPlugin('IrgunDownloader');
 const IrgunPush = registerPlugin('IrgunPush');
 const IrgunFullscreen = registerPlugin('IrgunFullscreen');
+const IrgunNativeVideo = registerPlugin('IrgunNativeVideo');
 const IrgunPlayback = registerPlugin('IrgunPlayback');
 let nativeVideoFullscreen = false;
 
@@ -49,6 +50,21 @@ async function setNativeVideoFullscreen(enabled) {
     console.warn('Android fullscreen system-bar sync failed', error);
   }
 }
+
+// The native Media3 PlayerView lives outside the WebView. Android fullscreen
+// must expand that same physical view and synchronize system bars together.
+async function setAndroidNativeVideoFullscreen(enabled) {
+  if (Capacitor.getPlatform() !== 'android') return;
+  if (enabled && !state.watchVimeo?.isIrgunNativeVideoPlayer) {
+    throw new Error('Native fullscreen requires an active Media3 Video');
+  }
+  await IrgunNativeVideo.fullscreen({enabled:Boolean(enabled)});
+  await setNativeVideoFullscreen(Boolean(enabled));
+}
+window.__irgunExitNativeVideoFullscreen = async () => {
+  if (nativeVideoFullscreen && state.watchVimeo?.isIrgunNativeVideoPlayer)
+    await setAndroidNativeVideoFullscreen(false);
+};
 
 function syncDocumentFullscreenToNative() {
   const element = document.fullscreenElement || document.webkitFullscreenElement || null;
@@ -3717,6 +3733,16 @@ function bindPersistentVideoChrome() {
     minimize.dataset.bound = '1';
     minimize.addEventListener('click', event => { event.stopPropagation(); minimizeWatchToPersistent(); });
   }
+  const fullscreenControl = persistentVideoMount.querySelector('[data-native-video-fullscreen]');
+  if (fullscreenControl && !fullscreenControl.dataset.bound) {
+    fullscreenControl.dataset.bound = '1';
+    fullscreenControl.addEventListener('click', event => {
+      event.stopPropagation();
+      setAndroidNativeVideoFullscreen(!nativeVideoFullscreen).catch(error => {
+        console.warn('Native video fullscreen toggle failed', error);
+      });
+    });
+  }
   const pip = persistentVideoMount.querySelector('[data-video-pip]');
   if (pip && !pip.dataset.bound) {
     pip.dataset.bound = '1';
@@ -5754,7 +5780,7 @@ function watchHtml() {
       <button class="mini-video-play" data-mini-video-play-toggle="1" aria-label="${state.watchVideoPlaying ? 'Pause' : 'Play'}">${state.watchVideoPlaying ? '<span class="pause-mark">II</span>' : svgIcon('play')}</button>
       <button class="mini-video-close" data-close-mini-video="1" aria-label="Close video">×</button>
     </div>
-    <header class="watch-top"><button data-close-watch="1">${currentLanguage() === 'he' ? 'חזרה' : 'Back'}</button><strong>${esc(displayShiurTitle(v.title, 'Shiur'))}</strong>${state.watchMode === 'video' ? `<div class="watch-top-media-actions"><button class="watch-minimize" data-minimize-watch="1" aria-label="Keep playing at bottom of app" title="Mini player">${svgIcon('minimize')}</button>${nativePipPlugin() && Capacitor.getPlatform() !== 'android' ? `<button class="watch-pip" data-video-pip="1" aria-label="Picture in Picture" title="Picture in Picture">${svgIcon('pip')}</button>` : ''}</div>` : ''}</header>
+    <header class="watch-top"><button data-close-watch="1">${currentLanguage() === 'he' ? 'חזרה' : 'Back'}</button><strong>${esc(displayShiurTitle(v.title, 'Shiur'))}</strong>${state.watchMode === 'video' ? `<div class="watch-top-media-actions"><button class="watch-minimize" data-minimize-watch="1" aria-label="Keep playing at bottom of app" title="Mini player">${svgIcon('minimize')}</button>${Capacitor.getPlatform() === 'android' ? `<button class="watch-minimize" data-native-video-fullscreen="1" aria-label="${currentLanguage() === 'he' ? 'מסך מלא' : 'Fullscreen'}" title="Fullscreen">⛶</button>` : ''}${nativePipPlugin() && Capacitor.getPlatform() !== 'android' ? `<button class="watch-pip" data-video-pip="1" aria-label="Picture in Picture" title="Picture in Picture">${svgIcon('pip')}</button>` : ''}</div>` : ''}</header>
     <div class="watch-scroll">
       <div class="watch-player-card">
         <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">${currentLanguage() === 'he' ? 'וידאו' : 'Video'}</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">${currentLanguage() === 'he' ? 'אודיו' : 'Audio'}</button>` : ''}</div>
@@ -6987,6 +7013,16 @@ function bind() {
   document.querySelectorAll('[data-switch-video]').forEach(el => el.addEventListener('click', () => switchWatchMode('video')));
 
   document.querySelectorAll('[data-minimize-watch]').forEach(el => el.addEventListener('click', minimizeWatchToPersistent));
+  document.querySelectorAll('[data-native-video-fullscreen]').forEach(el => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = '1';
+    el.addEventListener('click', event => {
+      event.stopPropagation();
+      setAndroidNativeVideoFullscreen(!nativeVideoFullscreen).catch(error => {
+        console.warn('Native video fullscreen toggle failed', error);
+      });
+    });
+  });
   document.querySelectorAll('[data-video-pip]').forEach(el => el.addEventListener('click', enterSystemPictureInPicture));
   document.querySelectorAll('[data-expand-watch]').forEach(el => el.addEventListener('click', expandPersistentWatch));
   document.querySelectorAll('[data-close-mini-video]').forEach(el => el.addEventListener('click', () => closeWatch(true)));
