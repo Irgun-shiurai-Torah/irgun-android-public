@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
 
 const service=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java','utf8');
 const bridge=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
@@ -48,4 +49,30 @@ test('Android native controls expose only bounded and source-safe commands',()=>
   assert.match(bridge,/case "speed":/);
   assert.match(bridge,/void close\(PluginCall call\)/);
   assert.match(adapter,/s\.frames>=2&&s\.width>0/);
+});
+
+test('native Video surface yields to Save picker, then restores without pausing the shared Media3 stream',async()=>{
+  const start=adapter.indexOf('  const positionFrame=async()=>{');
+  const end=adapter.indexOf('  const scheduleFrame=',start);
+  assert.ok(start>0 && end>start,'Use the actual native Video positioning code');
+  const calls=[];
+  let modalVisible=true;
+  const placeholder={isConnected:true,getBoundingClientRect:()=>({x:12,y:80,width:300,height:169})};
+  const context={destroyed:false,mode:'video',placeholder,document:{
+    querySelector:()=>modalVisible?{}:null,
+    getElementById:()=>placeholder
+  },native:{frame:async args=>{calls.push(args);}},innerWidth:320,innerHeight:600};
+  runInNewContext(adapter.slice(start,end)+'\nthis.positionFrame=positionFrame;',context);
+  await context.positionFrame();
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].width,0,'Physical Media3 PlayerView must hide while Save is on top');
+  assert.equal(calls[0].height,0);
+  assert.doesNotMatch(adapter.slice(start,end),/\\.pause\\(|\\.stop\\(|\\.seekTo\\(|setMode\\(/,
+    'A modal must not interrupt, seek or replace the existing Media3 Audio');
+  modalVisible=false;
+  await context.positionFrame();
+  assert.equal(calls[1].width,300,'The same native surface must return after closing the picker');
+  assert.equal(calls[1].height,169);
+  assert.match(app,/state\\.watchVimeo\\?\\.updateFrame\\?\\.\\(\\)/,
+    'The app must refresh the native surface after in-place picker dismissal');
 });
