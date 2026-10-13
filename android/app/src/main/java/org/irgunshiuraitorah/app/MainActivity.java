@@ -50,7 +50,9 @@ public class MainActivity extends BridgeActivity {
                 // Consume Back here so Android cannot destroy the moving player.
                 if (getBridge() != null && getBridge().getWebView() != null) {
                     getBridge().getWebView().evaluateJavascript(
-                        "window.__irgunExitDocumentFullscreen && window.__irgunExitDocumentFullscreen().catch(e => console.warn('Fullscreen exit failed', e));",
+                        "Promise.resolve(window.__irgunExitNativeVideoFullscreen && window.__irgunExitNativeVideoFullscreen())" +
+                        ".then(() => window.__irgunExitDocumentFullscreen && window.__irgunExitDocumentFullscreen())" +
+                        ".catch(e => console.warn('Fullscreen exit failed', e));",
                         null
                     );
                 }
