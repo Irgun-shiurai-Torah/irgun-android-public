@@ -815,19 +815,34 @@ try{
       assert.equal(adb('shell','settings','get','global','wifi_on'),'0','Wi-Fi was not disabled');
       await delay(4300);
     }finally{await setOnline(true);}
-    const recovered=await wait(s=>s.watchMode==='video'&&s.video&&!s.video.paused&&s.video.ready>=2,'Video did not recover from network interruption',65000);
-    await delay(2300);
-    const after=await read();
+    const recovered=await wait(s=>s.watchMode==='video'&&s.video&&
+      !s.video.paused&&s.video.ready>=2&&
+      (s.videoEngine!=='native-media3'||s.media3.surfaceVisibleOnScreen),
+      'Video did not recover from network interruption',65000);
+    // READY after network restoration can precede the first new HLS keyframe.
+    // Require genuinely moving decoded frames and clock, not an arbitrary
+    // 2.3-second snapshot taken during a new buffering interval.
+    const after=await wait(s=>s.watchMode==='video'&&s.video&&
+      !s.video.paused&&s.video.ready>=2&&
+      s.video.time>recovered.video.time+1.3&&
+      s.video.frames>recovered.video.frames+3&&
+      (s.videoEngine!=='native-media3'||s.media3.surfaceVisibleOnScreen),
+      'Native video frames and clock never recovered after physical network restoration',35000);
     audibleVideo(after);
-    assert.ok(after.video.time>recovered.video.time+0.8,'Video clock did not recover');
     assert.ok(after.video.time>=prior-2,'Video resumed from the beginning after Wi-Fi loss');
     checks('Video playback recovery after Wi-Fi/mobile-data interruption',{startSeconds:prior,endSeconds:after.video.time});
   });
 
-  await section('Native Media3 slow transport and real unbuffered HLS failure recover without rewind',async()=>{
+  await section('Native Media3 slow transport and real unbuffered HLS/MP4 failure recover without rewind',async()=>{
     await closePlayer();const start=await videoReady();
     if(start.videoEngine==='native-media3'){
-      assert.equal(start.media3.sourceType,'hls','Native transport regression must use the actual HLS source');
+      const initialTransport=start.media3.sourceType;
+      assert.ok(['hls','mp4'].includes(initialTransport),
+        'Native transport regression must observe its REAL HLS/MP4 source; actual='+initialTransport);
+      // Previous physical network loss can produce a documented native
+      // HLS->MP4 fallback. Do not incorrectly label a real MP4 run as HLS.
+      // Separate native-HLS jobs still insist on genuine HLS across APIs.
+      report.nativeNetworkSource=initialTransport;save();
       const originalPid=adb('shell','pidof',pkg);
       const originalSource=start.native.lectureId;
       let throttled=false;
@@ -864,7 +879,9 @@ try{
         report.nativeNetworkThrottle=networkStatus.slice(0,1500);save();
         const sought=await genuineSeek(start.media3.bufferedPositionMs);
         const slow=await wait(s=>s.media3?.active&&s.media3.videoSelected&&
-          s.media3.sourceType==='hls'&&s.media3.firstFrame&&s.media3.playing&&
+          (s.media3.sourceType===initialTransport||
+            (initialTransport==='hls'&&s.media3.sourceType==='mp4'))&&
+          s.media3.firstFrame&&s.media3.playing&&
           s.media3.bufferedPositionMs>s.media3.positionMs+1000&&
           s.media3.positionMs>=sought.media3.positionMs-2000,
           'Native HLS did not decode newly fetched frames under actual emulator network throttling',95000);
@@ -873,7 +890,7 @@ try{
         assert.ok(slowMoved.media3.positionMs>slow.media3.positionMs+900&&
           slowMoved.media3.frames>slow.media3.frames+3,
           'Under real emulator throttle, native HLS clock and decoded frames must advance');
-        checks('Native HLS continued after a physical seek under actual emulator-wide UMTS speed/EDGE latency',
+        checks('Native '+initialTransport.toUpperCase()+' continued after a physical seek under actual emulator-wide UMTS speed/EDGE latency',
           {networkStatus,startedMs:start.media3.positionMs,throttledPositionMs:slowMoved.media3.positionMs});
         await setOnline(false);
         const lost=await genuineSeek(slowMoved.media3.bufferedPositionMs);
@@ -895,7 +912,9 @@ try{
         adb('emu','network','delay','none');
         throttled=false;
         const recovered=await wait(s=>s.media3?.active&&s.media3.videoSelected&&
-          s.media3.sourceType==='hls'&&s.media3.firstFrame&&s.media3.playing&&
+          (s.media3.sourceType===initialTransport||
+            (initialTransport==='hls'&&s.media3.sourceType==='mp4'))&&
+          s.media3.firstFrame&&s.media3.playing&&
           s.media3.bufferedPositionMs>s.media3.positionMs&&
           s.media3.positionMs>=lost.media3.positionMs-2000,
           'Native HLS did not resume from the unbuffered failed seek after real network restoration',95000);
@@ -905,7 +924,7 @@ try{
           'Native HLS failed to render new frames after transport recovery');
         assert.equal(adb('shell','pidof',pkg),originalPid,'Actual app process changed during network recovery');
         assert.equal(again.native.lectureId,originalSource,'Network recovery changed to a different shiur');
-        checks('Native ExoPlayer resumed moving HLS at original lecture and position after genuine unbuffered network loss',
+        checks('Native ExoPlayer resumed moving '+initialTransport.toUpperCase()+' at original lecture and position after genuine unbuffered network loss',
           {fromMs:lost.media3.positionMs,toMs:again.media3.positionMs});
       }finally{
         try{await setOnline(true);}catch{}
