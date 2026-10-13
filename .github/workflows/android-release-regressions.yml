@@ -589,3 +589,70 @@ jobs:
           path: emulator-report/
           if-no-files-found: warn
           retention-days: 14
+
+  native-media3-beta:
+    name: Native Media3 beta HLS and Audio/Video API ${{ matrix.api-level }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 52
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [30, 35]
+    env:
+      # The normal release build never enables this flag.
+      VITE_ANDROID_MEDIA3_VIDEO_BETA: 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Install Android SDK 36
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - run: npm ci
+      - name: Validate native source and emulator test
+        run: |
+          node --test scripts/test_android_native_media3_beta.mjs
+          node --check scripts/android-emulator-native-media3.mjs
+      - name: Prepare Android launch icon
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+          bash scripts/prepare_android_icons.sh
+      - name: Add read-only QA instrumentation
+        run: cat .github/release-tests/observer.js >> src/main.js
+      - run: npm run build
+      - run: npx cap sync android
+      - run: bash scripts/prepare_android_icons.sh
+      - run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
+      - run: chmod +x android/gradlew
+      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+        working-directory: android
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - run: bash scripts/android-emulator-sdk-preflight.sh ${{ matrix.api-level }}
+      - name: Test native Video to Audio to Video with real emulator taps
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: google_apis
+          arch: x86_64
+          script: bash scripts/android-emulator-native-media3.sh
+      - name: Save playback, frame, screen and crash evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-media3-beta-api-${{ matrix.api-level }}-${{ github.run_id }}
+          path: emulator-report/
+          if-no-files-found: warn
+          retention-days: 14
