@@ -255,7 +255,7 @@ public final class NativeMetadataRegression {
       "A same-lecture refresh must preserve native Video ownership");
     require(service.player.items==staged && service.player.position==1001100 &&
       service.player.seeks==seeks,"A native HLS item must never be reloaded/rewound by metadata");
-    System.out.println("Actual native metadata reload preserves Audio progress and intent; native Video source is safe");
+    System.out.println("Actual native metadata reload preserves Audio progress and intent; native Video source is safe; all checks passed");
   }
 }`);
     execFileSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,
