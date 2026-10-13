@@ -129,7 +129,7 @@ jobs:
 
 
   fifteen-minute-soak:
-    name: Real 15-minute Android 11 playback reliability
+    name: Real 15-minute Android 11 native Media3 HLS playback reliability
     runs-on: ubuntu-latest
     timeout-minutes: 42
     steps:
@@ -150,14 +150,14 @@ jobs:
       - run: npm ci
       - name: Check soak test syntax
         run: |
-          node --check scripts/android-emulator-soak.mjs
-          node --check scripts/android-emulator-hls.mjs
+          node --check scripts/android-emulator-native-media3.mjs
+          node --test scripts/test_android_native_media3_beta.mjs
       - name: Prepare icon
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y imagemagick
           bash scripts/prepare_android_icons.sh
-      - name: Append read-only HLS source observation to disposable soak APK
+      - name: Append read-only native Media3 observation to disposable soak APK
         run: cat .github/release-tests/observer.js >> src/main.js
       - run: npm run build
       - run: npx cap sync android
@@ -178,12 +178,12 @@ jobs:
           api-level: 30
           target: google_apis
           arch: x86_64
-          script: bash scripts/android-emulator-hls.sh soak
+          script: bash scripts/android-emulator-native-media3.sh soak
       - name: Upload 15-minute observation logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: android-soak-${{ github.run_id }}
+          name: android-native-media3-soak-${{ github.run_id }}
           path: emulator-report/
           if-no-files-found: error
           retention-days: 14
@@ -527,7 +527,7 @@ jobs:
           retention-days: 14
 
   hls-app-picture-and-quality:
-    name: HLS in actual app Android API ${{ matrix.api-level }}
+    name: Native Media3 HLS in actual app Android API ${{ matrix.api-level }}
     runs-on: ubuntu-latest
     timeout-minutes: 38
     strategy:
@@ -550,14 +550,14 @@ jobs:
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
           "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
       - run: npm ci
-      - name: Validate HLS emulator script
-        run: node --check scripts/android-emulator-hls.mjs
+      - name: Validate strict native Media3 emulator script
+        run: node --check scripts/android-emulator-native-media3.mjs
       - name: Prepare actual Android launch resources
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y imagemagick
           bash scripts/prepare_android_icons.sh
-      - name: Append only read-only HLS source telemetry to this disposable APK
+      - name: Append read-only native Media3 source telemetry to this disposable APK
         run: cat .github/release-tests/observer.js >> src/main.js
       - run: npm run build
       - run: npx cap sync android
@@ -574,33 +574,30 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - name: Validate emulator SDK download for Android API ${{ matrix.api-level }}
         run: bash scripts/android-emulator-sdk-preflight.sh ${{ matrix.api-level }}
-      - name: Prove moving HLS video frames and native quality change, no MP4 fallback
+      - name: Prove native Media3 HLS frames, physical Audio/Video taps and no WebView fallback
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api-level }}
           target: google_apis
           arch: x86_64
-          script: bash scripts/android-emulator-hls.sh
+          script: bash scripts/android-emulator-native-media3.sh
       - name: Upload real HLS video playback evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: android-hls-app-api-${{ matrix.api-level }}-${{ github.run_id }}
+          name: android-native-hls-app-api-${{ matrix.api-level }}-${{ github.run_id }}
           path: emulator-report/
           if-no-files-found: warn
           retention-days: 14
 
   native-media3-beta:
-    name: Native Media3 beta HLS and Audio/Video API ${{ matrix.api-level }}
+    name: Native Media3 additional Audio/Video API ${{ matrix.api-level }}
     runs-on: ubuntu-latest
     timeout-minutes: 52
     strategy:
       fail-fast: false
       matrix:
         api-level: [30, 35]
-    env:
-      # The normal release build never enables this flag.
-      VITE_ANDROID_MEDIA3_VIDEO_BETA: 'true'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
