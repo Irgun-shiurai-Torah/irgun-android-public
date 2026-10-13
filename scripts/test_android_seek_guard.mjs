@@ -209,7 +209,7 @@ public final class NativeMetadataRegression {
   String vimeoId,title,speaker,image,mediaKind,sourceId,paidAudioId,trackId,videoSource;
   float logicalSpeed=1,logicalVolume=1;
   boolean syncingVideoShadow;
-  boolean nativeVideoSourceActive=false,nativeVideoSelected=false;
+  boolean nativeVideoSourceActive=false,nativeVideoSelected=false,nativeVideoOfflineAudioActive=false;
   PlaybackMode playbackMode=PlaybackMode.AUDIO;
   FakePlayer player=new FakePlayer();
   static final class FakePlayer {
@@ -331,11 +331,26 @@ public final class OfflineSourceRegression {
   }
   final String TAG="QA";Player player=new Player();String audioUrl=player.uri;
   long externalVideoPositionMs=201465;boolean externalVideoPlaying=true,syncingVideoShadow=false,focus;
+  boolean nativeVideoSourceActive=false,nativeVideoOfflineAudioActive=false;
+  String nativeVideoNetworkAudioUrl="";
   PlaybackMode playbackMode=PlaybackMode.VIDEO;float logicalVolume=1;
   static String cleanStatic(String s){return s==null?"":s.trim();}
   void suppressVideoMirrorCallbacks(){}void publishNativeState(){}
   void setCandidateAudioFocus(boolean value){focus=value;}
   void ensureAudioMediaItemInternal(long position){player.uri=audioUrl;player.position=position;player.items=1;}
+  // Stub ONLY the private native-video handoff which is separately
+  // exercised against the complete Android Media3 implementation. In this
+  // isolated test the exact production replaceOfflineAudioSourceInternal is
+  // injected above; preserve its choice of legacy vs active native source.
+  void switchNativeVideoPresentationInternal(boolean showVideo,String local){
+    require(nativeVideoSourceActive&&nativeVideoOfflineAudioActive,
+      "Native deletion must operate on the actual active offline source");
+    require(!showVideo&&local.isEmpty(),"Deleting offline Audio must restore network Audio");
+    long position=player.position;boolean wanted=player.wanted;
+    audioUrl=nativeVideoNetworkAudioUrl;player.uri=audioUrl;
+    player.position=position;player.wanted=wanted;player.volume=logicalVolume;
+    nativeVideoOfflineAudioActive=false;playbackMode=PlaybackMode.AUDIO;
+  }
   ${method}
   static void require(boolean value,String message){if(!value)throw new AssertionError(message);}
   public static void main(String[] args) {
@@ -351,7 +366,19 @@ public final class OfflineSourceRegression {
     require(!s.player.wanted&&s.player.position==711560&&s.player.volume==1,"Paused Audio must keep its actual position and Pause intent");
     s=new OfflineSourceRegression();try{s.replaceOfflineAudioSourceInternal(s.audioUrl,"file:///other.mp3");throw new AssertionError("Invalid replacement accepted");}catch(IllegalArgumentException expected){}
     require(s.player.uri.startsWith("file:")&&s.player.items==1,"Invalid replacement must retain the existing saved source");
-    System.out.println("Actual offline source swap, post-deletion seek, one player, silent shadow and Pause preservation passed");
+    // NEW production branch: deleting an MP3 while native HLS/MP4 is active
+    // uses a same-ExoPlayer source transition, not the old Vimeo shadow.
+    s=new OfflineSourceRegression();s.nativeVideoSourceActive=true;
+    s.nativeVideoOfflineAudioActive=true;s.playbackMode=PlaybackMode.AUDIO;
+    s.player.position=706200;s.player.wanted=false;s.player.volume=1;
+    Player original=s.player;
+    require(s.replaceOfflineAudioSourceInternal(s.audioUrl,network),
+      "Active native offline Audio must replace its file before unlinking");
+    require(s.player==original&&s.player.uri.equals(network)&&
+      s.player.position==706200&&!s.player.wanted&&s.player.volume==1&&
+      !s.nativeVideoOfflineAudioActive,
+      "Native downloaded MP3 deletion must restore network audio in SAME Media3 player without losing Pause/clock");
+    System.out.println("Actual offline source swap, post-deletion seek, native Media3 restoration, one player and Pause preservation passed");
   }
 }`);
     execFileSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,path],{stdio:'pipe'});
