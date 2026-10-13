@@ -55,7 +55,15 @@ test('actual native network recovery retains the engine, source, authority and u
 test('actual native Home readiness accepts an advancing shadow and rebinds only the session view',()=>{
  const source=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java','utf8');
  const begin=source.indexOf('    private void continueBackgroundHandoffIfReady()');
- const home=source.slice(begin,source.indexOf('    private void confirmBackgroundVideoPausedInternal(',begin));
+ // Extract only the actual instance methods under test. The production
+ // service exposes a separate static bridge with Android dependencies.
+ const home=source.slice(begin,source.indexOf('    public static void onBackgroundWebViewStopped()',begin));
+ assert.ok(home.includes('private void onBackgroundWebViewStoppedInternal()'),
+  'Unit harness must exercise the real stopped-WebView handoff');
+ const activity=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/MainActivity.java','utf8');
+ const stopped=activity.slice(activity.indexOf('public void onStop()'),activity.indexOf('public void onResume()'));
+ assert.match(stopped,/IrgunPlaybackService\.onBackgroundWebViewStopped\(\);/,
+  'Activity.onStop must deliver the background WebView-stop signal to Media3');
  const refreshStart=source.indexOf('    private void refreshMediaNotification()');
  const refresh=source.slice(refreshStart,source.indexOf('\n    }\n',refreshStart)+7);
  const callbackStart=source.indexOf('public void onIsPlayingChanged('),callbackEnd=source.indexOf('                @Override',callbackStart);
@@ -70,11 +78,11 @@ test('actual native Home readiness accepts an advancing shadow and rebinds only 
    static class SessionPlayer extends Player {final Player engine;SessionPlayer(Player p){engine=p;}}
    static class MediaSession {Player view;int rebinds;void setPlayer(Player p){view=p;rebinds++;}}
    static class android {static class os {static class SystemClock {static long now=1800;static long elapsedRealtime(){return now;}}}}
-   static class Log {static void w(String tag,String message){}static void w(String tag,String message,Throwable error){}}
+   static class Log {static void d(String tag,String message){}static void w(String tag,String message){}static void w(String tag,String message,Throwable error){}}
    static class IrgunPlaybackPlugin {static int requests;static void requestPauseVimeoForBackground(long id){requests++;}}
    static class Handler {Runnable pending;void postDelayed(Runnable run,long delay){pending=run;}}
    final String TAG="QA";final long DRIFT_LIMIT_MS=750;final Handler mainHandler=new Handler();
-   boolean pendingBackgroundHandoff=true,backgroundPauseRequested=false;long pendingBackgroundPositionMs=734122,backgroundHandoffStartedMs=0,backgroundHandoffId=11;
+   boolean pendingBackgroundHandoff=true,backgroundPauseRequested=false,backgroundWebViewStopped=false;long pendingBackgroundPositionMs=734122,backgroundHandoffStartedMs=0,backgroundHandoffId=11;
    boolean pendingBackgroundWasPlaying=true;float logicalSpeed=1;Player player=new Player(),sessionPlayer;MediaSession mediaSession=new MediaSession();
    PlaybackMode playbackMode=PlaybackMode.VIDEO,sessionPlayerMode=PlaybackMode.VIDEO;int notifications;
    boolean isSessionAdded(MediaSession s){return true;}void addSession(MediaSession s){}void triggerNotificationUpdate(){notifications++;}
@@ -92,6 +100,17 @@ test('actual native Home readiness accepts an advancing shadow and rebinds only 
     s.refreshMediaNotification();require(s.mediaSession.rebinds==1,"Position ticks must not repeatedly replace the controller view");
     s.playbackMode=PlaybackMode.VIDEO;s.refreshMediaNotification();require(s.mediaSession.rebinds==2,"Video authority must also refresh the real logical view");require(s.player==engine,"No new playback engine");
     s.pendingBackgroundHandoff=true;s.backgroundPauseRequested=false;s.player.position=930000;s.continueBackgroundHandoffIfReady();require(s.player.seeks==1&&s.player.position==734122,"Wrong lecture position is still rejected/corrected");
+    // Activity.onStop allows immediate audible takeover only after the actual
+    // source is advancing; a stopped but unready shadow must never count as pass.
+    s.pendingBackgroundHandoff=true;s.backgroundPauseRequested=false;s.player.position=734122;
+    s.player.playing=false;s.onBackgroundWebViewStoppedInternal();
+    require(s.pendingBackgroundHandoff&&s.playbackMode==PlaybackMode.VIDEO&&s.backgroundWebViewStopped,
+      "Stopping the WebView must not authorize silent/unready audio");
+    s.player.playing=true;s.continueBackgroundHandoffIfReady();
+    require(s.playbackMode==PlaybackMode.AUDIO&&!s.pendingBackgroundHandoff,
+      "Ready native Audio must take over immediately after the Video surface stops");
+    s.backgroundWebViewStopped=false;s.onBackgroundWebViewStoppedInternal();
+    require(!s.backgroundWebViewStopped,"Unrelated lifecycle stop cannot restart an already completed handoff");
     System.out.println("passed");
    }
   }`);
