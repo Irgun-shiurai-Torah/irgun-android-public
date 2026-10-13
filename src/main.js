@@ -1559,11 +1559,7 @@ function bindShiurimResultEvents(root) {
     event.stopPropagation();
     playLibraryAudio(el.dataset.listenAudio);
   }));
-  root.querySelectorAll('[data-like]').forEach(el => el.addEventListener('click', async event => {
-    event.stopPropagation();
-    await preserveWatchTime();
-    toggleLike(el.dataset.like);
-  }));
+  bindLikeButtons(root);
   root.querySelectorAll('[data-save]').forEach(el => el.addEventListener('click', async event => {
     event.stopPropagation();
     await preserveWatchTime();
@@ -2797,8 +2793,34 @@ async function updateProfile(name, password) {
   }
 }
 
+// A persistent Watch overlay stays outside #app across renders. Binding it
+// again would attach another click handler, turning one real tap into two
+// server-side /like toggles. The same guard also covers cards bound through
+// bindShiurimResultEvents and then through the global document binder.
+function bindLikeButtons(root) {
+  root.querySelectorAll('[data-like]').forEach(el => {
+    if (el.dataset.likeBound === '1') return;
+    el.dataset.likeBound = '1';
+    el.addEventListener('click', async event => {
+      event.stopPropagation();
+      if (el.dataset.likeBusy === '1') return;
+      el.dataset.likeBusy = '1';
+      try {
+        await preserveWatchTime();
+        await toggleLike(el.dataset.like);
+      } finally {
+        delete el.dataset.likeBusy;
+      }
+    });
+  });
+}
+
+const pendingLikeMutations = new Set();
 async function toggleLike(id) {
   if (!state.user) return requireLogin('Sign in to like shiurim.');
+  id = String(id || '');
+  if (!id || pendingLikeMutations.has(id)) return;
+  pendingLikeMutations.add(id);
   const wasLiked = state.myLikes.has(id);
   if (wasLiked) state.myLikes.delete(id); else state.myLikes.add(id);
   state.likeCounts[id] = Math.max(0, (Number(state.likeCounts[id]) || 0) + (wasLiked ? -1 : 1));
@@ -2818,6 +2840,8 @@ async function toggleLike(id) {
     state.likeCounts[id] = Math.max(0, (Number(state.likeCounts[id]) || 0) + (wasLiked ? 1 : -1));
     refreshInteractiveUi();
     alert(error.message || 'Could not update like.');
+  } finally {
+    pendingLikeMutations.delete(id);
   }
 }
 
@@ -6857,11 +6881,7 @@ function bind() {
     playLibraryAudio(el.dataset.listenAudio);
   }));
 
-  document.querySelectorAll('[data-like]').forEach(el => el.addEventListener('click', async event => {
-    event.stopPropagation();
-    await preserveWatchTime();
-    toggleLike(el.dataset.like);
-  }));
+  bindLikeButtons(document);
   document.querySelectorAll('[data-save]').forEach(el => el.addEventListener('click', async event => {
     event.stopPropagation();
     await preserveWatchTime();
