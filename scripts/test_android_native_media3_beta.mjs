@@ -76,3 +76,29 @@ test('native Video surface yields to Save picker, then restores without pausing 
   assert.ok(app.includes('state.watchVimeo?.updateFrame?.()'),
     'The app must refresh the native surface after in-place picker dismissal');
 });
+
+test('native fullscreen expands the SAME PlayerView and Android Back exits without closing the lecture',()=>{
+  const main=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/MainActivity.java','utf8');
+  assert.match(bridge,/public void fullscreen\(PluginCall call\)/);
+  assert.match(bridge,/Math\.max\(1, root\.getWidth\(\)\)/);
+  assert.match(bridge,/Math\.max\(1, root\.getHeight\(\)\)/);
+  assert.match(bridge,/surface\.setLayoutParams\(full\)/);
+  assert.match(bridge,/response\.put\("surfaceWidth"/);
+  assert.match(bridge,/response\.put\("rootWidth"/);
+  assert.doesNotMatch(bridge,/new ExoPlayer\s*\(/,'Fullscreen must never create another ExoPlayer');
+  assert.match(app,/window\.__irgunExitNativeVideoFullscreen/);
+  assert.match(app,/data-native-video-fullscreen/);
+  assert.match(main,/__irgunExitNativeVideoFullscreen/);
+});
+
+test('expanded Android tests observe actual Media3 and physical Android network conditions',()=>{
+  const ext=readFileSync('scripts/android-regression-extensions.mjs','utf8');
+  assert.match(ext,/s\.media3=await evaluate\("window\.Capacitor\.nativePromise\('IrgunNativeVideo','snapshot'/);
+  assert.match(ext,/s\.media3\.frames>=2/);
+  assert.match(ext,/s\.media3\.bufferedPositionMs>s\.media3\.positionMs/);
+  assert.match(ext,/adb\('emu','network','speed','umts'\)/);
+  assert.match(ext,/adb\('shell','input','keyevent','KEYCODE_MEDIA_FAST_FORWARD'\)/);
+  assert.match(ext,/if\(start\.videoEngine==='native-media3'\)/);
+  assert.match(ext,/assert\.equal\(s\.webViewVideo,null/);
+  assert.match(ext,/nativeHierarchy\(/,'Real Android native UI remains instrumented');
+});
