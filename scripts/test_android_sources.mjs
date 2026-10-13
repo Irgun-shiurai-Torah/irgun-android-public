@@ -515,6 +515,7 @@ test('Android Video-to-Audio handoff preserves user Play intent during MP4 primi
       watchResumeSeconds:605,user:null,current:null,nativePlayback:{}};
     const starts=[],items=[];
     const context={state,setTimeout,console:{debug(){},warn:(_message,error)=>errors.push(String(error?.stack||error))},usesNativeUnifiedAudio:()=>true,
+      nativeMediaPlugin:()=>({getState:async()=>({mode:'VIDEO',audioAuthorityCommitted:false,lectureId:'lecture'})}),
       quickVimeoTime:async()=>605,
       videoAudioPlaybackItem:(_video,id)=>({id,url:'https://media.example.test/audio.mp3'}),
       offlineRecordForAudioItem:()=>null,offlineFileUrl:()=>'',setPlaybackAuthorityFence:()=>{},
