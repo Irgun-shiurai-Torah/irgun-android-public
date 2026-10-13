@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {accountSwipeDirection} from './android-account-native-scroll.mjs';
 
 const geometry = height => ({left:0,top:24,right:320,bottom:24+height,focused:true});
 const immediate = async () => {};
@@ -35,4 +36,9 @@ test('a permanently moving viewport remains a failure with a bounded observation
   await assert.rejects(settledNativeTapPoint({samples:4,readBounds:async()=>geometry(++reads%2?350:592),
     readPoint:async()=>({x:80,y:291,width:320,height:592}),delay:immediate}),/no tap was performed/);
   assert.equal(reads,8);
+});
+
+test('IME-obscured Password and Login scroll into view rather than back to Email',()=>{
+  for(const key of ['password','login','saveQaComment'])assert.equal(accountSwipeDirection(key),'up');
+  for(const key of ['email','closeWatch','settings'])assert.equal(accountSwipeDirection(key),'down');
 });
