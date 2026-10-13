@@ -719,6 +719,9 @@ function saveDestinationPresentation(kind, id) {
 function closePlaylistPickerInPlace() {
   state.playlistPickerItem = null;
   document.querySelectorAll('.playlist-picker-backdrop').forEach(node => node.remove());
+  // A removed modal must restore the same native Video surface without
+  // restarting the underlying Media3 item, position, or audible Audio track.
+  state.watchVimeo?.updateFrame?.();
 }
 
 function refreshSaveDestinationButtons(kind = '', id = '') {
@@ -6407,6 +6410,9 @@ function render() {
   const restoreSearchDraft = preserveHomeSearchDraft();
   app.innerHTML = shell(content + playlistPickerHtml());
   bind();
+  // Reconcile the native Android Video surface after every modal change.
+  // Physical PlayerView must never cover native WebView dialog controls.
+  state.watchVimeo?.updateFrame?.();
   restoreAuthDraft();
   restoreSearchDraft();
   syncLivePlaybackAnalytics();
