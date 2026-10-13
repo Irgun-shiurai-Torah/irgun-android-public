@@ -359,20 +359,52 @@ try{
     checks('Near-end seeking verified against actual Media3 clock',{durationSeconds:duration,nearEndSeconds:started.native.audioPositionMs/1000,restoredSeconds:position});
   });
 
-  await section('Video speed selector persists 1.25x, 1.5x and 2x through Audio and Video switches',async()=>{
-    await videoReady();
-    for(const rate of [1.25,1.5,2,1]) {
-      await tap('[data-hls-speed]');await delay(600);
-      const xml=nativeHierarchy('emulator-report/video-speed-'+rate+'.xml');
-      const wanted='text="'+rate+'×"';
-      const node=(xml.match(/<node\b[^>]*>/g)||[]).find(n=>n.includes(wanted)&&/visible="true"/.test(n));
-      const rect=node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
-      assert.ok(rect&&rect[2]>rect[0]&&rect[3]>rect[1],'Real Android video-speed popup must show '+rate+'x');
-      adb('shell','input','tap',String(Math.round((rect[0]+rect[2])/2)),String(Math.round((rect[1]+rect[3])/2)));
-      const adjusted=await wait(s=>s.video&&Math.abs(s.video.rate-rate)<.05&&Math.abs(s.speed-rate)<.05,'Video speed selector must update both actual video rate and shared preference');
-      const audio=await audioReady();assert.ok(Math.abs(audio.native.playbackSpeed-rate)<.05,'Audio must inherit the selected video speed');
-      const video=await videoReady();assert.ok(Math.abs(video.video.rate-rate)<.05,'Returning to Video must retain the selected speed');
-      checks('Real Video speed '+rate+'x survives both handoffs',{selectedVideoRate:adjusted.video.rate,audioRate:audio.native.playbackSpeed,returnedVideoRate:video.video.rate});
+  await section('Native Media3 playback speed selector persists through Audio and Video',async()=>{
+    const initial=await videoReady();
+    if(initial.videoEngine!=='native-media3'){
+      // Older WebView builds have a genuine HTML speed picker.
+      for(const rate of [1.25,1.5,2,1]){
+        await tap('[data-hls-speed]');await delay(600);
+        const xml=nativeHierarchy('emulator-report/video-speed-'+rate+'.xml');
+        const wanted='text="'+rate+'×"';
+        const node=(xml.match(/<node\\b[^>]*>/g)||[]).find(n=>n.includes(wanted)&&/visible="true"/.test(n));
+        const rect=node?.match(/bounds="\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]"/)?.slice(1).map(Number);
+        assert.ok(rect&&rect[2]>rect[0]&&rect[3]>rect[1],'Actual WebView speed picker option required: '+rate);
+        adb('shell','input','tap',String(Math.round((rect[0]+rect[2])/2)),String(Math.round((rect[1]+rect[3])/2)));
+        const adjusted=await wait(s=>s.video&&Math.abs(s.video.rate-rate)<.05&&Math.abs(s.speed-rate)<.05,'WebView speed option did not apply');
+        const audio=await audioReady();assert.ok(Math.abs(audio.native.playbackSpeed-rate)<.05,'Audio must inherit selected rate');
+        const video=await videoReady();assert.ok(Math.abs(video.video.rate-rate)<.05,'WebView Video must preserve rate');
+        checks('WebView Video speed '+rate+'x via physical picker',{rate:adjusted.video.rate});
+      }
+      return;
+    }
+    for(const rate of [1.25,1.5,2,1]){
+      // PlayerView uses native OS controls; the app also exposes an accessible
+      // physical speed selector in the full Audio player. Apply it via actual
+      // Android taps, then verify the SAME ExoPlayer speed in native Video.
+      await audioReady();
+      await tap('[data-close-watch]');
+      await wait(s=>!s.watchId&&!!s.currentId,'Audio must continue after closing Watch');
+      await tapWithScroll('.mini-player .mini-copy');
+      await wait(s=>s.playerOpen,'Full native Audio controls must open for speed');
+      await tapWithScroll('[data-speed-choice="'+rate+'"]');
+      const selected=await wait(s=>Math.abs(s.speed-rate)<.05&&
+        Math.abs(s.native.playbackSpeed-rate)<.05&&s.native.audioIsPlaying,
+        'Physical speed button did not set native Media3 to '+rate,20000);
+      await closePlayer();
+      const video=await videoReady();audibleVideo(video);
+      assert.ok(Math.abs(video.video.rate-rate)<.05,
+        'Native decoded Video did not inherit the selected '+rate+'x rate');
+      const before=video.video.time;await delay(2100);
+      const after=await read();audibleVideo(after);
+      assert.ok(after.video.time>before+rate*1.0,
+        'Real native decoded Video clock failed to advance at selected speed '+rate);
+      const audio=await audioReady();
+      assert.ok(Math.abs(audio.native.playbackSpeed-rate)<.05,
+        'Returning to Audio lost '+rate+'x setting');
+      checks('Physical '+rate+'x speed selection persists in same Media3 Audio and Video',
+        {selectedSpeed:selected.native.playbackSpeed,videoSpeed:video.video.rate,
+          videoTimeBefore:before,videoTimeAfter:after.video.time,audioSpeed:audio.native.playbackSpeed});
     }
   });
 
