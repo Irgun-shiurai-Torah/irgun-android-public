@@ -147,6 +147,12 @@ public class IrgunPlaybackService extends MediaSessionService {
     private boolean nativeVideoSelected = false;
     private boolean nativeVideoUsingHls = false;
     private boolean nativeVideoMp4FallbackAttempted = false;
+    // A downloaded MP3 can replace HLS only when Audio is explicitly selected.
+    // Keep the SAME ExoPlayer/MediaSession and restore the saved HLS source
+    // at the live clock when returning to Video.
+    private boolean nativeVideoOfflineAudioActive = false;
+    private String nativeVideoOfflineAudioUri = "";
+    private String nativeVideoNetworkAudioUrl = "";
     private String nativeVideoHlsUrl = "";
     private String nativeVideoMp4Url = "";
     private volatile long nativeVideoRenderedFrames = 0L;
@@ -677,7 +683,9 @@ public class IrgunPlaybackService extends MediaSessionService {
             this.title = cleanStatic(title).isEmpty() ? this.title : cleanStatic(title);
             this.speaker = cleanStatic(speaker).isEmpty() ? this.speaker : cleanStatic(speaker);
             this.image = cleanStatic(image);
-            if (!cleanStatic(audioUrl).isEmpty()) this.audioUrl = cleanStatic(audioUrl);
+            if (!nativeVideoOfflineAudioActive && !cleanStatic(audioUrl).isEmpty()) {
+                this.audioUrl = cleanStatic(audioUrl);
+            }
             publishNativeState();
             return;
         }
@@ -1326,7 +1334,8 @@ public class IrgunPlaybackService extends MediaSessionService {
             bufferedPositionMs = active ? Math.max(0L, p.getBufferedPosition()) : 0L;
             width = active ? p.getVideoSize().width : 0;
             height = active ? p.getVideoSize().height : 0;
-            source = active ? (s.nativeVideoUsingHls ? "hls" : "mp4") : "";
+            source = active ? (s.nativeVideoOfflineAudioActive && !s.nativeVideoSelected
+                ? "offline-mp3" : s.nativeVideoUsingHls ? "hls" : "mp4") : "";
             error = active && p.getPlayerError() != null
                 ? p.getPlayerError().getErrorCodeName() : "";
         }
@@ -1343,26 +1352,77 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private void switchNativeVideoPresentationInternal(boolean showVideo) {
+        switchNativeVideoPresentationInternal(showVideo, "");
+    }
+
+    private void switchNativeVideoPresentationInternal(boolean showVideo, String offlineAudioUri) {
         if (!nativeVideoSourceActive || player == null) return;
+        String local = showVideo ? "" : cleanStatic(offlineAudioUri);
+        boolean restoreVideoSource = nativeVideoOfflineAudioActive && (showVideo || local.isEmpty());
+        boolean useLocalAudio = !showVideo && !local.isEmpty()
+            && (!nativeVideoOfflineAudioActive || !local.equals(nativeVideoOfflineAudioUri));
+        if (restoreVideoSource || useLocalAudio) {
+            // Changing the actual file source is intentional ONLY when a
+            // verified offline MP3 is selected/removed. Normal Audio/Video
+            // presentation stays a zero-seek video-track toggle.
+            long position = Math.max(0L, player.getCurrentPosition());
+            boolean playIntent = player.getPlayWhenReady();
+            MediaItem source;
+            if (useLocalAudio) {
+                MediaMetadata metadata = new MediaMetadata.Builder()
+                    .setTitle(title).setArtist(speaker)
+                    .setAlbumTitle("Irgun Shiurai Torah").build();
+                source = new MediaItem.Builder().setMediaId(lectureId)
+                    .setUri(Uri.parse(local))
+                    .setMimeType(MimeTypes.AUDIO_MPEG)
+                    .setMediaMetadata(metadata).build();
+                nativeVideoOfflineAudioActive = true;
+                nativeVideoOfflineAudioUri = local;
+                audioUrl = local;
+                Log.d(TAG, "[Playback] Using verified offline MP3 for native Audio in the SAME Media3 player");
+            } else {
+                String url = nativeVideoUsingHls ? nativeVideoHlsUrl : nativeVideoMp4Url;
+                if (url.isEmpty()) {
+                    IrgunPlaybackPlugin.handlePlaybackError("Original video stream unavailable after offline Audio");
+                    return;
+                }
+                source = nativeVideoMediaItem(url, nativeVideoUsingHls);
+                nativeVideoOfflineAudioActive = false;
+                nativeVideoOfflineAudioUri = "";
+                audioUrl = nativeVideoNetworkAudioUrl;
+                nativeVideoFirstFrameRendered = false;
+                nativeVideoRenderedFrames = 0L;
+                Log.d(TAG, "[Playback] Restoring Media3 " + (nativeVideoUsingHls ? "HLS" : "MP4")
+                    + " at " + position + "ms after offline MP3; one ExoPlayer");
+            }
+            player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !showVideo).build());
+            player.setMediaItem(source, position);
+            player.prepare();
+            player.setPlayWhenReady(playIntent);
+        } else {
+            // No file swap when the user hasn't downloaded an offline copy.
+            player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !showVideo).build());
+        }
         nativeVideoSelected = showVideo;
         playbackMode = showVideo ? PlaybackMode.VIDEO : PlaybackMode.AUDIO;
         if (showVideo) authorityGuard.allowVideo();
         else authorityGuard.commitAudio();
-        player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
-            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !showVideo)
-            .build());
         setCandidateAudioFocus(true);
         player.setVolume(logicalVolume);
-        // No seek, stop, prepare or replacement on Video <-> Audio.
-        // Audio continues from the same Media3 HLS frame at the same rate.
         publishNativeState();
         refreshMediaNotification();
     }
 
     public static void nativeVideoPresentation(boolean showVideo) {
+        nativeVideoPresentation(showVideo, "");
+    }
+
+    public static void nativeVideoPresentation(boolean showVideo, String verifiedOfflineAudioUri) {
         onMain(() -> {
             IrgunPlaybackService s = active();
-            if (s != null) s.switchNativeVideoPresentationInternal(showVideo);
+            if (s != null) s.switchNativeVideoPresentationInternal(showVideo, verifiedOfflineAudioUri);
         });
     }
 
@@ -1409,6 +1469,9 @@ public class IrgunPlaybackService extends MediaSessionService {
         nativeVideoMp4Url = cleanStatic(mp4Url);
         nativeVideoUsingHls = !nativeVideoHlsUrl.isEmpty();
         nativeVideoMp4FallbackAttempted = false;
+        nativeVideoOfflineAudioActive = false;
+        nativeVideoOfflineAudioUri = "";
+        nativeVideoNetworkAudioUrl = cleanStatic(audioUrl);
         nativeVideoRenderedFrames = 0L;
         nativeVideoFirstFrameRendered = false;
         nativeVideoSourceActive = true;
@@ -1444,6 +1507,14 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     private void recoverNativeVideoSourceInternal(PlaybackException error) {
         if (!nativeVideoSourceActive || player == null) return;
+        if (nativeVideoOfflineAudioActive) {
+            // A damaged local file must never trap the user in a silent Audio
+            // mode. Resume the network audio track at the same logical clock
+            // without creating a second engine or silently claiming offline.
+            Log.w(TAG, "[Playback] Offline MP3 failed; retrying the original native stream");
+            switchNativeVideoPresentationInternal(false, "");
+            return;
+        }
         long position = Math.max(0L, player.getCurrentPosition());
         boolean intent = player.getPlayWhenReady();
         // Retry HLS once after a genuine Media3 decoder/network failure.
@@ -1477,6 +1548,8 @@ public class IrgunPlaybackService extends MediaSessionService {
         player.clearMediaItems();
         nativeVideoSourceActive = false;
         nativeVideoSelected = false;
+        nativeVideoOfflineAudioActive = false;
+        nativeVideoOfflineAudioUri = "";
         nativeVideoFirstFrameRendered = false;
         playbackMode = PlaybackMode.AUDIO;
         externalVideoPlaying = false;
@@ -1630,6 +1703,13 @@ public class IrgunPlaybackService extends MediaSessionService {
         String replacement = cleanStatic(replacementUrl);
         if (!"https".equals(Uri.parse(replacement).getScheme())) {
             throw new IllegalArgumentException("Replacement audio source must use HTTPS");
+        }
+        if (nativeVideoSourceActive && nativeVideoOfflineAudioActive) {
+            nativeVideoNetworkAudioUrl = replacement;
+            // Re-select the original network video with the video track OFF
+            // before the file is unlinked from private Android storage.
+            switchNativeVideoPresentationInternal(false, "");
+            return true;
         }
         long position = playbackMode == PlaybackMode.VIDEO
             ? externalVideoPositionMs : player.getCurrentPosition();
