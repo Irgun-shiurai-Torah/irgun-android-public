@@ -8814,7 +8814,18 @@ async function performWatchModeSwitch(mode) {
     state.watchAudioToVideoHandoffId='';
     state.watchAudioToVideoTargetSeconds=0;
     state.watchMinimized=false;
-    if(mode==='audio'){
+    // Media3 remains attached to the single permanent Watch host. A WebView
+    // Audio render deliberately creates an Audio overlay in #app. When the
+    // user returns to Video, set hostedExternally BEFORE render() so it does
+    // not create a second full-size Watch overlay on top of the mini player.
+    // Previous emulator runs saw two overlays and a visually blocked mini
+    // Expand control even though ExoPlayer kept moving.
+    if(mode==='video'){
+      if(!restoreParkedHostedVideo()){
+        throw new Error('Native Media3 Video cannot restore its single persistent Watch host');
+      }
+    }else{
+      parkHostedVideoForAudio();
       if(!state.current || String(state.current.id)!==String(id)) state.current=videoAudioPlaybackItem(video,id);
       setNativePipEligibility(false);
     }
