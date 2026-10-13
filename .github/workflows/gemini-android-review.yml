@@ -117,7 +117,7 @@ jobs:
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           # Free-tier model; optionally override with a repository variable.
-          gemini_model: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+          gemini_model: ${{ vars.GEMINI_MODEL || 'gemini-3.8-flash' }}
           settings: |
             {
               "model": {"maxSessionTurns": 14},
