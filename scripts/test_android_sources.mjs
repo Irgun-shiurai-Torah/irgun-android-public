@@ -1094,7 +1094,17 @@ test('initial video Play waits for real bytes, deduplicates requests, and Pause 
   const first=player.play(),second=player.play();assert.equal(first,second,'Pending initial Play must be one transaction');
   await settleRecovery();t.mock.timers.tick(300);await settleRecovery();assert.equal(plays,0,'One buffered second must not start and stall playback');
   await player.pause();t.mock.timers.tick(300);await first;assert.equal(plays,0,'Pause must cancel startup before any real Play');
-  buffered=8;await player.play();assert.equal(plays,1,'Sufficient actual media buffer releases exactly one Play');
+  // The HLS player now waits for 16s of real media; the old 8s mock
+  // left its mocked Play promise pending forever and timed out CI preflight.
+  buffered=18;
+  const resumed=player.play();
+  await settleRecovery();
+  assert.equal(video.dataset.startupBufferRequired,'16',
+    'Mocked HLS must enforce the real 16-second startup requirement');
+  assert.equal(video.dataset.startupBufferAhead,'18',
+    'The mock must expose enough actual buffered media to start once');
+  await resumed;
+  assert.equal(plays,1,'Sufficient actual media releases exactly one visible Play');
  }});
 });
 
