@@ -36,6 +36,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     private PlayerView surface;
     private FrameLayout root;
     private boolean visible = false;
+    // Expands the SAME PlayerView/ExoPlayer, never a second video instance.
+    private boolean fullscreen = false;
     private int surfaceGeneration = 0;
     private float x, y, width, height, viewportWidth, viewportHeight;
 
@@ -73,6 +75,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
                 (float)Math.max(0.25, call.getDouble("speed", 1.0)),
                 Boolean.TRUE.equals(call.getBoolean("playing", true)));
             visible = true;
+            fullscreen = false;
             attachWhenReady(++surfaceGeneration, 0);
             JSObject response = new JSObject();
             response.put("accepted", true);
@@ -123,6 +126,19 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     private void layoutSurface() {
         if (surface == null || root == null || getBridge() == null) return;
         WebView web = getBridge().getWebView();
+        if (fullscreen && visible) {
+            // Use the real Android root, not the old WebView HLS stage. Media3
+            // keeps decoding on the SAME existing ExoPlayer while switching
+            // between in-page and fullscreen native PlayerView dimensions.
+            FrameLayout.LayoutParams full = new FrameLayout.LayoutParams(
+                Math.max(1, root.getWidth()), Math.max(1, root.getHeight()));
+            full.gravity = Gravity.TOP | Gravity.LEFT;
+            full.leftMargin = 0;
+            full.topMargin = 0;
+            surface.setLayoutParams(full);
+            surface.setVisibility(View.VISIBLE);
+            return;
+        }
         if (web == null || viewportWidth <= 0 || viewportHeight <= 0
                 || width <= 0 || height <= 0 || !visible) {
             surface.setVisibility(View.GONE);
@@ -158,9 +174,24 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void fullscreen(PluginCall call) {
+        final boolean expand = Boolean.TRUE.equals(call.getBoolean("enabled", false));
+        getActivity().runOnUiThread(() -> {
+            if (expand && (!visible || surface == null)) {
+                call.reject("Native Media3 fullscreen requires a visible video surface");
+                return;
+            }
+            fullscreen = expand;
+            layoutSurface();
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
     public void mode(PluginCall call) {
         boolean video = "video".equals(call.getString("mode", ""));
         visible = video;
+        if (!video) fullscreen = false;
         IrgunPlaybackService.nativeVideoPresentation(video);
         getActivity().runOnUiThread(() -> {
             if (video) {
@@ -207,6 +238,12 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("height", state.height);
             response.put("sourceType", state.source);
             response.put("error", state.error);
+            response.put("fullscreen", fullscreen);
+            response.put("surfaceVisible", surface != null && surface.getVisibility() == View.VISIBLE);
+            response.put("surfaceWidth", surface == null ? 0 : surface.getWidth());
+            response.put("surfaceHeight", surface == null ? 0 : surface.getHeight());
+            response.put("rootWidth", root == null ? 0 : root.getWidth());
+            response.put("rootHeight", root == null ? 0 : root.getHeight());
             call.resolve(response);
         });
     }
@@ -215,6 +252,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     public void close(PluginCall call) {
         boolean keepAudio = Boolean.TRUE.equals(call.getBoolean("keepAudio", false));
         visible = false;
+        fullscreen = false;
         ++surfaceGeneration;
         getActivity().runOnUiThread(this::removeSurface);
         IrgunPlaybackService.closeNativeVideo(keepAudio);
@@ -234,6 +272,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     protected void handleOnDestroy() {
         ++surfaceGeneration;
         visible = false;
+        fullscreen = false;
         if (getActivity() != null) getActivity().runOnUiThread(this::removeSurface);
         super.handleOnDestroy();
     }
