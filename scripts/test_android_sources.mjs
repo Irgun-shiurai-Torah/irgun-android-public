@@ -47,6 +47,29 @@ async function fixture(descriptor, videoId = '1182395717', resumeSeconds = 0, {n
     Object.assign(globalThis,original);
   }
 }
+test('Android range tap commits a real HLS seek on pointerup without waiting for change',async()=>{
+  const r=await fixture({video:{hls:'https://media.example.test/master.m3u8',mp4:null}},'1182395717',42,{
+    onReady:async player=>{
+      const video=player.getVideoElement();
+      const controls=video.parentElement.children.find(child=>child.className==='watch-hls-controls');
+      assert.ok(controls,'Real player controls must exist');
+      const slider=controls.querySelector('[data-hls-seek]');
+      slider.getBoundingClientRect=()=>({left:10,width:200});
+      video.duration=3600;
+      slider.dispatchEvent(new Event('pointerdown'));
+      const event=new Event('pointerup');
+      Object.defineProperty(event,'clientX',{value:10+8+184*.3});
+      slider.dispatchEvent(event);
+      assert.ok(video.currentTime>1070&&video.currentTime<1090,'Pointer seek must change the actual media clock without a change event');
+      assert.equal(video.dataset.hlsSeekOrigin,'pointer');
+      assert.ok(Math.abs(Number(video.dataset.hlsSeekRequestedSeconds)-1080)<1);
+      slider.value='500';
+      slider.dispatchEvent(new Event('change'));
+      assert.ok(video.currentTime>1799&&video.currentTime<1801,'Native range change must remain accessible for keyboards');
+    }
+  });
+  assert.ok(r.position>1799&&r.position<1801);
+});
 for (const id of ['1182395717','drivev-example']) test(`MP4-only shiur ${id} starts in the direct player`,async()=>{
   const r = await fixture({video:{hls:null,mp4:'https://media.example.test/video.mp4'}},id,42);
   assert.equal(r.source,'mp4');assert.equal(r.url,'https://media.example.test/video.mp4');

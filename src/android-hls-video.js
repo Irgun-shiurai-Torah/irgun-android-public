@@ -201,6 +201,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let singleTapTimer = 0;
   let lastSideTap = null;
   let pointerStart = null;
+  let seekGestureActive = false;
   let ignoreClickUntil = 0;
   let visualCheck = 0;
   let playbackIntent = 0;
@@ -297,7 +298,10 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     const current = Number(video.currentTime) || 0;
     currentLabel.textContent = formatTime(current);
     durationLabel.textContent = formatTime(duration);
-    seekControl.value = duration ? String(Math.round(current / duration * 1000)) : '0';
+    // Updating the slider on every media timeupdate used to overwrite a real
+    // Android drag/tap before the browser dispatched its final change event.
+    if (!seekGestureActive)
+      seekControl.value = duration ? String(Math.round(current / duration * 1000)) : '0';
   };
   const updatePlayIcon = () => {
     const playing = (!video.paused && !video.ended) || (playbackWanted && !initialPlaybackStarted);
@@ -370,13 +374,42 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     if (Date.now() < ignoreClickUntil) { event.preventDefault(); return; }
     togglePlayback();
   });
+  const commitSeek = (position, origin) => {
+    const duration = Number(video.duration) || 0;
+    if (!duration || !Number.isFinite(position)) return;
+    const target = Math.max(0, Math.min(position, Math.max(0, duration - .25)));
+    // One actual seek per completed physical gesture. Pointer delivery is
+    // reliable on WebView versions which emit input but not change on a tap.
+    if (Math.abs((Number(video.currentTime) || 0) - target) > 0.25)
+      video.currentTime = target;
+    seekControl.value = String(Math.round(target / duration * 1000));
+    currentLabel.textContent = formatTime(target);
+    video.dataset.hlsSeekRequestedSeconds = String(target);
+    video.dataset.hlsSeekOrigin = origin;
+  };
+  seekControl.addEventListener('pointerdown', () => { seekGestureActive = true; });
+  seekControl.addEventListener('pointercancel', () => {
+    seekGestureActive = false;
+    updateTimeline();
+  });
+  seekControl.addEventListener('pointerup', event => {
+    if (!seekGestureActive) return;
+    seekGestureActive = false;
+    const box = seekControl.getBoundingClientRect();
+    if (!(box.width > 16) || !Number.isFinite(event.clientX)) return;
+    const x = Math.max(0, Math.min(1, (event.clientX - box.left - 8) / (box.width - 16)));
+    const rtl = typeof getComputedStyle === 'function' && getComputedStyle(seekControl).direction === 'rtl';
+    const fraction = rtl ? 1 - x : x;
+    commitSeek((Number(video.duration) || 0) * fraction, 'pointer');
+  });
   seekControl.addEventListener('input', () => {
     const duration = Number(video.duration) || 0;
     currentLabel.textContent = formatTime(duration * Number(seekControl.value) / 1000);
   });
+  // Keyboard/assistive range changes continue to use the native control.
   seekControl.addEventListener('change', () => {
-    const duration = Number(video.duration) || 0;
-    if (duration) video.currentTime = duration * Number(seekControl.value) / 1000;
+    seekGestureActive = false;
+    commitSeek((Number(video.duration) || 0) * Number(seekControl.value) / 1000, 'change');
   });
   muteButton.addEventListener('click', () => { desiredMuted = !desiredMuted; video.muted = startupPrime ? true : desiredMuted; });
   volumeControl.addEventListener('input', () => {

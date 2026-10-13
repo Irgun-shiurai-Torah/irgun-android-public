@@ -179,6 +179,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     private boolean pendingBackgroundWasPlaying = false;
     private long backgroundHandoffId = 0L;
     private boolean backgroundPauseRequested = false;
+    private boolean backgroundWebViewStopped = false;
 
     // While Vimeo is authoritative, the same ExoPlayer mirrors its clock silently.
     // This keeps Media3's one MediaItem/session/notification alive and makes Home or
@@ -1117,6 +1118,7 @@ public class IrgunPlaybackService extends MediaSessionService {
                 || (!externalVideoPlaying && !player.getPlayWhenReady())) return;
         pendingBackgroundHandoff = true;
         backgroundPauseRequested = false;
+        backgroundWebViewStopped = false;
         backgroundHandoffId += 1L;
         pendingBackgroundPositionMs = Math.max(0L, externalVideoPositionMs);
         backgroundHandoffStartedMs = android.os.SystemClock.elapsedRealtime();
@@ -1145,8 +1147,17 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     private void continueBackgroundHandoffIfReady() {
         if (!pendingBackgroundHandoff || player == null || player.getPlaybackState() != Player.STATE_READY) return;
-        if (backgroundPauseRequested) return;
         if (pendingBackgroundWasPlaying && !player.isPlaying()) return;
+        // Activity.onStop guarantees the Video surface is no longer presented.
+        // Its WebView may already be suspended and unable to acknowledge the
+        // queued Vimeo pause. Complete on the buffered native source now,
+        // rather than waiting another 1200ms for an unreachable JS callback.
+        if (backgroundWebViewStopped) {
+            Log.d(TAG, "[Playback] Home Video surface stopped; buffered Audio takes ownership");
+            completeBackgroundHandoffInternal();
+            return;
+        }
+        if (backgroundPauseRequested) return;
         long position = player.getCurrentPosition();
         long elapsed = Math.max(0L, android.os.SystemClock.elapsedRealtime() - backgroundHandoffStartedMs);
         long latest = pendingBackgroundPositionMs + Math.round(elapsed * logicalSpeed);
@@ -1169,6 +1180,19 @@ public class IrgunPlaybackService extends MediaSessionService {
         }, 1200L);
     }
 
+    private void onBackgroundWebViewStoppedInternal() {
+        if (!pendingBackgroundHandoff) return;
+        backgroundWebViewStopped = true;
+        continueBackgroundHandoffIfReady();
+    }
+
+    public static void onBackgroundWebViewStopped() {
+        onMain(() -> {
+            IrgunPlaybackService service = active();
+            if (service != null) service.onBackgroundWebViewStoppedInternal();
+        });
+    }
+
     private void confirmBackgroundVideoPausedInternal(long handoffId, long positionMs) {
         if (!pendingBackgroundHandoff || !backgroundPauseRequested || handoffId != backgroundHandoffId) return;
         if (positionMs > 0L) {
@@ -1185,6 +1209,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         if (!pendingBackgroundHandoff || player == null) return;
         pendingBackgroundHandoff = false;
         backgroundPauseRequested = false;
+        backgroundWebViewStopped = false;
         authorityGuard.commitAudio();
         playbackMode = PlaybackMode.AUDIO;
         externalVideoPlaying = false;

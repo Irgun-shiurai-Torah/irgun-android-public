@@ -422,13 +422,20 @@ try{
   await section('Home during video continues native audio; media notification and controls reopen',async()=>{
     await closePlayer();const v=await videoReady();audibleVideo(v);
     const beforePosition=v.video.time;
+    const homeAt=Date.now();
     adb('shell','input','keyevent','KEYCODE_HOME');
-    await delay(3600);
+    // Native Media3 must actually become audible after the asynchronous Home
+    // transfer; an arbitrary fixed sleep can sample VIDEO just before READY.
+    const background=await wait(s=>s.native.mode==='AUDIO'&&s.native.audioIsPlaying&&
+      s.native.audioOutputVolume>0, 'Home did not complete an audible native Audio handoff',6500);
+    const handoffMs=Date.now()-homeAt;
+    assert.ok(handoffMs<=6500,'Home handoff exceeded the bounded background playback deadline');
+    report.backgroundHandoffMs=handoffMs;
     const notification=adb('shell','dumpsys','notification','--noredact');
     assert.ok(notification.includes(pkg),'The app did not post a media notification while backgrounded');
     const sessions=adb('shell','dumpsys','media_session');
     assert.ok(sessions.includes(pkg),'The Android Media3 session is absent while backgrounded');
-    const background=await read();audibleAudio(background);
+    audibleAudio(background);
     assert.ok(background.native.audioPositionMs/1000>=beforePosition+1,'Home must preserve the actual playing position');
     await delay(1400);
     const continuing=await read();audibleAudio(continuing);
@@ -646,6 +653,11 @@ try{
       const point=JSON.parse(await evaluate('JSON.stringify((()=>{const e=document.querySelector("[data-hls-seek]"),r=e?.getBoundingClientRect(),v=document.querySelector("#watchDirectHlsVideo");if(!r||!v?.duration)return null;const fraction='+seconds+'/v.duration,rtl=getComputedStyle(e).direction==="rtl",x=r.left+8+(r.width-16)*(rtl?1-fraction:fraction),y=r.top+r.height/2;return document.elementFromPoint(x,y)===e?{x,y,width:innerWidth,height:innerHeight}:null;})())'));
       assert.ok(point,'Visible HLS seek bar required to fetch real unbuffered video');
       bounds=await nativeBounds();adb('shell','input','tap',...nativeXY(point).map(String));await delay(500);
+      const observed=Number(await evaluate('document.querySelector("#watchDirectHlsVideo")?.dataset.hlsSeekRequestedSeconds || NaN'));
+      assert.ok(Number.isFinite(observed)&&Math.abs(observed-seconds)<15,
+        'Physical HLS range tap did not dispatch a seek to its requested position: expected='+seconds+' observed='+observed);
+      report.physicalHlsSeeks||=[];
+      report.physicalHlsSeeks.push({expectedSeconds:seconds,requestedSeconds:observed});save();
     };
     await command('Network.enable');await command('Network.setCacheDisabled',{cacheDisabled:true});
     try {

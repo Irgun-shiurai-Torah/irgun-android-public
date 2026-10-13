@@ -277,6 +277,10 @@ public class MainActivity extends BridgeActivity {
         // audio already continues without intervention, while video handoff is tied
         // to the explicit user-leave callback above.
         super.onStop();
+        // Unlike onPause (which also fires for dialogs), onStop confirms the
+        // Video Activity is no longer visible. A pre-buffered native audio
+        // shadow may now complete an already-requested Home handoff.
+        IrgunPlaybackService.onBackgroundWebViewStopped();
     }
 
     @Override
