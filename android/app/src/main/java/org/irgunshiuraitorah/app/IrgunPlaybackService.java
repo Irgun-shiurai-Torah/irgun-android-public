@@ -217,7 +217,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         }
 
         private boolean logicalVideoActive() {
-            return playbackMode == PlaybackMode.VIDEO && !cleanStatic(lectureId).isEmpty();
+            return !nativeVideoSourceActive && playbackMode == PlaybackMode.VIDEO && !cleanStatic(lectureId).isEmpty();
         }
 
         @Override
@@ -270,7 +270,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private boolean videoMirrorCallbackAllowed() {
-        return !syncingVideoShadow
+        return !nativeVideoSourceActive && !syncingVideoShadow
             && !pendingBackgroundHandoff
             && android.os.SystemClock.elapsedRealtime() > suppressVideoMirrorUntilMs;
     }
@@ -465,6 +465,10 @@ public class IrgunPlaybackService extends MediaSessionService {
 
                 @Override
                 public void onPlayerError(PlaybackException error) {
+                    if (nativeVideoSourceActive) {
+                        recoverNativeVideoSourceInternal(error);
+                        return;
+                    }
                     audioSeekGuard.clear();
                     Log.w(TAG, "[Playback] native audio error: " + error.getErrorCodeName());
                     if (scheduleNetworkRecovery(error.errorCode)) return;
@@ -1277,6 +1281,205 @@ public class IrgunPlaybackService extends MediaSessionService {
         // lecture. Media3 remains the single owner until the user actually pauses/stops.
         if (snapshot().isPlaying) return;
         super.onTaskRemoved(rootIntent);
+    }
+
+
+    /**
+     * Native-video beta: one ExoPlayer, one MediaSession, one playback clock.
+     * Video and Audio presentation change only track selection, not MediaItems.
+     * All access occurs on Android's application main looper.
+     */
+    public static final class NativeVideoInfo {
+        public final boolean active;
+        public final boolean videoSelected;
+        public final boolean isPlaying;
+        public final boolean playWhenReady;
+        public final boolean firstFrame;
+        public final long frameCount;
+        public final long positionMs;
+        public final long durationMs;
+        public final long bufferedPositionMs;
+        public final int width;
+        public final int height;
+        public final String source;
+        public final String error;
+        NativeVideoInfo(IrgunPlaybackService s) {
+            ExoPlayer p = s == null ? null : s.player;
+            active = s != null && s.nativeVideoSourceActive && p != null;
+            videoSelected = active && s.nativeVideoSelected;
+            isPlaying = active && p.isPlaying();
+            playWhenReady = active && p.getPlayWhenReady();
+            firstFrame = active && s.nativeVideoFirstFrameRendered;
+            frameCount = active ? s.nativeVideoRenderedFrames : 0L;
+            positionMs = active ? Math.max(0L, p.getCurrentPosition()) : 0L;
+            long d = active ? p.getDuration() : 0L;
+            durationMs = d == C.TIME_UNSET ? 0L : Math.max(0L, d);
+            bufferedPositionMs = active ? Math.max(0L, p.getBufferedPosition()) : 0L;
+            width = active ? p.getVideoSize().width : 0;
+            height = active ? p.getVideoSize().height : 0;
+            source = active ? (s.nativeVideoUsingHls ? "hls" : "mp4") : "";
+            error = active && p.getPlayerError() != null
+                ? p.getPlayerError().getErrorCodeName() : "";
+        }
+    }
+
+    public static NativeVideoInfo nativeVideoInfo() {
+        return new NativeVideoInfo(active());
+    }
+
+    @Nullable
+    public static ExoPlayer nativeVideoPlayer() {
+        IrgunPlaybackService s = active();
+        return s == null || !s.nativeVideoSourceActive ? null : s.player;
+    }
+
+    private void switchNativeVideoPresentationInternal(boolean showVideo) {
+        if (!nativeVideoSourceActive || player == null) return;
+        nativeVideoSelected = showVideo;
+        playbackMode = showVideo ? PlaybackMode.VIDEO : PlaybackMode.AUDIO;
+        if (showVideo) authorityGuard.allowVideo();
+        else authorityGuard.commitAudio();
+        player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !showVideo)
+            .build());
+        setCandidateAudioFocus(true);
+        player.setVolume(logicalVolume);
+        // No seek, stop, prepare or replacement on Video <-> Audio.
+        // Audio continues from the same Media3 HLS frame at the same rate.
+        publishNativeState();
+        refreshMediaNotification();
+    }
+
+    public static void nativeVideoPresentation(boolean showVideo) {
+        onMain(() -> {
+            IrgunPlaybackService s = active();
+            if (s != null) s.switchNativeVideoPresentationInternal(showVideo);
+        });
+    }
+
+    private MediaItem nativeVideoMediaItem(String url, boolean hls) {
+        MediaMetadata.Builder metadata = new MediaMetadata.Builder()
+            .setTitle(title).setArtist(speaker).setAlbumTitle("Irgun Shiurai Torah");
+        if (!image.isEmpty()) {
+            try { metadata.setArtworkUri(Uri.parse(image)); } catch (RuntimeException ignored) {}
+        }
+        MediaItem.Builder item = new MediaItem.Builder()
+            .setMediaId(lectureId)
+            .setUri(Uri.parse(url))
+            .setMediaMetadata(metadata.build());
+        if (hls) item.setMimeType(MimeTypes.APPLICATION_M3U8);
+        return item.build();
+    }
+
+    private void openNativeVideoInternal(String requestedId, String title, String speaker,
+            String image, String audioUrl, String hlsUrl, String mp4Url,
+            long positionMs, float speed, boolean shouldPlay) {
+        if (player == null) return;
+        String id = cleanStatic(requestedId);
+        String videoUrl = !cleanStatic(hlsUrl).isEmpty() ? cleanStatic(hlsUrl) : cleanStatic(mp4Url);
+        if (id.isEmpty() || videoUrl.isEmpty()) {
+            IrgunPlaybackPlugin.handlePlaybackError("Native video source was unavailable");
+            return;
+        }
+        cancelNetworkRecovery();
+        pendingBackgroundHandoff = false;
+        backgroundPauseRequested = false;
+        backgroundHandoffId++;
+        audioSeekGuard.clear();
+        authorityGuard.allowVideo();
+        lectureId = id;
+        vimeoId = id;
+        this.title = cleanStatic(title).isEmpty() ? "Shiur" : cleanStatic(title);
+        this.speaker = cleanStatic(speaker).isEmpty() ? "Irgun Shiurai Torah" : cleanStatic(speaker);
+        this.image = cleanStatic(image);
+        this.audioUrl = cleanStatic(audioUrl);
+        videoSource = "native-media3";
+        mediaKind = "video-audio";
+        sourceId = id;
+        nativeVideoHlsUrl = cleanStatic(hlsUrl);
+        nativeVideoMp4Url = cleanStatic(mp4Url);
+        nativeVideoUsingHls = !nativeVideoHlsUrl.isEmpty();
+        nativeVideoMp4FallbackAttempted = false;
+        nativeVideoRenderedFrames = 0L;
+        nativeVideoFirstFrameRendered = false;
+        nativeVideoSourceActive = true;
+        nativeVideoSelected = true;
+        logicalSpeed = speed > 0f ? speed : 1f;
+        logicalVolume = 1f;
+        playbackMode = PlaybackMode.VIDEO;
+        externalVideoPlaying = shouldPlay;
+        player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false).build());
+        setCandidateAudioFocus(true);
+        player.setVolume(logicalVolume);
+        player.setPlaybackSpeed(logicalSpeed);
+        player.setMediaItem(nativeVideoMediaItem(videoUrl, nativeVideoUsingHls),
+            Math.max(0L, positionMs));
+        player.prepare();
+        player.setPlayWhenReady(shouldPlay);
+        Log.d(TAG, "[Playback] Native Media3 video " + (nativeVideoUsingHls ? "HLS" : "MP4")
+            + " prepared at " + positionMs + "ms in the existing audio session");
+        publishNativeState();
+        refreshMediaNotification();
+    }
+
+    public static void openNativeVideo(String id, String title, String speaker, String image,
+            String audioUrl, String hlsUrl, String mp4Url,
+            long positionMs, float speed, boolean shouldPlay) {
+        onMain(() -> {
+            IrgunPlaybackService s = active();
+            if (s != null) s.openNativeVideoInternal(id,title,speaker,image,audioUrl,
+                hlsUrl,mp4Url,positionMs,speed,shouldPlay);
+        });
+    }
+
+    private void recoverNativeVideoSourceInternal(PlaybackException error) {
+        if (!nativeVideoSourceActive || player == null) return;
+        long position = Math.max(0L, player.getCurrentPosition());
+        boolean intent = player.getPlayWhenReady();
+        // Retry HLS once after a genuine Media3 decoder/network failure.
+        if (nativeVideoUsingHls && !nativeVideoMp4FallbackAttempted) {
+            nativeVideoMp4FallbackAttempted = true;
+            if (!nativeVideoMp4Url.isEmpty()) {
+                Log.w(TAG, "[Playback] Native HLS failed (" + error.getErrorCodeName()
+                    + "), trying MP4 in the SAME Media3 player");
+                nativeVideoUsingHls = false;
+                nativeVideoRenderedFrames = 0L;
+                nativeVideoFirstFrameRendered = false;
+                player.setMediaItem(nativeVideoMediaItem(nativeVideoMp4Url,false),position);
+                player.prepare();
+                player.setPlayWhenReady(intent);
+                publishNativeState();
+                return;
+            }
+        }
+        IrgunPlaybackPlugin.handlePlaybackError("Native video could not play: "
+            + error.getErrorCodeName());
+    }
+
+    private void closeNativeVideoInternal(boolean keepAudio) {
+        if (!nativeVideoSourceActive || player == null) return;
+        if (keepAudio) {
+            switchNativeVideoPresentationInternal(false);
+            return;
+        }
+        player.pause();
+        player.stop();
+        player.clearMediaItems();
+        nativeVideoSourceActive = false;
+        nativeVideoSelected = false;
+        nativeVideoFirstFrameRendered = false;
+        playbackMode = PlaybackMode.AUDIO;
+        externalVideoPlaying = false;
+        publishNativeState();
+        refreshMediaNotification();
+    }
+
+    public static void closeNativeVideo(boolean keepAudio) {
+        onMain(() -> {
+            IrgunPlaybackService s = active();
+            if (s != null) s.closeNativeVideoInternal(keepAudio);
+        });
     }
 
     // ---- Static bridge entry points. All operations are posted to the service main thread. ----
