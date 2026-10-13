@@ -195,7 +195,15 @@ try {
   // This production build now uses a single native Media3 surface. An HTML
   // video node is intentionally absent: observing it as the playback engine
   // falsely failed all four API levels before a single playback assertion.
-  const firstNative=await evaluate("window.Capacitor.nativePromise('IrgunNativeVideo','snapshot',{})");
+  let firstNative;
+  // Native attach is asynchronous after a physical Watch tap. Observe whichever
+  // real decoder actually appears; do not misclassify a preparing native player
+  // as a failed WebView player from one early snapshot.
+  for(let attempt=0;attempt<75;attempt++) {
+    firstNative=await evaluate("window.Capacitor.nativePromise('IrgunNativeVideo','snapshot',{})");
+    if(firstNative.active || (await readDOM()).video)break;
+    await delay(400);
+  }
   if(firstNative.active) {
     const sample=async()=>({...(await read()),
       media3:await evaluate("window.Capacitor.nativePromise('IrgunNativeVideo','snapshot',{})")});
@@ -210,11 +218,12 @@ try {
       'Real moving native Video must start for the exact searched lecture');
     assert.equal(ready.video,null,'Native Media3 must not open a second WebView decoder');
     assert.equal(ready.iframeSrc,'about:blank','Native Video must never load a Vimeo iframe');
-    assert.equal(ready.media3.error,null,'Native Media3 decoder must have no error');
+    assert.ok(!ready.media3.error,'Native Media3 decoder must have no error');
     assert.ok(['hls','mp4'].includes(ready.media3.sourceType),'Actual native HLS/MP4 transport required');
     assert.ok(ready.media3.bufferedPositionMs>ready.media3.positionMs,
       'Actual native video must be buffered beyond its clock');
     assert.ok(Math.abs(ready.native.playbackSpeed-1)<.02,'Default Media3 speed must be 1x');
+    assert.ok(ready.native.audioOutputVolume>0,'Actual native Media3 VIDEO audio must not be muted');
     assert.equal(Boolean(await evaluate('window.ISTReleaseQA.snapshot().isLoggedIn')),
       process.env.IRGUN_EXPECT_SIGNED_IN==='1','Actual baseline must use declared account');
     report.checks.push({label:'Real native video selected, audible and buffered at default 1x',native:ready.native,media3:ready.media3});
