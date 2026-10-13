@@ -1356,9 +1356,18 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private void switchNativeVideoPresentationInternal(boolean showVideo, String offlineAudioUri) {
+        switchNativeVideoPresentationInternal(showVideo, offlineAudioUri, false);
+    }
+
+    private void switchNativeVideoPresentationInternal(boolean showVideo, String offlineAudioUri,
+            boolean forceNetworkAudio) {
         if (!nativeVideoSourceActive || player == null) return;
         String local = showVideo ? "" : cleanStatic(offlineAudioUri);
-        boolean restoreVideoSource = nativeVideoOfflineAudioActive && (showVideo || local.isEmpty());
+        // Background / notification Audio mode can reassert its presentation
+        // without providing a new URI. That MUST NOT discard a playing offline
+        // MP3 and demand Internet. Only explicit Video or saved-file deletion
+        // may restore the original network source.
+        boolean restoreVideoSource = nativeVideoOfflineAudioActive && (showVideo || forceNetworkAudio);
         boolean useLocalAudio = !showVideo && !local.isEmpty()
             && (!nativeVideoOfflineAudioActive || !local.equals(nativeVideoOfflineAudioUri));
         if (restoreVideoSource || useLocalAudio) {
@@ -1512,7 +1521,7 @@ public class IrgunPlaybackService extends MediaSessionService {
             // mode. Resume the network audio track at the same logical clock
             // without creating a second engine or silently claiming offline.
             Log.w(TAG, "[Playback] Offline MP3 failed; retrying the original native stream");
-            switchNativeVideoPresentationInternal(false, "");
+            switchNativeVideoPresentationInternal(false, "", true);
             return;
         }
         long position = Math.max(0L, player.getCurrentPosition());
@@ -1708,7 +1717,7 @@ public class IrgunPlaybackService extends MediaSessionService {
             nativeVideoNetworkAudioUrl = replacement;
             // Re-select the original network video with the video track OFF
             // before the file is unlinked from private Android storage.
-            switchNativeVideoPresentationInternal(false, "");
+            switchNativeVideoPresentationInternal(false, "", true);
             return true;
         }
         long position = playbackMode == PlaybackMode.VIDEO
