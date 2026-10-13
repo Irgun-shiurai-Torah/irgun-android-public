@@ -3,6 +3,7 @@ import {writeFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {accountSwipeDirection} from './android-account-native-scroll.mjs';
 const email=process.env.IRGUN_TEST_EMAIL,password=process.env.IRGUN_TEST_PASSWORD;
 assert.ok(email&&password,'Configure dedicated verified account secrets IRGUN_TEST_EMAIL and IRGUN_TEST_PASSWORD');
 const adb=(...a)=>execFileSync('adb',a,{encoding:'utf8'}).trim();
@@ -113,9 +114,12 @@ async function tap(key) {
       JSON.stringify(report.commentScrollGestures.slice(-4)));
     continue;
   }
-  const returnToTop=['closeWatch','email','password','login','settings'].includes(key);
+  // Account fields are ordered Email -> Password -> Login. With the IME
+  // covering the bottom of the screen, Password requires scrolling DOWN the
+  // form (physical swipe UP), not scrolling back toward Email.
+  const direction=accountSwipeDirection(key);
   const x=Math.round(bounds[2]-25),yStart=bounds[3]-150,yEnd=bounds[1]+135;
-  if(returnToTop)adb('shell','input','swipe',String(x),String(yEnd),String(x),String(yStart),'480');
+  if(direction==='down')adb('shell','input','swipe',String(x),String(yEnd),String(x),String(yStart),'480');
   else adb('shell','input','swipe',String(x),String(yStart),String(x),String(yEnd),'480');
   await delay(500);
  }
