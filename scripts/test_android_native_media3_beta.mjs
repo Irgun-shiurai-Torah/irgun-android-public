@@ -67,12 +67,12 @@ test('native Video surface yields to Save picker, then restores without pausing 
   assert.equal(calls.length,1);
   assert.equal(calls[0].width,0,'Physical Media3 PlayerView must hide while Save is on top');
   assert.equal(calls[0].height,0);
-  assert.doesNotMatch(adapter.slice(start,end),/\\.pause\\(|\\.stop\\(|\\.seekTo\\(|setMode\\(/,
+  assert.ok(!['.pause(','.stop(','.seekTo(','setMode('].some(part=>adapter.slice(start,end).includes(part)),
     'A modal must not interrupt, seek or replace the existing Media3 Audio');
   modalVisible=false;
   await context.positionFrame();
   assert.equal(calls[1].width,300,'The same native surface must return after closing the picker');
   assert.equal(calls[1].height,169);
-  assert.match(app,/state\\.watchVimeo\\?\\.updateFrame\\?\\.\\(\\)/,
+  assert.ok(app.includes('state.watchVimeo?.updateFrame?.()'),
     'The app must refresh the native surface after in-place picker dismissal');
 });
