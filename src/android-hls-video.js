@@ -809,15 +809,29 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   })();
   const adapter = makePlayerAdapter(video, stage, () => hls, readyPromise);
   adapter.resumeStalledHandoff = async () => {
-    // An Android HLS decoder may unexpectedly pause after displaying its
-    // first frame. Resume only an *already-started*, still-requested and
-    // muted Video handoff. Never turn an explicit user Pause into Play, never
-    // wake MP4's silent startup priming, and never loop/restart endlessly.
-    if (destroyed || activeSource !== sources.hls || !hls ||
+    // Older Android HLS and MP4 decoders can pause after the first real frame,
+    // despite the user's uninterrupted Play request. Resume once, silently,
+    // while Media3 Audio remains authoritative. Never wake startup priming,
+    // turn a user Pause into Play, or restart after Home/background.
+    const hlsReady = activeSource === sources.hls && Boolean(hls);
+    const mp4Ready = activeSource === sources.mp4 && video.readyState >= 2;
+    if (destroyed || (!hlsReady && !mp4Ready) ||
         !playbackWanted || !initialPlaybackStarted || !video.paused ||
         !video.muted || video.ended || startupPrime ||
         stalledHandoffResumes >= 1 ||
         (document.hidden && !isPictureInPicture())) return false;
+    if (mp4Ready) {
+      // A remote MP4 seek still fetching its first byte range is not a
+      // decoder-generated pause. Do not attempt Play or steal audio focus
+      // until a real media runway is present at the current position.
+      const at = Number(video.currentTime) || 0;
+      let ahead = 0;
+      for (let i = 0; i < (video.buffered?.length || 0); i++) {
+        if (video.buffered.start(i) <= at && video.buffered.end(i) > at)
+          ahead = Math.max(ahead, video.buffered.end(i) - at);
+      }
+      if (ahead < 1.5) return false;
+    }
     const expectedIntent = playbackIntent;
     stalledHandoffResumes += 1;
     try {
