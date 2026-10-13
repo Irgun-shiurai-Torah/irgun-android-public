@@ -1827,6 +1827,7 @@ function prewarmVideoAudioMetadata(video, id) {
     PlaybackController.loadLecture(item, state.watchResumeSeconds || 0, true).catch(()=>{});
     return;
   }
+  if (Capacitor.getPlatform() === 'android') return;
   if (!audio.paused) return;
   const sameSource = audio.src === item.url || audio.currentSrc === item.url;
   try {
@@ -5442,6 +5443,7 @@ async function switchVideoToAudioSeamlessly(video, id) {
       return false;
     }
   }
+  if (Capacitor.getPlatform() === 'android') return false;
   const previousCurrent = state.current;
   const previousMuted = Boolean(audio.muted);
   let exact = await quickVimeoTime(state.watchResumeSeconds || 0, 350);
@@ -7571,6 +7573,10 @@ async function startAudio(item, resumeAt = 0) {
   }
   state.current = effective;
   item = effective;
+  // Every Android playback request retries native Media3; it never activates
+  // WebView HTML audio when the native engine is unavailable.
+  if (Capacitor.getPlatform() === 'android' && state.nativePlaybackDisabled)
+    state.nativePlaybackDisabled = false;
 
   if (usesNativeUnifiedAudio()) {
     // Ask only on a real user playback action, never during app startup.
@@ -7600,7 +7606,7 @@ async function startAudio(item, resumeAt = 0) {
       nativeStarted = true;
     } catch (error) {
       disableNativePlayback(error);
-      setToast(currentLanguage()==='he'?'הנגן המובנה לא זמין; עברנו לנגן החלופי.':'Native playback is unavailable; switched to the fallback player.');
+      setToast(currentLanguage()==='he'?'נגן האודיו המובנה נכשל. לחצו על הפעלה כדי לנסות שוב.':'Native audio could not start. Tap Play to retry.');
     }
     if (nativeStarted) {
       state.nativePlayback.mode = 'AUDIO';
@@ -7612,6 +7618,14 @@ async function startAudio(item, resumeAt = 0) {
       updatePlayerUi();
       return;
     }
+  }
+  if (Capacitor.getPlatform() === 'android') {
+    // Do not silently create a second browser audio decoder on native failure.
+    state.nativePlayback.isPlaying = false;
+    try { audio.pause(); audio.removeAttribute('src'); audio.load(); } catch (_) {}
+    render();
+    updatePlayerUi();
+    return;
   }
 
   const same = state.current && state.current.kind === effective.kind && state.current.id === effective.id && audio.src === item.url;
@@ -7846,7 +7860,7 @@ function disableNativePlayback(error) {
     hasAudioSource:false
   };
   state.playbackAuthorityFence = null;
-  console.warn('[Playback] Native player disabled for this session; using HTML audio fallback', error || 'unknown error');
+  console.warn('[Playback] Native Media3 unavailable; Android HTML audio fallback is forbidden', error || 'unknown error');
   // Fully clear the native lecture/session before HTML audio takes over. Leaving
   // clearLecture=false can preserve stale metadata and an obsolete notification.
   try { plugin?.stopAudio?.({ clearLecture:true }).catch(()=>{}); } catch (_) {}
@@ -7864,11 +7878,11 @@ async function recoverFromNativePlaybackError(event = {}) {
   const mode = String(event?.mode || state.nativePlayback?.mode || '').toUpperCase();
   const message = event?.message || (currentLanguage()==='he'?'שגיאת ניגון.':'Playback error.');
 
-  // A shadow-source failure must never interrupt a healthy Vimeo video. Disable
-  // native playback for this session and keep the visible source authoritative.
+  // Android Video is also native Media3: do not disable its sole engine
+  // or report that a non-existent WebView/Vimeo decoder is still playing.
   if (mode === 'VIDEO') {
-    disableNativePlayback(message);
-    setToast(currentLanguage()==='he'?'הווידאו ממשיך לנגן. אודיו חלופי ישמש במקרה הצורך.':'Video is still playing. The fallback audio player will be used if needed.');
+    console.warn('[Playback] Native Media3 VIDEO error', message);
+    setToast(currentLanguage()==='he'?'שגיאת וידאו מובנה. לחצו על נסה שוב.':'Native video failed. Tap Retry native Video.');
     return;
   }
 
@@ -7913,47 +7927,21 @@ async function recoverFromNativePlaybackError(event = {}) {
       }
     }
 
-    const fallbackUrl = String(currentItem.networkUrl || currentItem.url || '');
     if (currentItem.kind === 'paid-audio') {
       await savePaidAudioProgress(false, true).catch(()=>{});
     } else if (state.user) {
       saveHistory(currentItem.id, 'audio', position, duration, false, { reconcile:true }).catch(()=>{});
     }
-
     disableNativePlayback(message);
-    if (!fallbackUrl) {
-      setToast(message);
-      return;
-    }
-
-    const fallbackItem = { ...currentItem, offline:false, url:fallbackUrl };
-    state.current = fallbackItem;
-    try { audio.pause(); } catch (_) {}
-    audio.src = fallbackUrl;
-    audio.preload = 'auto';
-    audio.playbackRate = state.playbackSpeed;
-    setupMediaSession(fallbackItem);
-    const applyResume = () => {
-      try {
-        const cap = Number.isFinite(audio.duration) && audio.duration > 1 ? Math.max(0, audio.duration - 1) : position;
-        audio.currentTime = Math.min(position, cap);
-      } catch (_) {}
-    };
-    if (audio.readyState >= 1) applyResume();
-    else audio.addEventListener('loadedmetadata', applyResume, { once:true });
-
+    state.watchResumeSeconds = position;
+    state.nativePlayback.currentPositionMs = Math.round(position * 1000);
+    state.nativePlayback.isPlaying = false;
     if (state.watchVideo && videoId(state.watchVideo) === String(currentItem.id || '')) {
       state.watchMode = 'audio';
-      state.watchResumeSeconds = position;
       state.watchVideoPlaying = false;
       parkHostedVideoForAudio();
     }
-
-    if (shouldPlay) {
-      try { await audio.play(); } catch (fallbackError) { console.warn('[Playback] HTML fallback needs a user tap', fallbackError); }
-    }
-    state.audioLastHistoryAt = 0;
-    setToast(currentLanguage()==='he'?'עברנו לנגן החלופי בלי לאבד את המקום.':'Switched to the fallback player without losing your place.');
+    setToast(currentLanguage()==='he'?'האודיו המובנה נעצר. לחצו על הפעלה כדי לנסות שוב.':'Native audio stopped. Tap Play to retry.');
     render();
     updatePlayerUi();
   } finally {
@@ -8234,6 +8222,16 @@ const PlaybackController = {
 
   async play() {
     if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo) return state.watchVimeo.play();
+    if (Capacitor.getPlatform() === 'android' && !usesNativeUnifiedAudio()) {
+      if (state.watchVideo && state.watchMode === 'video') {
+        setToast(currentLanguage()==='he'?'נסו שוב להפעיל וידאו מובנה.':'Retry native Video to continue.');
+        return null;
+      }
+      if (!state.current) return null;
+      state.nativePlaybackDisabled = false;
+      const resume = Number(state.nativePlayback?.currentPositionMs || 0) / 1000;
+      return startAudio(state.current, Math.max(0, resume));
+    }
     if (usesNativeUnifiedAudio()) {
       const plugin = nativeMediaPlugin();
       // The old play() bridge resolved even when Media3 still owned VIDEO or
@@ -8263,6 +8261,7 @@ const PlaybackController = {
 
   async pause() {
     if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo) return state.watchVimeo.pause();
+    if (Capacitor.getPlatform() === 'android' && !usesNativeUnifiedAudio()) return null;
     if (usesNativeUnifiedAudio()) {
       const result = await nativeMediaPlugin().pause();
       return result;
@@ -8272,6 +8271,7 @@ const PlaybackController = {
 
   async seekTo(seconds) {
     const value = Math.max(0, Number(seconds)||0);
+    if (Capacitor.getPlatform() === 'android' && !usesNativeUnifiedAudio() && !state.watchVimeo) return;
     if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo) {
       await state.watchVimeo.setCurrentTime(value);
       state.watchResumeSeconds = value;
@@ -8287,6 +8287,7 @@ const PlaybackController = {
   },
 
   async seekBy(seconds) {
+    if (Capacitor.getPlatform() === 'android' && !usesNativeUnifiedAudio() && !state.watchVimeo) return;
     if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo) {
       const now = await state.watchVimeo.getCurrentTime().catch(()=>state.watchResumeSeconds||0);
       const duration = await state.watchVimeo.getDuration().catch(()=>0);
@@ -8306,7 +8307,7 @@ const PlaybackController = {
     state.playbackSpeed = value;
     localStorage.setItem(SPEED_KEY, String(value));
     if (usesNativeUnifiedAudio()) nativeMediaPlugin().setSpeed({ rate:value }).catch(()=>{});
-    else audio.playbackRate = value;
+    else if (Capacitor.getPlatform() !== 'android') audio.playbackRate = value;
     if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo && typeof state.watchVimeo.setPlaybackRate === 'function') {
       await state.watchVimeo.setPlaybackRate(value).catch(()=>{});
     }
@@ -8568,7 +8569,7 @@ audio.addEventListener('ended', async () => {
   if (!advanced) updatePlayerUi();
 });
 audio.addEventListener('error', () => {
-  if (usesNativeUnifiedAudio()) return;
+  if (Capacitor.getPlatform() === 'android') return;
   console.warn('Audio playback error', audio.error);
   if (state.current?.offline && state.current?.networkUrl && navigator.onLine !== false) {
     const networkUrl = state.current.networkUrl;
@@ -8786,7 +8787,7 @@ async function performWatchModeSwitch(mode) {
     state.watchAudioToVideoTargetSeconds = 0;
     const switched = await switchVideoToAudioSeamlessly(video, id);
     if (!switched) {
-      if (usesNativeUnifiedAudio()) {
+      if (Capacitor.getPlatform() === 'android' || usesNativeUnifiedAudio()) {
         setToast(currentLanguage()==='he'?'האודיו עדיין לא מוכן. הווידאו ממשיך לנגן.':'Audio is not ready yet. Video is still playing.');
         return false;
       }
@@ -8837,7 +8838,7 @@ async function performWatchModeSwitch(mode) {
     render();
     const ok = await resumeParkedVideoFromAudio(video, id, keepAudioUntilVideoStarts);
     if (!ok) {
-      if (usesNativeUnifiedAudio()) {
+      if (Capacitor.getPlatform() === 'android' || usesNativeUnifiedAudio()) {
         state.watchMode = 'audio';
         setPlaybackAuthorityFence('AUDIO', id, 2500);
         parkHostedVideoForAudio();
