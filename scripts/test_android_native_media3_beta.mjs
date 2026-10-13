@@ -8,10 +8,18 @@ const app=readFileSync('src/main.js','utf8');
 const adapter=readFileSync('src/android-native-media3-video.js','utf8');
 const gradle=readFileSync('android/app/build.gradle','utf8');
 
-test('beta stays opt-in while existing Android WebView remains the production default',()=>{
-  assert.match(adapter,/VITE_ANDROID_MEDIA3_VIDEO_BETA === 'true'/);
-  assert.match(app,/if \(Capacitor\.getPlatform\(\) === 'android' && nativeMedia3BetaEnabled\(\)\)/);
-  assert.match(app,/if \(!player\) player = await createAndroidHlsPlayer/);
+test('Android uses Media3 exclusively and refuses silent WebView/Vimeo fallback',()=>{
+  assert.match(app,/if \(Capacitor\.getPlatform\(\) === 'android'\) \{/);
+  assert.match(app,/player = await createNativeMedia3VideoPlayer\(/);
+  assert.doesNotMatch(app,/createAndroidHlsPlayer\(/,'WebView HLS decoder may not be reached or imported by the Android app');
+  assert.doesNotMatch(app,/from ['"]\.\/android-hls-video\.js['"]/,'Legacy WebView HLS code must not enter the app bundle');
+  assert.doesNotMatch(adapter,/from ['"]\.\/android-hls-video\.js['"]/,'Media3 source lookup must not import WebView HLS');
+  assert.match(adapter,/from '\.\/android-media-source\.js'/,'Pure source descriptor must be independent of the retired decoder');
+  assert.match(app,/Android Video requires native Media3/);
+  assert.match(app,/showAndroidNativeVideoError\(frame,nativeError\)/);
+  assert.match(app,/Retry native Video/,'Unplayable native video must show a user-directed retry, not a second video player');
+  assert.match(app,/Capacitor\.getPlatform\(\) === 'android' \? 'about:blank'/,'The initial Android iframe must never load Vimeo');
+  assert.doesNotMatch(adapter,/VITE_ANDROID_MEDIA3_VIDEO_BETA/,'Media3 must no longer depend on a build feature flag');
 });
 test('native video and native audio use the SAME ExoPlayer instance and MediaSession',()=>{
   assert.match(service,/private ExoPlayer player;/);
@@ -32,7 +40,7 @@ test('native Video to Audio retains its media item and exact playback position',
   assert.match(service,/if \(nativeVideoSourceActive\) return;/,'Legacy Vimeo clock must not overwrite native source');
   assert.match(service,/nativeVideoRenderedFrames\+\+/,'Actual video frames, not only clock, must be tracked');
 });
-test('Android beta controls expose only bounded and source-safe native commands',()=>{
+test('Android native controls expose only bounded and source-safe commands',()=>{
   assert.match(bridge,/API_HOST = "api\.irgunshiuraitorah\.com"/);
   assert.match(bridge,/startsWith\("\/media\/"\)/);
   assert.match(bridge,/case "seek":/);
