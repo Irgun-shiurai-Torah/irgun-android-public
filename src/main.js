@@ -8795,15 +8795,22 @@ async function performWatchModeSwitch(mode) {
     // stale clock, sound overlap or WebView handoff transaction.
     const player=state.watchVimeo;
     const previous=state.watchMode;
-    await player.setMode(mode);
+    const baseAudio=mode==='audio'?videoAudioPlaybackItem(video,id):null;
+    const offlineRecord=baseAudio?offlineRecordForAudioItem(baseAudio):null;
+    const offlineUri=offlineRecord?.uri||'';
+    // Merely hiding HLS's Video track does not use the downloaded MP3. When a
+    // verified offline copy exists, route the SAME Media3 ExoPlayer to that
+    // private file and retain the exact clock. Video restores original HLS.
+    await player.setMode(mode,{offlineUri});
     let observed=null;
     for(let attempt=0;attempt<12;attempt++){
       observed=await player.refresh();
       if(observed.active&&observed.videoSelected===(mode==='video'))break;
       await new Promise(resolve=>setTimeout(resolve,120));
     }
-    if(!observed?.active||observed.videoSelected!==(mode==='video')){
-      console.warn('[Media3 beta] native mode switch did not commit',observed);
+    if(!observed?.active||observed.videoSelected!==(mode==='video')||
+        (mode==='audio'&&offlineUri&&observed.sourceType!=='offline-mp3')){
+      console.warn('[Media3] native mode/file source switch did not commit',observed);
       await player.setMode(previous).catch(()=>{});
       return false;
     }
@@ -8824,9 +8831,15 @@ async function performWatchModeSwitch(mode) {
       if(!restoreParkedHostedVideo()){
         throw new Error('Native Media3 Video cannot restore its single persistent Watch host');
       }
+      clearCurrentAudioStateForVideo();
     }else{
       parkHostedVideoForAudio();
-      if(!state.current || String(state.current.id)!==String(id)) state.current=videoAudioPlaybackItem(video,id);
+      const networkUrl=baseAudio?.url||'';
+      const localUrl=offlineFileUrl(offlineRecord);
+      state.current=offlineRecord
+        ? { ...baseAudio, url:localUrl, networkUrl,
+            nativeBackgroundUrl:offlineUri, offline:true, offlineKey:offlineRecord.key }
+        : { ...baseAudio, networkUrl, offline:false };
       setNativePipEligibility(false);
     }
     await PlaybackController.refreshFromNative().catch(()=>{});
