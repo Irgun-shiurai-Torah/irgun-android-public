@@ -7,8 +7,7 @@ import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileTransfer } from '@capacitor/file-transfer';
 import { Share } from '@capacitor/share';
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { createAndroidHlsPlayer } from './android-hls-video.js';
-import { createNativeMedia3VideoPlayer, nativeMedia3BetaEnabled } from './android-native-media3-video.js';
+import { createNativeMedia3VideoPlayer } from './android-native-media3-video.js';
 import {rememberCachedAccount,readCachedAccount,clearCachedAccount} from './android-offline-account.js';
 import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } from './offline-validation.js';
 import { downloadOfflineAudio } from './offline-download.js';
@@ -238,6 +237,7 @@ const state = {
   watchVimeo: null,
   watchVimeoReady: false,
   watchVideoForceVimeoId: '',
+  watchNativeVideoFailedId: '',
   watchVideoPlaying: false,
   systemPipActive: false,
   systemPipWasPlaying: false,
@@ -5754,7 +5754,7 @@ function watchHtml() {
       <div class="watch-player-card">
         <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">Video</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">Audio</button>` : ''}</div>
         ${state.watchMode === 'video'
-          ? `<iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${Capacitor.getPlatform() === 'android' && v.sourceType === 'drive-library' ? 'about:blank' : Capacitor.getPlatform() === 'android' ? watchVimeoEmbedSrc(v, state.watchResumeSeconds).replace('autoplay=1', 'autoplay=0') : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`
+          ? `<iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${Capacitor.getPlatform() === 'android' ? 'about:blank' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`
           : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${playbackDurationSeconds()}" value="${playbackPositionSeconds()}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${playbackIsPaused() ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(playbackPositionSeconds())} / ${fmtDurationOrUnknown(playbackDurationSeconds())}</div></div>`}
       </div>
       <section class="watch-details">
@@ -5788,7 +5788,7 @@ function miniVideoHtml(includeFrame = true) {
   const v = state.watchVideo;
   if (!v || state.watchMode !== 'video') return '';
   const speaker = v._speakerLabel || v.speaker || 'Irgun Shiurai Torah';
-  const frameHtml = includeFrame ? `<iframe id="watchVimeoFrame" class="mini-video-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${v.sourceType === 'drive-library' ? 'about:blank' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>` : '';
+  const frameHtml = includeFrame ? `<iframe id="watchVimeoFrame" class="mini-video-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${Capacitor.getPlatform() === 'android' || v.sourceType === 'drive-library' ? 'about:blank' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>` : '';
   return `<div class="mini-video-player">
     <div class="mini-video-frame-wrap" data-expand-watch="1" role="button" aria-label="Open video">${frameHtml}</div>
     <div class="mini-video-copy" data-expand-watch="1" role="button" tabindex="0"><strong>${esc(displayShiurTitle(v.title, 'Shiur'))}</strong><span>${esc(speaker)}</span></div>
@@ -8619,6 +8619,7 @@ async function openWatch(id, requestedTime = null, options = {}) {
   setPlaybackAuthorityFence('VIDEO', id, 5000);
   state.watchVideo = video;
   state.watchVideoForceVimeoId = '';
+  state.watchNativeVideoFailedId = '';
   state.pendingWatchMode = '';
   state.watchMode = 'video';
   state.watchAudioToVideoHandoff = Boolean(fromAudioWasPlaying);
@@ -8715,6 +8716,7 @@ async function closeWatch(save = true) {
   clearPersistentVideoMount();
   state.watchVideo = null;
   state.watchVideoForceVimeoId = '';
+  state.watchNativeVideoFailedId = '';
   if (!state.current) usageAnalytics.setMedia({isPlaying:false,mediaType:'none',playerState:'browsing',shiurId:''});
   state.pendingWatchMode = '';
   state.watchAudioToVideoHandoff = false;
@@ -8949,6 +8951,31 @@ async function finishInitializedNativeVideoHandoff(player, video, videoKey) {
   return transferred;
 }
 
+function showAndroidNativeVideoError(frame, detail) {
+  const container = frame?.parentElement;
+  if (!container) return;
+  frame.src = 'about:blank';
+  frame.style.visibility = 'hidden';
+  container.querySelector('[data-native-video-error]')?.remove();
+  const notice = document.createElement('div');
+  notice.dataset.nativeVideoError = '1';
+  notice.className = 'watch-video-error';
+  notice.setAttribute('role','alert');
+  const message = document.createElement('p');
+  message.textContent = 'Native Video could not load. Check your connection or try again. Audio remains available.';
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.textContent = 'Retry native Video';
+  retry.addEventListener('click', () => {
+    notice.remove();
+    state.watchNativeVideoFailedId = '';
+    void initWatchVimeo(true);
+  });
+  notice.append(message,retry);
+  container.append(notice);
+  console.warn('[Media3] Native-only Video failed, no WebView fallback',detail);
+}
+
 function initWatchVimeo(userInitiated = false) {
   if (state.watchVimeo) return Promise.resolve();
   const generation = state.watchVimeoGeneration;
@@ -8976,64 +9003,42 @@ async function initWatchVimeoOnce(userInitiated = false) {
   const videoKey = videoId(video);
   let player = null;
   try {
-    if (state.watchVideoForceVimeoId !== videoKey) {
+    if (Capacitor.getPlatform() === 'android') {
+      // Android playback uses native Media3 exclusively. No WebView HLS.js,
+      // Vimeo iframe or second audio decoder is allowed, even on an error.
+      frame.src = 'about:blank';
+      frame.style.visibility = 'hidden';
+      if (state.watchNativeVideoFailedId === videoKey && !userInitiated) return;
+      frame.parentElement?.querySelector('[data-native-video-error]')?.remove();
       try {
-        if (Capacitor.getPlatform() === 'android' && nativeMedia3BetaEnabled()) {
-          try {
-            player = await createNativeMedia3VideoPlayer({
-              apiBase:API,videoId:videoKey,iframe:frame,
-              resumeSeconds:Math.max(0,Number(state.watchResumeSeconds)||0),
-              title:displayShiurTitle(video.title,'Shiur'),
-              speaker:video._speakerLabel||video.speaker||'Irgun Shiurai Torah',
-              image:video.thumbnail||video.image||'',
-              audioUrl:video.hasAudio?audioUrl(mediaApiId(video,videoKey)):'',
-              speed:Number(state.playbackSpeed)||1,
-              onError:error=>console.warn('[Media3 beta] native Video failed',error)
-            });
-          } catch (nativeError) {
-            console.warn('[Media3 beta] falling back to the existing WebView player',nativeError);
-          }
-        }
-        if (!player) player = await createAndroidHlsPlayer({
-          apiBase: API,
-          platform: Capacitor.getPlatform(),
-          videoId: videoKey,
-          iframe: frame,
-          resumeSeconds: Math.max(0, Number(state.watchResumeSeconds) || 0),
-          isPictureInPicture: () => state.systemPipActive,
-          onSpeedChange: rate => {
-            if (generation === state.watchVimeoGeneration && videoId(state.watchVideo) === videoKey) {
-              void PlaybackController.setSpeed(rate);
+        player = await createNativeMedia3VideoPlayer({
+          apiBase: API,videoId:videoKey,iframe:frame,
+          resumeSeconds:Math.max(0,Number(state.watchResumeSeconds)||0),
+          title:displayShiurTitle(video.title,'Shiur'),
+          speaker:video._speakerLabel||video.speaker||'Irgun Shiurai Torah',
+          image:video.thumbnail||video.image||'',
+          audioUrl:video.hasAudio?audioUrl(mediaApiId(video,videoKey)):'',
+          speed:Number(state.playbackSpeed)||1,
+          onError:error=>{
+            if (generation===state.watchVimeoGeneration && state.watchMode==='video') {
+              state.watchNativeVideoFailedId=videoKey;
+              if (!frame.parentElement?.querySelector('[data-native-video-error]'))
+                showAndroidNativeVideoError(frame,error);
             }
-          },
-          onMinimize: () => {
-            if (generation === state.watchVimeoGeneration && state.watchMode === 'video' && !state.systemPipActive && !state.watchMinimized && videoId(state.watchVideo) === videoKey) {
-              void minimizeWatchToPersistent();
-            }
-          },
-          onError: async (error, position, autoplay, failedPlayer) => {
-            if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video' || videoId(state.watchVideo) !== videoKey) return;
-            if (directOnly) { console.error('[Playback] Drive video HLS and MP4 failed:', error); return; }
-            console.warn('[Playback] HLS and MP4 failed; switching to Vimeo:', error);
-            state.watchVideoForceVimeoId = videoKey;
-            state.watchVimeoGeneration += 1;
-            const fallbackGeneration = state.watchVimeoGeneration;
-            state.watchVimeo = null;
-            state.watchVimeoReady = false;
-            state.watchResumeSeconds = Math.max(0, Number(position) || state.watchResumeSeconds || 0);
-            try { await (failedPlayer || player)?.destroy?.(); } catch (_) {}
-            if (fallbackGeneration !== state.watchVimeoGeneration || state.watchMode !== 'video' || videoId(state.watchVideo) !== videoKey) return;
-            frame.style.display = '';
-            frame.src = watchVimeoEmbedSrc(video, state.watchResumeSeconds);
-            await initWatchVimeo(Boolean(autoplay));
           }
         });
-      } catch (error) {
-        if (directOnly) { console.error('[Playback] Drive video unavailable:', error); frame.style.display='none'; frame.parentElement?.insertAdjacentHTML('beforeend', '<p class="watch-video-error">Video is processing or temporarily unavailable. Please try again later.</p>'); return; }
-        console.warn('[Playback] Direct HLS unavailable; using Vimeo:', error);
+        if (!player?.isIrgunNativeVideoPlayer)
+          throw new Error('Native Media3 is not available for this video');
+      } catch (nativeError) {
+        if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video') return;
+        state.watchNativeVideoFailedId = videoKey;
+        showAndroidNativeVideoError(frame,nativeError);
+        return;
       }
     }
     if (!player) {
+      if (Capacitor.getPlatform() === 'android')
+        throw new Error('Android Video requires native Media3');
       if (directOnly) return;
       if (!frame.src || frame.src === 'about:blank' || !frame.src.includes('player.vimeo.com') || frame.src.includes('autoplay=0')) {
         frame.src = watchVimeoEmbedSrc(video, Math.max(0, Number(state.watchResumeSeconds) || 0));
@@ -9085,8 +9090,10 @@ async function initWatchVimeoOnce(userInitiated = false) {
       if (state.watchMode !== 'video' || (document.hidden && !state.systemPipActive) || state.nativeBackgroundHandoff) {
         // A play event queued before Home can arrive after Audio owns playback.
         // It must not prewarm at the stale Video clock or claim audio focus.
-        setVimeoHandoffMuted(player, true).catch(() => {});
-        Promise.resolve(player.pause()).catch(() => {});
+        if (!player.isIrgunNativeVideoPlayer) {
+          setVimeoHandoffMuted(player, true).catch(() => {});
+          Promise.resolve(player.pause()).catch(() => {});
+        }
         return;
       }
       state.watchVideoPlaying = true;
@@ -9145,7 +9152,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
     // The iframe itself already contains #t=<seconds>s, so Vimeo requests the
     // middle of the video from the beginning instead of loading 0:00 and then
     // performing a second network seek. Queue play immediately as well.
-    if (userInitiated && !audioToVideoHandoff) player.play().catch(() => {});
+    if (userInitiated && !audioToVideoHandoff && !player.isIrgunNativeVideoPlayer) player.play().catch(() => {});
 
     await player.ready();
     if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video' || !state.watchVideo || videoId(state.watchVideo) !== videoKey || state.watchVimeo !== player) {
@@ -9221,7 +9228,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
           await finishAudioToVideoHandoff(videoKey, player);
         }
       }
-    } else if (userInitiated) {
+    } else if (userInitiated && !player.isIrgunNativeVideoPlayer) {
       await player.play().catch(() => {});
     }
 
@@ -9240,6 +9247,17 @@ async function initWatchVimeoOnce(userInitiated = false) {
       } catch (_) {}
     }
   } catch (error) {
+    if (Capacitor.getPlatform() === 'android') {
+      if (generation === state.watchVimeoGeneration) {
+        if (state.watchVimeo===player) state.watchVimeo=null;
+        state.watchVimeoReady=false;
+        state.watchVideoPlaying=false;
+        state.watchNativeVideoFailedId=videoKey;
+        try { await player?.destroy?.(); } catch (_) {}
+        showAndroidNativeVideoError(frame,error);
+      }
+      return;
+    }
     if (generation === state.watchVimeoGeneration) {
       state.watchVimeoReady = false;
       if (!directOnly && player?.isIrgunHlsPlayer && state.watchVideoForceVimeoId !== videoKey && Capacitor.getPlatform() === 'android') {
