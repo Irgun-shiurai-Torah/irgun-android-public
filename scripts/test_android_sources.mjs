@@ -933,6 +933,27 @@ test('native Audio reconciliation changes ownership before the parked player emi
   context.reconcile({mode:'AUDIO',lectureId:'lecture',currentPositionMs:613000});
   assert.equal(pauses,1);assert.equal(state.watchResumeSeconds,613);
 });
+test('native Media3 Audio reconciliation never pauses the SAME ExoPlayer as if it were parked WebView video',()=>{
+  const calls=[];
+  const state={watchVideo:{id:'lecture'},watchMode:'video',watchAudioToVideoHandoff:false,
+    nativeBackgroundHandoff:false,watchResumeSeconds:0,
+    watchVimeo:{isIrgunNativeVideoPlayer:true,
+      setMode:async mode=>{calls.push('mode:'+mode);},
+      pause(){throw Error('Native Media3 Audio must never be paused by reconciliation');}}};
+  const context={state,videoId:video=>video.id,ensureNativeAudioCurrentForWatch(){},
+    setVimeoHandoffMuted(){throw Error('The single player must not be muted for Audio');},
+    parkHostedVideoForAudio(){calls.push('park');},
+    render(){calls.push('render');},document:{hidden:false,getElementById:()=>null}};
+  const start=mainSource.indexOf('function reconcileNativeWatchAudio(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('const PlaybackController =',start))+
+    '\nthis.reconcile=reconcileNativeWatchAudio;',context);
+  context.reconcile({mode:'AUDIO',lectureId:'lecture',audioAuthorityCommitted:true,currentPositionMs:5000});
+  assert.equal(state.watchMode,'audio');
+  assert.equal(state.watchResumeSeconds,5);
+  assert.ok(calls.includes('mode:audio'));
+  assert.ok(calls.includes('park'));
+  assert.ok(!calls.includes('pause'),'Audible Media3 Audio cannot be paused during track switch');
+});
 test('a late Video Play callback cannot prewarm or report playing over the Audio owner',async()=>{
   const state={watchVimeoGeneration:4,watchMode:'audio',watchVideoPlaying:false};
   const events=[];
