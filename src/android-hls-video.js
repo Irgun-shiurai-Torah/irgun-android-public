@@ -713,15 +713,16 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
           startLevel:0,
           capLevelToPlayerSize:true
         });
-        hls.attachMedia(video);
-        hls.loadSource(url);
+        // Install every listener BEFORE requesting the HLS playlist. A fast
+        // WebView may finish parsing while a slow JS observer is still being
+        // installed; missing MANIFEST_PARSED incorrectly triggers MP4 fallback.
         hls.on(Hls.Events.FRAG_CHANGED, (_event, info) => {
           if (info?.frag?.type === 'main') video.dataset.hlsCurrentLevel = String(info.frag.level);
         });
         hls.on(Hls.Events.FRAG_BUFFERED, (_event, info) => {
           if (info?.frag?.type === 'main') video.dataset.hlsBufferedLevel = String(info.frag.level);
         });
-        await new Promise((resolve, reject) => {
+        const manifestReady = new Promise((resolve, reject) => {
           let finished = false;
           const timer = setTimeout(() => finish(new Error('HLS playlist timed out')), 15000);
           const finish = error => {
@@ -751,6 +752,9 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
             else void recoverFromHlsFailure(info, Hls);
           });
         });
+        hls.attachMedia(video);
+        hls.loadSource(url);
+        await manifestReady;
       }
     }
     await new Promise((resolve, reject) => {
@@ -908,10 +912,11 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
         let priming = false, primingError;
         let buffered;
         try {
-          buffered = await waitForInitialVideoBuffer(video, {
-            isCancelled:cancelled,
-            seconds:startupBufferSeconds,
-            timeoutMs:activeSource === sources.hls ? 45000 : 25000,
+          try {
+            buffered = await waitForInitialVideoBuffer(video, {
+              isCancelled:cancelled,
+              seconds:startupBufferSeconds,
+              timeoutMs:activeSource === sources.hls ? 45000 : 25000,
             // During silent MP4 prime the hidden playhead moves with incoming
             // data and maintains a ~2s live runway. It would never satisfy
             // a 6s *ahead* check. Measure the real downloaded six seconds
@@ -932,7 +937,28 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
                 void video.play().catch(error => { primingError = error; });
               }
             }
-          });
+            });
+          } catch (error) {
+            // A valid HLS playlist may be ready even if the first video bytes
+            // arrive unusually late on an overcommitted Android emulator.
+            // Give that SAME source one final, bounded chance to fill the real
+            // decoder, rather than tearing it down or requiring another Play tap.
+            // No fake buffer, MP4 fallback, seek reset or fresh decoder.
+            const delayedHls = activeSource === sources.hls && hls &&
+              video.readyState >= 1 && !video.error && !cancelled() &&
+              error?.message === 'Video did not buffer enough to start smoothly';
+            if (!delayedHls) throw error;
+            video.dataset.startupBufferPhase = 'late-hls-recovery';
+            console.warn('[Playback] Waiting for late HLS media bytes without recreating player');
+            buffered = await waitForInitialVideoBuffer(video, {
+              seconds:startupBufferSeconds, timeoutMs:15000,
+              isCancelled:cancelled,
+              onSample:sample=>{
+                video.dataset.startupBufferRequired = String(sample.required);
+                video.dataset.startupBufferAhead = String(sample.ahead);
+              }
+            });
+          }
           if (priming && startupPrime === prime) {
             video.pause();
             if (!cancelled()) {
@@ -976,8 +1002,12 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
         playbackWanted = false;
         updatePlayIcon();
         video.dataset.startupBufferPhase = 'failed';
+        video.dataset.startupFailureReason = String(error?.name || 'Error') + ': ' + String(error?.message || error).slice(0,240);
+        video.dataset.startupBufferAhead = String(bufferedVideoSecondsAhead(video));
+        console.warn('[Playback] Video start failed after real buffer inspection', error, video.dataset.startupFailureReason);
         loading.hidden = false;
-        const label = 'Connection is slow. Tap Play to retry.';
+        const label = error?.name === 'NotAllowedError' ?
+          'Playback needs another tap to start.' : 'Connection is slow. Tap Play to retry.';
         loading.textContent = window.IST_I18N?.t?.(label) || label;
       }
       throw error;
