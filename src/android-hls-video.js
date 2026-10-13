@@ -214,6 +214,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let startupPrime = null;
   let initialPlayingAt = 0;
   video.dataset.startupWaitingCount = '0';
+  video.dataset.startupVisibleRebufferCount = '0';
   video.addEventListener('waiting', () => {
     if (initialPlayingAt && Date.now() - initialPlayingAt < 15000)
       video.dataset.startupWaitingCount = String(Number(video.dataset.startupWaitingCount || 0) + 1);
@@ -316,13 +317,40 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     muteButton.setAttribute('aria-label', window.IST_I18N?.t?.(muted ? 'Unmute' : 'Mute') || (muted ? 'Unmute' : 'Mute'));
     volumeControl.value = String(video.volume);
   };
-  video.addEventListener('timeupdate', updateTimeline);
+  // Chromium may issue a brief internal 'waiting' as it switches decoded
+  // segments even with ~18s already buffered and frames continuing to advance.
+  // Do not flicker the user's loading overlay for that harmless event. A real
+  // frozen decoder still shows loading after 500ms, and its visible stalls
+  // remain explicitly counted for the strict real-emulator regression.
+  let rebufferTimer = 0;
+  let waitClock = 0;
+  const clearRebufferTimer = () => {
+    clearTimeout(rebufferTimer);
+    rebufferTimer = 0;
+  };
+  video.addEventListener('timeupdate', () => {
+    if (rebufferTimer && video.currentTime > waitClock + .15) clearRebufferTimer();
+    updateTimeline();
+  });
   video.addEventListener('durationchange', updateTimeline);
   video.addEventListener('play', () => { updatePlayIcon(); if (!hasVisibleFrame) loading.hidden = false; });
-  video.addEventListener('pause', updatePlayIcon);
-  video.addEventListener('waiting', () => { if (!video.paused) loading.hidden = false; });
-  video.addEventListener('playing', () => { if (hasVisibleFrame) loading.hidden = true; });
-  video.addEventListener('canplay', () => { if (hasVisibleFrame) loading.hidden = true; });
+  video.addEventListener('pause', () => { clearRebufferTimer(); updatePlayIcon(); });
+  video.addEventListener('waiting', () => {
+    if (video.paused) return;
+    if (!initialPlaybackStarted || !hasVisibleFrame) { loading.hidden = false; return; }
+    clearRebufferTimer();
+    waitClock = Number(video.currentTime) || 0;
+    rebufferTimer = setTimeout(() => {
+      rebufferTimer = 0;
+      if (destroyed || video.paused || video.ended) return;
+      if (video.currentTime > waitClock + .15 && video.readyState >= 2) return;
+      loading.hidden = false;
+      if (initialPlayingAt && Date.now() - initialPlayingAt < 15000)
+        video.dataset.startupVisibleRebufferCount = String(Number(video.dataset.startupVisibleRebufferCount || 0) + 1);
+    },500);
+  });
+  video.addEventListener('playing', () => { clearRebufferTimer(); if (hasVisibleFrame) loading.hidden = true; });
+  video.addEventListener('canplay', () => { clearRebufferTimer(); if (hasVisibleFrame) loading.hidden = true; });
   video.addEventListener('volumechange', updateVolumeIcon);
   updateVolumeIcon();
   const togglePlayback = () => video.paused && (initialPlaybackStarted || !playbackWanted)
@@ -958,7 +986,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     return task;
   };
   // Keep the adapter's reference to the HLS instance current after attachment and recovery.
-  adapter.destroy = () => { destroyed = true; clearInterval(stalledPlaybackWatchdog); ++visualCheck; clearTimeout(qualityMotionTimer); cancelQualityRecovery(); clearTimeout(singleTapTimer); clearTimeout(seekHintTimer); document.removeEventListener('visibilitychange', onVisibilityChange); try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
+  adapter.destroy = () => { destroyed = true; clearRebufferTimer(); clearInterval(stalledPlaybackWatchdog); ++visualCheck; clearTimeout(qualityMotionTimer); cancelQualityRecovery(); clearTimeout(singleTapTimer); clearTimeout(seekHintTimer); document.removeEventListener('visibilitychange', onVisibilityChange); try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
   adapter.on('error', detail => {
     // A Drive video has no Vimeo source to fall back to. Stop its soundtrack
     // rather than leave the user listening to a black, unresponsive player.
