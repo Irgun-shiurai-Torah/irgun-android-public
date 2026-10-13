@@ -11,4 +11,8 @@ adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 adb logcat -c
 adb shell am start -W -n org.irgunshiuraitorah.app/.SplashActivity
 node scripts/android-emulator-inspect.mjs > emulator-report/native-media3-startup.json
-node scripts/android-emulator-native-media3.mjs
+if [[ "${1:-}" == "soak" ]]; then
+  IRGUN_NATIVE_MEDIA3_SOAK=1 timeout --signal=TERM --kill-after=15s 28m node scripts/android-emulator-native-media3.mjs
+else
+  node scripts/android-emulator-native-media3.mjs
+fi
