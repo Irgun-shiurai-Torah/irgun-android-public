@@ -357,14 +357,33 @@ try{
     await wait(s=>!s.native.audioIsPlaying&&!s.native.audioPlayWhenReady,'Pause must stop native audio before near-end seeking');
     await seekAudio(duration-90);
     await tap('.watch-audio-controls [data-play-toggle]');
-    const started=await wait(s=>s.native.audioIsPlaying,'Playback must resume from the near-end position');
-    await delay(2400);const advanced=await read();audibleAudio(advanced);
-    assert.ok(advanced.native.audioPositionMs>started.native.audioPositionMs+1000,'Near-end clock must advance');
+    // API 34 can briefly enter BUFFERING again after its first READY frame
+    // at a distant HLS keyframe. Requiring isPlaying exactly 2.4s later
+    // falsely failed although it resumed seconds afterward. Require a REAL
+    // advancing clock and audible Media3 output within a bounded 25s.
+    const started=await wait(s=>s.native.audioIsPlaying&&
+      s.native.audioPositionMs>=(duration-94)*1000,
+      'Playback must actually resume near the end',25000);
+    const advanced=await wait(s=>s.native.audioIsPlaying&&
+      s.native.audioOutputVolume>0&&
+      s.native.audioPositionMs>started.native.audioPositionMs+1300,
+      'Near-end Audio did not resume advancing after Media3 buffering',25000);
+    audibleAudio(advanced);
+    assert.ok(advanced.native.audioPositionMs>started.native.audioPositionMs+1300,
+      'Actual near-end clock must advance, not merely report Play intent');
     await tap('.watch-audio-controls [data-play-toggle]');
-    await wait(s=>!s.native.audioIsPlaying,'Pause after near-end playback failed');
+    await wait(s=>!s.native.audioPlayWhenReady,'Pause after near-end playback failed');
     await seekAudio(position);
-    await tap('.watch-audio-controls [data-play-toggle]');await audioReady();
-    checks('Near-end seeking verified against actual Media3 clock',{durationSeconds:duration,nearEndSeconds:started.native.audioPositionMs/1000,restoredSeconds:position});
+    await tap('.watch-audio-controls [data-play-toggle]');
+    const restored=await wait(s=>s.native.audioIsPlaying&&
+      s.native.audioPositionMs>=(position+1.1)*1000&&
+      s.native.audioPositionMs<=(position+18)*1000,
+      'Returning from near-end seek must regain genuinely advancing native Audio',30000);
+    audibleAudio(restored);
+    checks('Near-end seek recovered actual audible clocks at both positions',
+      {durationSeconds:duration,nearEndSeconds:started.native.audioPositionMs/1000,
+       nearEndAdvancedSeconds:advanced.native.audioPositionMs/1000,
+       restoredSeconds:restored.native.audioPositionMs/1000});
   });
 
   await section('Native Media3 playback speed selector persists through Audio and Video',async()=>{
