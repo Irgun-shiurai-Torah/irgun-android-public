@@ -8063,8 +8063,14 @@ function reconcileNativeWatchAudio(snapshot) {
   state.nativeBackgroundHandoff = false;
   state.watchMode = 'audio';
   state.watchVideoPlaying = false;
-  // Change ownership before pause emits callbacks, and cancel old recovery.
-  if (state.watchVimeo) {
+  // The opt-in Media3 HLS player is the SAME native Audio player. Pausing
+  // that object here would silence Audio immediately after the user switches
+  // from Video, precisely the real Android 11/15 regression captured by CI.
+  // Only the legacy WebView decoder needs to be muted and parked.
+  if (state.watchVimeo?.isIrgunNativeVideoPlayer) {
+    if (wasVideo) state.watchVimeo.setMode('audio').catch(error =>
+      console.warn('[Media3] could not hide native Video surface after Home',error));
+  } else if (state.watchVimeo) {
     setVimeoHandoffMuted(state.watchVimeo, true).catch(() => {});
     Promise.resolve(state.watchVimeo.pause()).catch(() => {});
   }
