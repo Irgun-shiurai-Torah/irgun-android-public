@@ -5646,6 +5646,16 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
         state.watchVideoPlaying = false;
       }
       state.watchResumeSeconds = Math.max(0, Number(current)||target);
+      if (player?.isIrgunNativeVideoPlayer && state.watchMode === 'video') {
+        // Older Vimeo handoff/layout events can re-park the permanent host
+        // after native Media3 has already committed VIDEO. That left the
+        // physical PlayerView at x=-12000: frames decoded, black UI.
+        // Restore the actual Video host and reposition this SAME ExoPlayer.
+        if (persistentVideoMount?.classList.contains('watch-audio-parked')) {
+          if (!restoreParkedHostedVideo()) throw new Error('Native video host stayed parked after Video commit');
+        }
+        player.updateFrame?.();
+      }
       refreshPersistentMiniVideoChrome();
       return true;
     } catch (error) {
