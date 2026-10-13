@@ -857,12 +857,19 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
         video.dataset.startupBufferPhase = 'loading';
         const startupStartedAt = Date.now();
         const startPosition = Number(video.currentTime) || 0;
+        // API 35 occasionally exhausts its 12s startup runway at second 13.
+        // Buffer three real HLS segments (~18s) before the first visible Play,
+        // so it does not start/loading/start again. MP4 keeps its 6s threshold.
+        // At higher requested rates, the gate multiplies seconds by rate.
+        const startupBufferSeconds = activeSource === sources.hls ? 16 : 6;
         const prime = {intent};
         let priming = false, primingError;
         let buffered;
         try {
           buffered = await waitForInitialVideoBuffer(video, {
             isCancelled:cancelled,
+            seconds:startupBufferSeconds,
+            timeoutMs:activeSource === sources.hls ? 45000 : 25000,
             // During silent MP4 prime the hidden playhead moves with incoming
             // data and maintains a ~2s live runway. It would never satisfy
             // a 6s *ahead* check. Measure the real downloaded six seconds
@@ -901,14 +908,14 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
         }
         if (!buffered || cancelled()) return;
         if (activeSource === sources.hls) {
-          const firstFrame = firstBufferedStartupFrame(video);
+          const firstFrame = firstBufferedStartupFrame(video,startupBufferSeconds);
           if (firstFrame != null) {
             // Only align a <=100ms real first-frame gap, and only after
             // confirmed contiguous media bytes are already buffered. Finish
             // the seek while the loading cover is still visible, before Play.
             video.currentTime = firstFrame;
             buffered = await waitForInitialVideoBuffer(video, {
-              timeoutMs:5000, isCancelled:cancelled,
+              timeoutMs:5000, seconds:startupBufferSeconds, isCancelled:cancelled,
               onSample:sample => {
                 video.dataset.startupBufferRequired = String(sample.required);
                 video.dataset.startupBufferAhead = String(sample.ahead);
