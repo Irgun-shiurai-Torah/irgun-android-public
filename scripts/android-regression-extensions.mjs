@@ -425,6 +425,11 @@ try{
           s.media3.surfaceHeight>=s.media3.rootHeight-8&&
           s.media3.rootWidth>100&&s.media3.rootHeight>100,
           'Native PlayerView must really fill its Android root in immersive fullscreen',22000);
+        // Android 15/16 display the system-owned "Viewing full screen / Got it"
+        // tutorial on first use. The OS consumes Back while that dialog owns
+        // focus; pretending Back reached the app caused every later test to fail.
+        // Dismiss it with a real physical tap, verify app focus, THEN send Back.
+        await dismissFullscreenEducation();
         await delay(2300);const moved=await read();
         audibleVideo(moved);
         assert.ok(moved.media3.positionMs>full.media3.positionMs+1100&&
