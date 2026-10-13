@@ -4,11 +4,15 @@ import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
 import {accountSwipeDirection} from './android-account-native-scroll.mjs';
+import {observedAdb} from './android-adb-observer.mjs';
 const email=process.env.IRGUN_TEST_EMAIL,password=process.env.IRGUN_TEST_PASSWORD;
 assert.ok(email&&password,'Configure dedicated verified account secrets IRGUN_TEST_EMAIL and IRGUN_TEST_PASSWORD');
-const adb=(...a)=>execFileSync('adb',a,{encoding:'utf8'}).trim();
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const report={checks:[],credentialsRecorded:false,startedAt:new Date().toISOString()};let ws;
+// Retry only an actual read-only ADB observation after a transient offline
+// connection. Never replay a password, physical tap, or other mutation;
+// require the same running app PID before retrying the observed IME state.
+const adb=observedAdb(report);
 let qaCommentId='',qaCommentMarker='',accountDisplayName='',restartPlaylistName='',deletedQaCommentId='';
 async function connect(){
  // The WebView CDP target can briefly disappear during IME/dialog lifecycle.
