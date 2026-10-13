@@ -1,18 +1,15 @@
-// Android-only opt-in native Media3 video adapter.
+// Android-only native Media3 video adapter. No WebView video fallback.
 // No WebView <video>, HLS.js, or second audio output is created by this module.
 // Native Audio/Video are two track presentations of ONE ExoPlayer MediaItem.
 import {registerPlugin} from '@capacitor/core';
-import {getAndroidHlsSource} from './android-hls-video.js';
+import {getAndroidHlsSource} from './android-media-source.js';
 
 const native = registerPlugin('IrgunNativeVideo');
 const delay = ms => new Promise(resolve => setTimeout(resolve,ms));
-export const nativeMedia3BetaEnabled = () =>
-  import.meta.env.VITE_ANDROID_MEDIA3_VIDEO_BETA === 'true';
-
 export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
   resumeSeconds=0,title='Shiur',speaker='',image='',audioUrl='',speed=1,
   onError=()=>{}}={}) {
-  if (!nativeMedia3BetaEnabled() || !iframe || !videoId) return null;
+  if (!iframe || !videoId) throw new Error('Native Media3 Video requires a real lecture and host');
   const source = await getAndroidHlsSource(String(apiBase).replace(/\/$/,''),String(videoId));
   if (!source?.hls && !source?.mp4) throw new Error('Media3 source lookup returned no video URL');
   const callbacks = new Map();
