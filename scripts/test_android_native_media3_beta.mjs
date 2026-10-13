@@ -51,30 +51,86 @@ test('Android native controls expose only bounded and source-safe commands',()=>
   assert.match(adapter,/s\.frames>=2&&s\.width>0/);
 });
 
-test('native Video surface yields to Save picker, then restores without pausing the shared Media3 stream',async()=>{
-  const start=adapter.indexOf('  const positionFrame=async()=>{');
+test('native Video surface yields to Save picker, then restores the SAME player',async()=>{
+  const start=adapter.indexOf('  const viewportFrame=()=>{');
   const end=adapter.indexOf('  const scheduleFrame=',start);
-  assert.ok(start>0 && end>start,'Use the actual native Video positioning code');
+  assert.ok(start>0&&end>start,'Use actual live viewport and placement code');
   const calls=[];
   let modalVisible=true;
-  const placeholder={isConnected:true,getBoundingClientRect:()=>({x:12,y:80,width:300,height:169})};
-  const context={destroyed:false,mode:'video',placeholder,document:{
-    querySelector:()=>modalVisible?{}:null,
-    getElementById:()=>placeholder
-  },native:{frame:async args=>{calls.push(args);}},innerWidth:320,innerHeight:600};
-  runInNewContext(adapter.slice(start,end)+'\nthis.positionFrame=positionFrame;',context);
+  const placeholder={isConnected:true,getBoundingClientRect:()=>({
+    x:12,y:80,left:12,top:80,right:312,bottom:249,width:300,height:169
+  })};
+  const context={
+    destroyed:false,mode:'video',placeholder,framePlacedOnScreen:false,
+    document:{
+      querySelector:selector=>selector==='.playlist-picker-backdrop'&&modalVisible?{}:null,
+      querySelectorAll:()=>[placeholder],
+      getElementById:()=>null
+    },
+    native:{frame:async args=>{calls.push(args);}},
+    innerWidth:320,innerHeight:600
+  };
+  const actual=adapter.slice(start,end);
+  runInNewContext(actual+'\nthis.positionFrame=positionFrame;',context);
   await context.positionFrame();
   assert.equal(calls.length,1);
   assert.equal(calls[0].width,0,'Physical Media3 PlayerView must hide while Save is on top');
   assert.equal(calls[0].height,0);
-  assert.ok(!['.pause(','.stop(','.seekTo(','setMode('].some(part=>adapter.slice(start,end).includes(part)),
-    'A modal must not interrupt, seek or replace the existing Media3 Audio');
+  assert.ok(!['.pause(','.stop(','.seekTo(','setMode('].some(part=>actual.includes(part)),
+    'A modal must not interrupt, seek or replace existing Media3 Audio');
   modalVisible=false;
   await context.positionFrame();
-  assert.equal(calls[1].width,300,'The same native surface must return after closing the picker');
+  assert.equal(calls[1].x,12,'Restored native surface must be at its actual visible X');
+  assert.equal(calls[1].width,300,'The same native video surface returns after closing Save');
   assert.equal(calls[1].height,169);
   assert.ok(app.includes('state.watchVimeo?.updateFrame?.()'),
-    'The app must refresh the native surface after in-place picker dismissal');
+    'App must refresh native surface after in-place picker dismissal');
+});
+
+test('native Media3 refuses an offscreen -12000px iframe after Audio to Video',async()=>{
+  const start=adapter.indexOf('  const viewportFrame=()=>{');
+  const end=adapter.indexOf('  const scheduleFrame=',start);
+  assert.ok(start>0&&end>start);
+  let parked=true,activeVideo=true;
+  const calls=[];
+  const frame={isConnected:true,getBoundingClientRect:()=>{
+    const left=parked?-12000:12;
+    return {x:left,y:80,left,top:80,right:left+300,bottom:249,width:300,height:169};
+  }};
+  const host={classList:{
+    contains:name=>name==='watch-audio-parked'&&parked,
+    remove:name=>{if(name==='watch-audio-parked')parked=false;},
+    add:()=>{}
+  }};
+  const context={
+    destroyed:false,mode:'video',framePlacedOnScreen:false,placeholder:frame,
+    document:{
+      querySelector:selector=>selector==='.media-switch [data-watch-mode="video"].active'&&activeVideo?{}:null,
+      querySelectorAll:()=>[frame],
+      getElementById:id=>id==='persistentVideoMount'?host:null,
+      body:{classList:{remove:()=>{}}}
+    },
+    native:{frame:async args=>{calls.push(args);}},
+    innerWidth:320,innerHeight:600
+  };
+  runInNewContext(adapter.slice(start,end)+'\nthis.positionFrame=positionFrame;',context);
+  await context.positionFrame();
+  assert.equal(parked,false,'Native Audio to Video must unpark the legacy offscreen host');
+  assert.equal(calls[0].x,12,'Native surface MUST be placed on-screen, not x=-12000');
+  assert.equal(calls[0].width,300);
+
+  parked=true;activeVideo=false;
+  await context.positionFrame();
+  assert.equal(calls[1].width,0,'Do not render a physically offscreen native surface while Audio is selected');
+  assert.ok(calls.every(v=>v.x===undefined||v.x>=0),'No native PlayerView positioning event may use negative X');
+  assert.match(app,/player\.updateFrame\?\.\(\)/,
+    'Committed Media3 handoff must request the real visible surface placement');
+  assert.match(bridge,/surfaceVisibleOnScreen/,
+    'Native test observations must check globally visible Android geometry');
+  const integration=readFileSync('scripts/android-emulator-native-media3.mjs','utf8');
+  assert.match(integration,/SCREEN BLACK:/,'Emulator test must fail a black real screenshot');
+  assert.match(integration,/surfaceVisibleOnScreen/);
+  assert.match(integration,/-alpha','off/, 'Emulator test must not count PNG alpha as picture brightness');
 });
 
 test('native fullscreen expands the SAME PlayerView and Android Back exits without closing the lecture',()=>{
