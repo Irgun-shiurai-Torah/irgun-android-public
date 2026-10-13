@@ -11,6 +11,13 @@ capture() {
     wait "$log_pid" 2>/dev/null || true
   fi
   adb logcat -d -b crash > emulator-report/android-crashes.log || true
+  adb shell dumpsys activity lastanr > emulator-report/android-last-anr.txt || true
+  adb shell dumpsys activity exit-info org.irgunshiuraitorah.app > emulator-report/android-process-exits.txt || true
+  if grep -q 'ANR in org.irgunshiuraitorah.app' emulator-report/android-playback.log; then
+    # Preserve the main-thread stack needed to diagnose a genuine launch ANR.
+    # This logged-out job never supplies QA account credentials.
+    timeout 60s adb bugreport emulator-report/android-anr-bugreport.zip > emulator-report/bugreport-capture.txt 2>&1 || true
+  fi
 }
 trap capture EXIT
 

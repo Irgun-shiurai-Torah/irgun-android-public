@@ -1,0 +1,266 @@
+import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+import {observedAdb} from './android-adb-observer.mjs';
+import {nativeHierarchy} from './android-native-hierarchy.mjs';
+import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {typeObservedNativeText} from './android-native-text-entry.mjs';
+
+// Read the real WebView through CDP, but perform every navigation gesture with
+// Android input events. No DOM clicks or synthetic touch events stand in for UI.
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const report = { gestures: [], checks: [], engine:'native-media3-single-exoplayer' };
+const adb = observedAdb(report);
+let ws;
+try {
+  const pid = adb('shell', 'pidof', 'org.irgunshiuraitorah.app').split(/\s+/)[0];
+  adb('forward', 'tcp:9222', `localabstract:webview_devtools_remote_${pid}`);
+  const pages = await (await fetch('http://127.0.0.1:9222/json/list')).json();
+  const page = pages.find(p => p.type === 'page' && /localhost/.test(p.url));
+  assert.ok(page?.webSocketDebuggerUrl, 'App WebView must be inspectable');
+  ws = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('CDP connection timeout')), 10000);
+    ws.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
+    ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('CDP connection failed')); }, { once: true });
+  });
+  let sequence = 0;
+  const pending = new Map(), networkRequests = new Map();
+  report.blockedVimeoRequests=[];
+  ws.addEventListener('message', event => {
+    const message=JSON.parse(event.data);
+    if(message.method==='Network.requestWillBeSent') {
+      networkRequests.set(message.params.requestId,message.params.request.url);return;
+    }
+    if(message.method==='Network.loadingFailed') {
+      const url=networkRequests.get(message.params.requestId)||'';
+      if(/^https:\/\/(?:[^/]+\.)?(?:vimeo\.com|vimeocdn\.com)\//.test(url)&&message.params.blockedReason)
+        report.blockedVimeoRequests.push({url,reason:message.params.blockedReason});
+      return;
+    }
+    if(message.method==='Runtime.consoleAPICalled') {
+      const msg=(message.params?.args||[]).map(x=>String(x.value??x.description??'')).join(' ').slice(0,350);
+      if(/HLS|MP4|Playback|Vimeo|CORS|fetch|video/i.test(msg)) {
+        (report.webConsole||=[]).push({type:message.params.type,message:msg});
+        if(report.webConsole.length>70)report.webConsole.shift();
+      }
+      return;
+    }
+    const request=pending.get(message.id);
+    if (!request) return;
+    pending.delete(message.id); clearTimeout(request.timer);
+    if (message.error || message.result?.exceptionDetails) request.reject(new Error(JSON.stringify(message)));
+    else request.resolve(message.result);
+  });
+  const command = (method,params={}) => new Promise((resolve, reject) => {
+    const id = ++sequence;
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error('CDP read timeout')); }, 10000);
+    pending.set(id, { resolve, reject, timer });
+    ws.send(JSON.stringify({ id, method, params }));
+  });
+  const evaluate=expression=>command('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true}).then(r=>r.result.value);
+  // Block genuine third-party transport, without substituting any HTTP response.
+  await command('Network.enable');
+  await command('Network.setBlockedURLs',{urls:['*://*.vimeo.com/*','*://vimeo.com/*','*://*.vimeocdn.com/*']});
+  report.vimeoTransportDisabled=true;
+  // Read-only CDP console inspection; Android taps still use real adb input.
+  ws.send(JSON.stringify({id:++sequence,method:'Runtime.enable'}));
+  const catalog = await (await fetch('https://api.irgunshiuraitorah.com/video-map?driveLibrary=1', {
+    headers:{Origin:'https://localhost','X-Irgun-App':'1'}, signal:AbortSignal.timeout(30000)
+  })).json();
+  const hlsId=String(process.env.IRGUN_HLS_TEST_ID||'1232214252');
+  const candidates=catalog.filter(v=>String(v.id||'')===hlsId||String(v.vimeoId||'')===hlsId);
+  const target=candidates[0];
+  report.candidates=candidates.map(v=>({id:v.id,title:v.title,duration:v.duration,shiurCode:v.shiurCode,vimeoId:v.vimeoId}));
+  assert.ok(target,'The actual HLS test shiur must exist in the app catalog: '+hlsId);
+  report.shiur = {id:target.id,title:target.title,duration:target.duration};
+  const response = await fetch(`https://api.irgunshiuraitorah.com/media/${encodeURIComponent(target.id)}/source.json`, {
+    headers:{Origin:'https://localhost'},signal:AbortSignal.timeout(30000)
+  });
+  assert.equal(response.status,200,'Source descriptor must be available');
+  const source = await response.json();
+  report.sources = source.video;
+  assert.ok(source.video?.hls,'Selected shiur must expose a real HLS source');
+
+  const readDOM = async () => JSON.parse(await evaluate(`JSON.stringify((()=>{
+    const v=document.querySelector('#watchDirectHlsVideo');
+    const r=v?.getBoundingClientRect(),stage=v?.closest('.watch-hls-stage')?.getBoundingClientRect();
+    return {title:document.querySelector('.watch-overlay')?.innerText?.slice(0,900),
+      iframeSrc:document.querySelector('#watchVimeoFrame')?.getAttribute('src'),
+      iframeHidden:document.querySelector('#watchVimeoFrame') ? getComputedStyle(document.querySelector('#watchVimeoFrame')).visibility==='hidden' : false,
+      sourceType:window.ISTReleaseQA?.snapshot?.()?.sourceType||null,
+      quality:(()=>{const e=document.querySelector('[data-hls-quality]');return e?{value:e.value,hidden:e.hidden,options:Array.from(e.options).map(o=>({value:o.value,label:o.textContent}))}:null})(),
+      video:v?{src:v.currentSrc||v.src,time:v.currentTime,paused:v.paused,ready:v.readyState,width:v.videoWidth,muted:v.muted,volume:v.volume,
+        frames:v.getVideoPlaybackQuality?.().totalVideoFrames??v.webkitDecodedFrameCount,error:v.error?.code,
+        hlsLastError:v.dataset.hlsLastError||null,hlsFallbackReason:v.dataset.hlsFallbackReason||null,
+        hlsRecoveryAttempts:v.dataset.hlsRecoveryAttempts||null,
+        hlsQualityRecovery:v.dataset.hlsQualityRecovery||null,
+        hlsCurrentLevel:v.dataset.hlsCurrentLevel??null,hlsBufferedLevel:v.dataset.hlsBufferedLevel??null,
+        startup:{phase:v.dataset.startupBufferPhase||'',required:Number(v.dataset.startupBufferRequired||0),bufferAtStart:Number(v.dataset.startupBufferAtStart||0),waitMs:Number(v.dataset.startupBufferWaitMs||0),waitingCount:Number(v.dataset.startupWaitingCount||0),visibleRebufferCount:Number(v.dataset.startupVisibleRebufferCount||0)},
+        seeking:v.seeking,rate:v.playbackRate,buffered:Array.from({length:v.buffered.length},(_,i)=>[v.buffered.start(i),v.buffered.end(i)]),
+        rect:r?{x:r.x,y:r.y,width:r.width,height:r.height}:null,
+        stage:stage?{x:stage.x,y:stage.y,width:stage.width,height:stage.height}:null}:null,
+      runtime:{userAgent:navigator.userAgent,aspectRatio:CSS.supports('aspect-ratio','16/9')},
+      activeMode:document.querySelector('.media-switch .active')?.getAttribute('data-watch-mode'),
+      seek:document.querySelector('#watchAudioSeek')?{value:Number(document.querySelector('#watchAudioSeek').value),max:Number(document.querySelector('#watchAudioSeek').max)}:null,
+      webAudio:Array.from(document.querySelectorAll('audio')).map(a=>({paused:a.paused,muted:a.muted,volume:a.volume,time:a.currentTime})),
+      diagnostic:!!document.querySelector('.watch-hls-fallback-note'),
+      text:document.querySelector('#app')?.innerText?.slice(0,300)};
+  })())`));
+  const read = async () => {
+    const dom = await readDOM();
+    dom.native = await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaPlaybackSnapshot',{})");
+    return dom;
+  };
+  const wait = async predicate => {
+    let state;
+    for(let i=0;i<120;i++) {state=await read();if(predicate(state))return state;await delay(500);}
+    throw new Error(`Video did not settle: ${JSON.stringify(state)}`);
+  };
+  // Read the actual native WebView directly. UIAutomator's wait-for-idle dump
+  // blocks on a moving page and cannot prove foreground ownership.
+  const windowBounds = await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+  assert.equal(windowBounds.focused,true,'Irgun must own the foreground window; an ANR dialog is a failure');
+  const measuredBounds=[windowBounds.left,windowBounds.top,windowBounds.right,windowBounds.bottom];
+  assert.ok(measuredBounds.every(Number.isFinite)&&measuredBounds[2]>measuredBounds[0]&&measuredBounds[3]>measuredBounds[1],
+    'Actual native WebView bounds must have a nonzero size');
+  let [left,top,right,bottom]=measuredBounds;
+  report.nativeBounds=measuredBounds;
+  const nativePoint=p=>[Math.round(left+p.x*(right-left)/p.width),Math.round(top+p.y*(bottom-top)/p.height)];
+  const visiblePoint=async selector=>JSON.parse(await evaluate(`JSON.stringify((()=>{
+    // A card has several Watch targets. Its cover center can be obscured by
+    // sibling Watch/Listen buttons; choose a genuinely visible target instead.
+    for(const b of document.querySelectorAll(${JSON.stringify(selector)})) {
+      const r=b.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
+      const hit=document.elementFromPoint(x,y);
+      if(y>70 && y<innerHeight-75 && (hit===b || b.contains(hit)))
+        return {x,y,width:innerWidth,height:innerHeight};
+    }
+    return null;
+  })())`));
+  const tapVisible=async selector=>{
+    const measured=await settledNativeTapPoint({
+      readBounds:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),
+      readPoint:()=>visiblePoint(selector),delay
+    });
+    [left,top,right,bottom]=measured.bounds;
+    adb('shell','input','tap',...measured.point.map(String));report.gestures.push({selector,...measured});
+  };
+  // Navigate through the real Home search with native taps, typing and scrolling.
+  // CDP only reads hit-tested coordinates and media state.
+  let search;
+  for(let i=0;i<90;i++) {
+    search=await visiblePoint('#homeLibrarySearch');if(search)break;
+    // Real Android 14–16 emulators can initialize the WebView before the
+    // asynchronous lecture catalog finishes loading. Wait for the actual UI
+    // instead of treating a loading screen as a missing search control.
+    if(i%5===0)adb('shell','input','swipe',String(right-40),String(bottom-130),String(right-40),String(top+190),'450');
+    await delay(650);
+  }
+  assert.ok(search,'Home search must be visible');
+  await tapVisible('#homeLibrarySearch');
+  const code=String(target.shiurCode||target.title.match(/\bCH\s*\d+\b/i)?.[0]?.replace(/\s+/g,'')||'');
+  assert.ok(/^[A-Z]+\d+$/.test(code),'HLS fixture must have a searchable lecture code from its actual title');
+  const searchState=async()=>JSON.parse(await evaluate("JSON.stringify({screen:window.ISTReleaseQA?.snapshot?.().screen,focused:document.activeElement?.id||'',value:document.getElementById('homeLibrarySearch')?.value??null,query:window.ISTReleaseQA?.snapshot?.().searchQuery??null})"));
+  let observedSearch;
+  for(let i=0;i<30;i++) {observedSearch=await searchState();if(observedSearch.focused==='homeLibrarySearch')break;await delay(150);}
+  report.searchBeforeTyping=observedSearch;
+  assert.equal(observedSearch.focused,'homeLibrarySearch','Actual Android tap must focus Home search before sending text');
+  await typeObservedNativeText({value:code,delay,
+    readValue:async()=>{const s=await searchState();assert.equal(s.focused,'homeLibrarySearch','Each real native key must target the focused Home search');return s.value;},
+    typeCharacter:character=>adb('shell','input','text',character)
+  });
+  observedSearch=await searchState();report.searchAfterTyping=observedSearch;
+  assert.equal(observedSearch.focused,'homeLibrarySearch','Feed refresh must preserve Home input focus');
+  assert.equal(observedSearch.value,code,'Native keyboard text must remain in the actual Home search input');
+  adb('shell','input','keyevent','KEYCODE_ENTER');
+  for(let i=0;i<40;i++) {observedSearch=await searchState();if(observedSearch.screen==='shiurim')break;await delay(200);}
+  report.searchAfterSubmit=observedSearch;
+  assert.equal(observedSearch.screen,'shiurim','Enter in the focused search input must open search results, not a lecture');
+  assert.equal(observedSearch.query,code,'Actual search results must use the typed lecture code');
+  // Enter already navigated to Shiurim and destroyed the focused Home field.
+  // Android 16 can report a stale mInputShown=true after this navigation;
+  // sending BACK at that moment finishes the Activity and opens Pixel Launcher.
+  // Do not treat a stale IME service flag as permission to press Android Back.
+  await delay(500);
+  assert.equal((await searchState()).screen,'shiurim','Search submission must remain on results');
+  const postSearchBounds = await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+  assert.equal(postSearchBounds.focused,true,'Search navigation must keep Irgun in the Android foreground');
+
+  // Perform the Watch and Audio/Video taps on the physical Android emulator.
+  // CDP only observes state, so the test cannot pass from injected JS setters.
+  const selector=`.media-primary-overlay button[data-watch="${target.id}"],button.media-title[data-watch="${target.id}"]`;
+  for(let i=0;i<12 && !(await visiblePoint(selector));i++) {
+    adb('shell','input','swipe',String(right-40),String(bottom-130),String(right-40),String(top+190),'450');
+    await delay(400);
+  }
+  await tapVisible(selector);
+  const sample=async()=>({
+    ...(await read()),
+    media3:await evaluate("window.Capacitor.nativePromise('IrgunNativeVideo','snapshot',{})")
+  });
+  const waitNative=async(predicate,label,limitMs=45000)=>{
+    let result;
+    for(let n=0;n<limitMs/400;n++){
+      result=await sample();
+      if(predicate(result))return result;
+      await delay(400);
+    }
+    throw new Error(label+'; last='+JSON.stringify(result));
+  };
+  const first=await waitNative(s=>s.activeMode==='video'&&
+    s.media3.active&&s.media3.videoSelected&&s.media3.playing&&
+    s.media3.sourceType==='hls'&&s.media3.firstFrame&&
+    s.media3.width>0&&s.media3.height>0&&s.media3.frames>=8,
+    'Native Media3 must render real moving HLS video, without MP4/WebView fallback');
+  assert.equal(first.native.mode,'VIDEO','Media3 session must own VIDEO playback');
+  assert.equal(first.iframeSrc,'about:blank','Vimeo must not load while native Media3 owns Video');
+  assert.equal(first.video,null,'WebView must not create another HTML video decoder');
+  assert.ok(first.media3.positionMs>0&&first.media3.bufferedPositionMs>first.media3.positionMs,
+    'Native ExoPlayer must have real prepared media');
+  report.checks.push({label:'Native HLS decodes visible frames with exactly one Media3 player',snapshot:first.media3});
+  writeFileSync('emulator-report/media3-first-frames.png',execFileSync('adb',['exec-out','screencap','-p']));
+  await delay(3000);
+  const moved=await sample();
+  assert.ok(moved.media3.positionMs>first.media3.positionMs+1800,'Native VIDEO clock must progress');
+  assert.ok(moved.media3.frames>first.media3.frames+12,'Native VIDEO must render more real frames');
+  assert.equal(moved.media3.sourceType,'hls','Actual Media3 must keep HLS, not fall back to MP4');
+  report.checks.push({label:'Native video advances frames and one playback clock',before:first.media3,after:moved.media3});
+
+  await tapVisible('[data-watch-mode="audio"]');
+  const audio=await waitNative(s=>s.activeMode==='audio' && s.media3.active &&
+    !s.media3.videoSelected && s.media3.playing && s.native.mode==='AUDIO',
+    'Physical Video to Audio switch must preserve the native Media3 session');
+  const audioStart=audio.media3.positionMs;
+  assert.ok(audioStart>=moved.media3.positionMs-1250,
+    'Changing presentation must not restart the lecture or rewind the shared clock');
+  await delay(4500);
+  const audioProgress=await sample();
+  assert.ok(audioProgress.media3.playing&&!audioProgress.media3.videoSelected,
+    'Native Audio must continue without pressing Play again');
+  assert.ok(audioProgress.media3.positionMs>audioStart+2500,
+    'The same Media3 HLS audio clock must keep moving after Video is hidden');
+  assert.equal(audioProgress.media3.sourceType,'hls','Switching to Audio must not replace the HLS MediaItem');
+  report.checks.push({label:'Video to Audio switches only the video track, no new decoder/clock',before:audio.media3,after:audioProgress.media3});
+  await tapVisible('[data-watch-mode="video"]');
+  const resumed=await waitNative(s=>s.activeMode==='video'&&s.media3.active&&
+    s.media3.videoSelected&&s.media3.playing&&s.media3.firstFrame&&
+    s.native.mode==='VIDEO'&&s.media3.frames>audioProgress.media3.frames+12,
+    'Physical Audio to Video switch must display freshly rendered native frames');
+  assert.ok(resumed.media3.positionMs>=audioProgress.media3.positionMs-1250,
+    'Returning to Video must preserve the SAME advancing Media3 clock');
+  assert.equal(resumed.media3.sourceType,'hls','Track-only Video restore must retain original HLS');
+  assert.equal(resumed.video,null,'No second WebView video player may be created during mode switches');
+  report.checks.push({label:'Audio to Video resumes moving decoded frames in the same Media3 engine',snapshot:resumed.media3});
+  writeFileSync('emulator-report/media3-video-restored.png',execFileSync('adb',['exec-out','screencap','-p']));
+  report.result='passed';
+
+} catch (error) {
+  report.result='failed';report.error=String(error.stack||error);
+  try {writeFileSync('emulator-report/media3-video-failure.png',execFileSync('adb',['exec-out','screencap','-p']));}catch{}
+  process.exitCode=1;
+} finally {
+  ws?.close();
+  writeFileSync('emulator-report/native-media3-playback.json',JSON.stringify(report,null,2));
+  console.log(JSON.stringify(report,null,2));
+}

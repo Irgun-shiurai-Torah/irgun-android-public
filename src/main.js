@@ -8,6 +8,8 @@ import { FileTransfer } from '@capacitor/file-transfer';
 import { Share } from '@capacitor/share';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { createAndroidHlsPlayer } from './android-hls-video.js';
+import { createNativeMedia3VideoPlayer, nativeMedia3BetaEnabled } from './android-native-media3-video.js';
+import {rememberCachedAccount,readCachedAccount,clearCachedAccount} from './android-offline-account.js';
 import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } from './offline-validation.js';
 import { downloadOfflineAudio } from './offline-download.js';
 import { vimeoEmbedSource } from './vimeoEmbed.js';
@@ -54,9 +56,22 @@ function syncDocumentFullscreenToNative() {
   setNativeVideoFullscreen(Boolean(element));
 }
 
+window.__irgunExitDocumentFullscreen = async () => {
+  if (document.fullscreenElement) await document.exitFullscreen();
+  else if (document.webkitFullscreenElement && document.webkitExitFullscreen) document.webkitExitFullscreen();
+};
+
 document.addEventListener('fullscreenchange', syncDocumentFullscreenToNative);
 document.addEventListener('webkitfullscreenchange', syncDocumentFullscreenToNative);
 window.addEventListener('pagehide', () => { setNativeVideoFullscreen(false); });
+let homeSearchRenderDeferred = false;
+// Complete deferred feed rendering after the real click handler. Rendering on
+// blur/pointerdown would remove the Search button before its click is delivered.
+document.addEventListener('click', () => {
+  if (!homeSearchRenderDeferred || document.activeElement?.id === 'homeLibrarySearch') return;
+  homeSearchRenderDeferred = false;
+  if (state.screen === 'home') render();
+});
 const APP_PUSH_TOKEN_KEY = 'istAppFcmToken';
 const ADMIN_MODE_KEY = 'istAppAdminMode';
 const SPONSOR_DEDICATION_TYPES = [
@@ -93,7 +108,7 @@ const state = {
   trends: { week: new Map(), month: new Map(), all: new Map() },
   counter: 1124579,
   likeCounts: {},
-  user: null,
+  user: Capacitor.getPlatform()==='android' && navigator.onLine===false ? readCachedAccount(localStorage,localStorage.getItem(TOKEN_KEY)) : null,
   token: localStorage.getItem(TOKEN_KEY) || '',
   myLikes: new Set(),
   watchLater: new Set(),
@@ -248,6 +263,8 @@ const state = {
   downloadPanelOpen: false,
   downloaderReady: false,
   offlineDownloads: new Map((loadJson(OFFLINE_DOWNLOADS_KEY, []) || []).map(item => [String(item?.key || ''), item]).filter(([key]) => key)),
+  offlineDeleteKey: '',
+  offlineDeleteBusy: false,
   offlineJobs: new Map(),
   playlists: [],
   activePlaylistId: '',
@@ -472,8 +489,7 @@ async function saveOffline(kind, id) {
   if (state.offlineDownloads.has(key)) {
     const stored = state.offlineDownloads.get(key);
     if (isPlausibleOfflineAudio(stored?.bytes, stored?.durationSeconds)) {
-      const confirmed = confirm(currentLanguage() === 'he' ? 'להסיר את העותק השמור להאזנה ללא אינטרנט?' : 'Remove the saved offline copy?');
-      if (confirmed) await deleteOffline(key, { stayHere:true });
+      requestOfflineDeletion(key);
       return;
     }
     // Corrupt downloads are not usable or 'saved'. Remove them and retry.
@@ -579,15 +595,76 @@ async function saveOffline(kind, id) {
   }
 }
 
+function requestOfflineDeletion(key) {
+  if (state.offlineDeleteBusy || !state.offlineDownloads.has(String(key || ''))) return;
+  state.offlineDeleteKey = String(key);
+  refreshOfflineDeleteDialog();
+}
+
+function offlineDeleteDialogHtml() {
+  if (!state.offlineDeleteKey) return '';
+  const he = currentLanguage() === 'he';
+  return `<div class="confirm-backdrop offline-delete-backdrop"><section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="offlineDeleteTitle">
+    <h2 id="offlineDeleteTitle">${he ? 'להסיר את העותק השמור להאזנה ללא אינטרנט?' : 'Remove the saved offline copy?'}</h2>
+    <div class="confirm-actions"><button class="confirm-cancel" data-offline-delete-cancel="1" ${state.offlineDeleteBusy ? 'disabled' : ''}>${he ? 'ביטול' : 'Cancel'}</button>
+    <button class="confirm-delete" data-offline-delete-confirm="1" ${state.offlineDeleteBusy ? 'disabled' : ''}>${state.offlineDeleteBusy ? (he ? 'מוחק…' : 'Deleting…') : (he ? 'הסר' : 'Remove')}</button></div>
+  </section></div>`;
+}
+
+function bindOfflineDeleteDialog(root) {
+  if (!root) return;
+  root.querySelector('[data-offline-delete-cancel]')?.addEventListener('click', () => {
+    if (state.offlineDeleteBusy) return;
+    state.offlineDeleteKey = '';
+    refreshOfflineDeleteDialog();
+  });
+  root.querySelector('[data-offline-delete-confirm]')?.addEventListener('click', confirmOfflineDeletion);
+}
+
+function refreshOfflineDeleteDialog() {
+  const root = document.getElementById('offlineDeleteMount');
+  if (!root) return;
+  root.innerHTML = offlineDeleteDialogHtml();
+  bindOfflineDeleteDialog(root);
+}
+
+async function confirmOfflineDeletion() {
+  if (state.offlineDeleteBusy || !state.offlineDeleteKey) return;
+  const key = state.offlineDeleteKey;
+  state.offlineDeleteBusy = true;
+  refreshOfflineDeleteDialog();
+  try { await deleteOffline(key, {stayHere:true}); }
+  finally {
+    state.offlineDeleteBusy = false;
+    state.offlineDeleteKey = '';
+    refreshOfflineDeleteDialog();
+  }
+}
+
 async function deleteOffline(key, options = {}) {
   const record = state.offlineDownloads.get(String(key || ''));
   if (!record) return;
-  try { await Filesystem.deleteFile({ directory:Directory.Data, path:record.path }); } catch (_) {}
+  try {
+    if (usesNativeUnifiedAudio() && record.uri) {
+      const networkUrl = audioUrl(record.sourceId || record.id);
+      await nativeMediaPlugin().replaceOfflineAudioSource({fileUrl:record.uri,networkUrl});
+      if (state.current?.offlineKey === record.key) {
+        state.current = { ...state.current, url:networkUrl, networkUrl, nativeBackgroundUrl:'', offline:false, offlineKey:'' };
+      }
+    }
+    await Filesystem.deleteFile({ directory:Directory.Data, path:record.path });
+  }
+  catch (error) {
+    console.warn('Offline file deletion failed', error);
+    setToast(currentLanguage() === 'he' ? 'לא היה אפשר למחוק את העותק הלא מקוון. נסו שוב.' : 'Could not delete the offline copy. Please try again.');
+    return false;
+  }
   state.offlineDownloads.delete(record.key);
   persistOfflineDownloads();
   setToast(currentLanguage() === 'he' ? 'העותק הלא מקוון הוסר.' : 'Offline copy removed.');
   if (state.screen === 'library' && state.librarySection === 'downloads' && !options.stayHere) render();
   else { refreshInteractiveUi(); refreshOfflineButtonsForKey(record.key); }
+  return true;
 }
 
 async function playOfflineRecord(key) {
@@ -992,7 +1069,7 @@ function homeDiscoveryHtml() {
   const continueRows = continueListeningItems(4);
   const following = state.user ? followingFeed().slice(0,4) : [];
   const speakers = speakerDiscoveryRows(8);
-  return `<section class="home-discovery"><div class="home-search-box"><span>${svgIcon('search')}</span><input id="homeLibrarySearch" type="search" placeholder="${he?'חיפוש לפי כותרת, מרצה או קוד שיעור…':'Search title, speaker or lecture code…'}"><button id="homeLibrarySearchGo">${he?'חפש':'Search'}</button></div>${continueRows.length?`<div class="section-head"><div><span class="section-kicker">${he?'המשך':'CONTINUE'}</span><h2>${he?'המשך להאזין':'Continue Listening'}</h2></div><button class="section-link" data-nav="library" data-open-history="1">${he?'היסטוריה':'History'}</button></div><div class="list home-continue-list">${continueRows.map(row=>compactItem(row)).join('')}</div>`:''}${following.length?`<div class="section-head follow-home-head"><div><span class="section-kicker">${he?'במעקב':'FOLLOWING'}</span><h2>${he?'חדש ממה שאתם עוקבים אחריו':'New From What You Follow'}</h2></div></div><div class="card-grid compact-home-grid">${following.map(v=>itemCard({...v,_kind:'video'})).join('')}</div>`:''}<div class="discover-speakers"><div class="discover-speaker-head"><div><span class="section-kicker">${he?'גילוי':'DISCOVER'}</span><strong>${he?'גלו לפי מרצה':'Discover by Speaker'}</strong></div><div class="discover-speaker-head-actions"><button type="button" data-shuffle-speakers="1">${he?'ערבוב':'Shuffle'}</button><button type="button" data-home-all-speakers="1">${he?'כל המרצים':'See all'}</button></div></div><div class="discover-speaker-grid">${speakers.map(speakerDiscoveryCard).join('')}</div></div></section>`;
+  return `<section class="home-discovery"><div class="home-search-box"><span>${svgIcon('search')}</span><input id="homeLibrarySearch" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="${he?'חיפוש לפי כותרת, מרצה או קוד שיעור…':'Search title, speaker or lecture code…'}"><button id="homeLibrarySearchGo">${he?'חפש':'Search'}</button></div>${continueRows.length?`<div class="section-head"><div><span class="section-kicker">${he?'המשך':'CONTINUE'}</span><h2>${he?'המשך להאזין':'Continue Listening'}</h2></div><button class="section-link" data-nav="library" data-open-history="1">${he?'היסטוריה':'History'}</button></div><div class="list home-continue-list">${continueRows.map(row=>compactItem(row)).join('')}</div>`:''}${following.length?`<div class="section-head follow-home-head"><div><span class="section-kicker">${he?'במעקב':'FOLLOWING'}</span><h2>${he?'חדש ממה שאתם עוקבים אחריו':'New From What You Follow'}</h2></div></div><div class="card-grid compact-home-grid">${following.map(v=>itemCard({...v,_kind:'video'})).join('')}</div>`:''}<div class="discover-speakers"><div class="discover-speaker-head"><div><span class="section-kicker">${he?'גילוי':'DISCOVER'}</span><strong>${he?'גלו לפי מרצה':'Discover by Speaker'}</strong></div><div class="discover-speaker-head-actions"><button type="button" data-shuffle-speakers="1">${he?'ערבוב':'Shuffle'}</button><button type="button" data-home-all-speakers="1">${he?'כל המרצים':'See all'}</button></div></div><div class="discover-speaker-grid">${speakers.map(speakerDiscoveryCard).join('')}</div></div></section>`;
 }
 
 function promiseWithTimeout(promise, ms, message) {
@@ -1965,10 +2042,18 @@ function setToast(message) {
 }
 
 function setToken(token) {
+  if(!token || String(token)!==state.token)clearCachedAccount(localStorage);
   state.token = String(token || '');
   if (state.token) localStorage.setItem(TOKEN_KEY, state.token);
   else localStorage.removeItem(TOKEN_KEY);
 }
+
+function restoreOfflineAccount(){
+  if(Capacitor.getPlatform()!=='android'||state.user||!state.token)return;
+  const cached=readCachedAccount(localStorage,state.token);
+  if(cached){state.user=cached;state.isAdmin=false;state.adminChecked=false;}
+}
+function rememberVerifiedAccount(){if(state.token&&state.user)rememberCachedAccount(localStorage,state.token,state.user);}
 
 function resetUserState() {
   state.user = null;
@@ -2349,6 +2434,7 @@ async function bootstrap(options = {}) {
     state.likeCounts = likeCounts || {};
     state.error = '';
 
+    if(state.offlineMode||navigator.onLine===false)restoreOfflineAccount();
     // The catalog is complete. Account restoration and secondary feeds must
     // not hold the whole app behind its initial loading screen.
     state.loading = false;
@@ -2368,6 +2454,11 @@ async function bootstrap(options = {}) {
       state.offlineMode = true;
       state.usingCachedLibrary = true;
     }
+    // An Android WebView may continue reporting navigator.onLine=true after
+    // the actual catalog request has failed. The catch runs before /me can
+    // validate the session, so restore only the previously verified, token-
+    // bound *display identity*. Never restore admin rights or collections.
+    restoreOfflineAccount();
   } finally {
     state.loading = false;
     bootstrapInFlight = false;
@@ -2389,13 +2480,27 @@ async function restoreSession() {
       return;
     }
     state.user = data.user;
+    rememberVerifiedAccount();
     await loadUserCollections();
     await checkAdminStatus();
     warmNativePaidCatalog();
   } catch (error) {
-    if (error.status === 401) {
+    if (Number(error?.status) === 401) {
+      // Server-confirmed revocation always wins over any cached display name.
       setToken('');
       resetUserState();
+    } else if (Number(error?.status) === 403) {
+      // Access was explicitly refused by the server. A profile restored while
+      // offline cannot stay visible or reappear from its cache on the next
+      // offline restart, although the token is retained for server re-check.
+      clearCachedAccount(localStorage);
+      resetUserState();
+    } else if (!state.user && (!Number(error?.status) || Number(error.status) >= 500)) {
+      // navigator.onLine can stay true on an emulator after Wi-Fi and mobile
+      // data have both been disconnected. A failed /me fetch may restore ONLY
+      // the previously verified, token-bound display identity. No privileges
+      // or collections are cached; every server action still requires /me.
+      restoreOfflineAccount();
     }
   }
 }
@@ -2407,17 +2512,31 @@ async function loadUserCollections() {
       apiJson('/my-like-ids').catch(() => ({ ids: [] })),
       apiJson('/watch-later').catch(() => ({ items: [] })),
       apiJson('/follows').catch(() => ({ items: [] })),
-      apiJson('/history').catch(() => ({ items: [] })),
+      (async () => {
+        try { return await apiJson('/history', { cache:'no-store' }); }
+        catch (error) {
+          // A transient GET failure during relaunch must not empty previously
+          // saved history. Retry one fresh request, never a rejected session.
+          if ([401,403].includes(Number(error?.status))) throw error;
+          await new Promise(resolve => setTimeout(resolve, 700));
+          return apiJson('/history', { cache:'no-store' });
+        }
+      })().catch(error => {
+        console.warn('Could not refresh server watch history', error);
+        return null;
+      }),
       apiJson('/notification-settings').catch(() => ({ pushEnabled:false, emailEnabled:false, pushConfigured:false, emailConfigured:false })),
       apiJson('/custom-playlists').catch(() => ({ items: [] }))
     ]);
     state.myLikes = new Set((likes.ids || []).map(String));
     state.watchLater = new Set((later.items || []).map(item => String(item.id || item.vimeoId || '')));
     state.follows = new Map((follows.items || []).map(item => [`${item.type}:${item.key}`, item]));
-    const rawHistory = history.items || [];
-    state.history = normalizeHistoryRows(rawHistory);
-    refreshHistoryTypeIndex();
-    cleanupDuplicateHistoryRows(rawHistory).catch(() => {});
+    if (history && Array.isArray(history.items)) {
+      const rawHistory = history.items;
+      state.history = normalizeHistoryRows(rawHistory);
+      refreshHistoryTypeIndex();
+      cleanupDuplicateHistoryRows(rawHistory).catch(() => {});
+    }
     state.playlists = normalizePlaylistStore(playlists.items || []);
     try { localStorage.removeItem(PLAYLISTS_KEY); } catch (_) {}
     state.notificationSettings = { ...state.notificationSettings, ...notificationSettings };
@@ -2479,6 +2598,7 @@ async function login(email, password) {
     if (!data.sessionToken) throw new Error('The app Worker is not returning an app session token.');
     setToken(data.sessionToken);
     state.user = data.user || { name: data.name || '', email };
+    rememberVerifiedAccount();
     await loadUserCollections();
     state.adminChecked = false;
     await checkAdminStatus(true);
@@ -2525,6 +2645,7 @@ async function loginWithGoogle() {
     if (!data.sessionToken) throw new Error('The app Worker did not return an app session token.');
     setToken(data.sessionToken);
     state.user = data.user || { name: data.name || nativeResult.name || '', email: nativeResult.email || '' };
+    rememberVerifiedAccount();
     await loadUserCollections();
     state.adminChecked = false;
     await checkAdminStatus(true);
@@ -2562,6 +2683,7 @@ async function loginWithApple() {
     const data=await apiJson('/apple-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({identityToken,givenName,familyName})});
     if(!data.sessionToken)throw new Error('The app Worker did not return an app session token.');
     setToken(data.sessionToken);state.user=data.user||{name:data.name||[givenName,familyName].filter(Boolean).join(' '),email};
+    rememberVerifiedAccount();
     await loadUserCollections();state.adminChecked=false;await checkAdminStatus(true);state.paidLoaded=false;state.paidCatalog=[];state.recurringLoaded=false;state.recurringDonations=[];warmNativePaidCatalog();state.authMessage='';state.authMode='login';setToast('Signed in with Apple.');
   }catch(error){const message=String(error?.message||'Apple sign-in failed.');state.authMessage=/cancel|canceled|cancelled|1001/i.test(message)?'Apple sign-in was cancelled.':message;}
   finally{state.authBusy=false;render();}
@@ -2668,6 +2790,7 @@ async function updateProfile(name, password) {
       body: JSON.stringify({ name, password })
     });
     state.user.name = name;
+    rememberVerifiedAccount();
     setToast('Profile updated.');
   } catch (error) {
     alert(error.message || 'Could not update profile.');
@@ -3506,6 +3629,7 @@ function shell(content) {
     ${state.playerOpen && state.current ? fullPlayerHtml() : ''}
     ${state.watchVideo && !state.watchHostedExternally && !state.playerOpen ? watchHtml() : ''}
     <div id="downloadManagerMount">${downloadManagerHtml()}</div>
+    <div id="offlineDeleteMount">${offlineDeleteDialogHtml()}</div>
     ${filterSheetHtml()}
     ${deleteAccountDialogHtml()}
     ${adminEditorHtml()}
@@ -4796,12 +4920,13 @@ async function setVimeoHandoffMuted(player, muted) {
 }
 
 
-async function confirmVideoAudibleAfterAuthority(player, timeoutMs = 6500) {
+async function confirmVideoAudibleAfterAuthority(player, timeoutMs = 6500, isCurrent = () => true) {
   const deadline = Date.now() + timeoutMs;
   // An Android focus transaction can briefly unmute the WebView and then
   // re-mute it a fraction of a second later. Require stable audible playback.
   let audibleSince = 0;
   while (Date.now() < deadline) {
+    if (!isCurrent()) return false;
     const element = player?.getVideoElement?.();
     if (element) {
       // Modern Android WebView can re-mute or suspend the media element during
@@ -4847,6 +4972,11 @@ async function confirmVideoAudibleAfterAuthority(player, timeoutMs = 6500) {
 
 async function finishAudioToVideoHandoff(videoKey, player = state.watchVimeo) {
   const key = String(videoKey || '');
+  const generation = state.watchVimeoGeneration;
+  const isCurrent = () => state.watchVimeoGeneration === generation && state.watchVimeo === player &&
+    state.watchMode === 'video' && state.watchAudioToVideoHandoff &&
+    String(state.watchAudioToVideoHandoffId || '') === key && !state.nativeBackgroundHandoff &&
+    (!document.hidden || state.systemPipActive);
   // Vimeo's play event and the readiness waiter can hit this simultaneously. If
   // they are finishing the same lecture, share the transaction. If an older
   // lecture is still winding down, wait for it before evaluating the new handoff
@@ -4857,6 +4987,7 @@ async function finishAudioToVideoHandoff(videoKey, player = state.watchVimeo) {
   }
   if (!state.watchAudioToVideoHandoff) return state.watchMode === 'video';
   if (state.watchAudioToVideoHandoffId && String(state.watchAudioToVideoHandoffId) !== key) return false;
+  if (!isCurrent()) return false;
 
   state.watchAudioToVideoCommitBusy = true;
   state.watchAudioToVideoCommitPromiseId = key;
@@ -4865,12 +4996,15 @@ async function finishAudioToVideoHandoff(videoKey, player = state.watchVimeo) {
       if (usesNativeUnifiedAudio()) {
         const position = await Promise.resolve(player?.getCurrentTime?.()).catch(()=>state.watchResumeSeconds||0);
         const duration = await Promise.resolve(player?.getDuration?.()).catch(()=>Number(state.watchVideo?.duration)||0);
+        if (!isCurrent()) return false;
         // Keep Vimeo muted until Media3 confirms VIDEO authority. If native authority
         // cannot switch, native audio remains the only audible source and the caller
         // can safely restore Audio mode without ever producing double audio.
         await PlaybackController.switchAuthorityToVideo(position, duration, true);
+        if (!isCurrent()) return false;
         await setVimeoHandoffMuted(player, false);
-        if (!await confirmVideoAudibleAfterAuthority(player)) {
+        if (!await confirmVideoAudibleAfterAuthority(player, 6500, isCurrent)) {
+          if (!isCurrent()) return false;
           throw new Error('Native VIDEO authority was confirmed but the picture is paused or muted');
         }
       } else {
@@ -4879,6 +5013,7 @@ async function finishAudioToVideoHandoff(videoKey, player = state.watchVimeo) {
         await setVimeoHandoffMuted(player, false);
         if (!audio.paused) audio.pause();
       }
+      if (!isCurrent()) return false;
       state.current = null;
       state.playerOpen = false;
       state.audioLastHistoryAt = 0;
@@ -4927,6 +5062,9 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
   // the keyframe plays. Require actual motion before correcting another drift.
   let lastSeekCorrectionAt = Number.NEGATIVE_INFINITY;
   let catchupElement = null;
+  let lastDecodedMotionAt = startedAt;
+  let recoveredCatchupStall = false;
+  let resynchronizedBufferedHlsOnce = false;
   try {
   while (Date.now() < deadline) {
     if (!state.watchAudioToVideoHandoff || String(state.watchAudioToVideoHandoffId || '') !== String(videoKey || '')) {
@@ -4942,6 +5080,24 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
       Promise.resolve(player?.getCurrentTime?.()).catch(()=>null)
     ]);
     const videoNow = Number(current);
+    if (paused && ['hls', 'mp4'].includes(player?.getSourceType?.()) &&
+        state.nativePlayback?.mode === 'AUDIO' &&
+        (state.nativePlayback?.audioIsPlaying || state.nativePlayback?.audioPlayWhenReady) &&
+        typeof player.resumeStalledHandoff === 'function') {
+      // A decoder can pause itself after showing its first HLS frame, without
+      // the listener pressing Pause. Try one muted resume only when the HLS
+      // adapter still holds a genuine Play intent. Native Audio stays audible
+      // until moving pictures and matching clocks are proven below.
+      const resumed = await Promise.race([
+        Promise.resolve(player.resumeStalledHandoff()).catch(()=>false),
+        new Promise(resolve=>setTimeout(()=>resolve(false),900))
+      ]);
+      if (resumed) {
+        lastDecodedMotionAt = Date.now();
+        await new Promise(resolve=>setTimeout(resolve,350));
+        continue;
+      }
+    }
     if (!paused && Number.isFinite(videoNow)) {
       // Confirm the destination clock is live, not merely a resolved play() call.
       const element = player?.getVideoElement?.();
@@ -4956,6 +5112,43 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
       const framesAfter = frameCount();
       const movingPicture = !element || (!element.paused && !element.seeking && element.readyState >= 2 && element.videoWidth > 0 &&
         (framesBefore == null || (framesAfter != null && framesAfter > framesBefore)));
+      if (Number.isFinite(again) && again > videoNow + 0.05 && movingPicture) lastDecodedMotionAt = Date.now();
+      if (!recoveredCatchupStall && player?.getSourceType?.() === 'hls' && catchupElement === element &&
+          element && !element.seeking && element.playbackRate > (Number(state.playbackSpeed) || 1) &&
+          Date.now() - lastDecodedMotionAt >= 900 && state.nativePlayback?.audioIsPlaying === true) {
+        // API 35 decoded the first keyframe, then its clock froze at 4x despite
+        // buffered media. Reset catch-up speed and make one cached-range seek
+        // to the actual advancing Audio clock; do not restart either source.
+        const rangeReady = Array.from({length:element.buffered?.length || 0}, (_, i) => i).some(i =>
+          element.buffered.start(i) <= stillSource && element.buffered.end(i) >= stillSource + 2);
+        if (rangeReady) {
+          recoveredCatchupStall = true;
+          element.playbackRate = Number(state.playbackSpeed) || 1;
+          await Promise.race([
+            Promise.resolve(player.setCurrentTime(stillSource)).catch(()=>null),
+            new Promise(resolve=>setTimeout(()=>resolve(null),900))
+          ]);
+          lastDecodedMotionAt = Date.now();
+          continue;
+        }
+        if (element.readyState >= 2 && Date.now() - lastDecodedMotionAt >= 1400 &&
+            typeof player.retargetStalledHandoff === 'function') {
+          // If the HLS decoder froze *before* fetching Audio's advancing
+          // position, waiting for a buffer that cannot advance is a deadlock.
+          // Request the missing fragment once. Audio remains audible until
+          // real moving frames and a synchronized position are verified.
+          const retargeted = await Promise.race([
+            Promise.resolve(player.retargetStalledHandoff(stillSource)).catch(()=>false),
+            new Promise(resolve=>setTimeout(()=>resolve(false),900))
+          ]);
+          if (retargeted) {
+            recoveredCatchupStall = true;
+            element.playbackRate = Number(state.playbackSpeed) || 1;
+            lastDecodedMotionAt = Date.now();
+            continue;
+          }
+        }
+      }
       // A long MP4 seek can present its first frames before the following byte
       // range arrives. Keep Audio audible until the destination has a runway,
       // rather than committing over a picture that immediately buffers again.
@@ -4967,19 +5160,69 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
         }
       }
       if (Number.isFinite(again) && again > videoNow + 0.05 && movingPicture && bufferedAhead) {
-        if (synchronized(again, stillSource, 1.8)) return again;
+        if (synchronized(again, stillSource, 1.0)) return again;
+        // When live Audio is faster than an older Android HLS decoder, 4x
+        // catch-up cannot guarantee convergence. After genuinely moving
+        // frames have proved the decoder works, seek ONCE to a live clock
+        // position already fully buffered in this SAME HLS media element.
+        // Never cancel the first pending keyframe, request an absent range,
+        // or replace the native Audio owner before verifying new frames.
+        const rate = Math.max(.25, Number(state.playbackSpeed) || 1);
+        const lag = stillSource - again;
+        const elapsed = Date.now() - startedAt;
+        const cachedLiveHls = player?.getSourceType?.() === 'hls' && element &&
+          !element.seeking && elapsed >= 5000 &&
+          deadline - Date.now() <= 10000 &&
+          lag > Math.max(3, rate * 2) &&
+          !resynchronizedBufferedHlsOnce &&
+          Array.from({length:element.buffered?.length || 0}, (_, i) => i).some(i =>
+            element.buffered.start(i) <= stillSource &&
+            element.buffered.end(i) >= stillSource + Math.max(2, rate * 1.5));
+        if (cachedLiveHls) {
+          resynchronizedBufferedHlsOnce = true;
+          lastSeekCorrectionAt = Date.now();
+          catchupElement = null;
+          element.playbackRate = rate;
+          await Promise.race([
+            Promise.resolve(player.setCurrentTime(stillSource)).catch(() => null),
+            new Promise(resolve => setTimeout(() => resolve(null), 900))
+          ]);
+          lastDecodedMotionAt = Date.now();
+          continue;
+        }
         // Let the first seek decode and actually play before chasing Audio's
         // advancing clock. Seeking as soon as metadata/currentTime resolve
         // repeatedly discards the destination's pending keyframe on API 35.
         if (player?.getSourceType?.() === 'hls' && element) {
-          // The initial HLS seek can take seconds to decode a keyframe. Another
-          // seek discards that progress. Catch up while its decoded picture
-          // keeps moving, then restore the requested speed before committing.
-          const requestedRate = Number(state.playbackSpeed) || 1;
-          catchupElement = element;
-          element.playbackRate = again < stillSource
-            ? Math.min(4, Math.max(requestedRate * 2, requestedRate + 1))
-            : Math.max(.25, requestedRate / 2);
+          const sourceStopped = usesNativeUnifiedAudio() && state.nativePlayback?.mode === 'AUDIO' &&
+            state.nativePlayback.audioIsPlaying === false && state.nativePlayback.audioPlayWhenReady === false;
+          if (sourceStopped) {
+            // WebView focus can park Audio while muted HLS is preparing. A
+            // slowed moving picture cannot catch a stationary source clock.
+            // Correct only after real decode/motion, keeping the 1s limit.
+            element.playbackRate = Number(state.playbackSpeed) || 1;
+            if (Date.now() - lastSeekCorrectionAt >= 1500) {
+              lastSeekCorrectionAt = Date.now();
+              await Promise.race([
+                Promise.resolve(player.setCurrentTime(stillSource)).catch(()=>null),
+                new Promise(resolve=>setTimeout(()=>resolve(null),900))
+              ]);
+            }
+          } else {
+            // The initial HLS seek can take seconds to decode a keyframe. Another
+            // seek discards that progress. Catch up while its decoded picture
+            // keeps moving, then restore the requested speed before committing.
+            const requestedRate = Number(state.playbackSpeed) || 1;
+            catchupElement = element;
+            const drift = stillSource - again;
+            const remainingSeconds = Math.max(.5, (deadline - Date.now()) / 1000);
+            // A ten-second keyframe delay leaves ten seconds of live Audio lead.
+            // Fixed 2x needs another ten seconds and misses the unchanged 15s
+            // transaction deadline. Adapt the catch-up rate to the observed drift.
+            element.playbackRate = drift > 0
+              ? Math.min(4, requestedRate + Math.max(1, drift / Math.min(2, remainingSeconds)))
+              : Math.max(.25, requestedRate / 2);
+          }
         } else if (!element?.seeking && Date.now() - lastSeekCorrectionAt >= 1500) {
           lastSeekCorrectionAt = Date.now();
           await Promise.race([
@@ -5057,7 +5300,12 @@ async function switchVideoToAudioSeamlessly(video, id) {
     const previousCurrent = state.current;
     let exact = await quickVimeoTime(state.watchResumeSeconds || 0, 350);
     let wasPlaying = Boolean(state.watchVideoPlaying);
-    if (player && typeof player.getPaused === 'function') {
+    if (player && typeof player.getPlaybackIntent === 'function') {
+      // Android can pause MP4 internally to prime its initial buffer while
+      // the user's Play request remains active. Transferring the decoder's
+      // paused flag to Media3 would start Audio silently paused.
+      try { wasPlaying = Boolean(player.getPlaybackIntent()); } catch (_) {}
+    } else if (player && typeof player.getPaused === 'function') {
       try {
         const paused = await Promise.race([
           Promise.resolve(player.getPaused()).catch(() => !wasPlaying),
@@ -5270,6 +5518,7 @@ async function switchVideoToAudioSeamlessly(video, id) {
 
 async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
   const player = state.watchVimeo;
+  const generation = state.watchVimeoGeneration;
   if (!player) return false;
   if (usesNativeUnifiedAudio()) {
     const audioItem = state.current;
@@ -5310,7 +5559,10 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
         if (readyPosition == null || !Number.isFinite(Number(readyPosition))) throw new Error('Vimeo did not become ready at the synchronized position');
         current = Number(readyPosition);
         const finished = await finishAudioToVideoHandoff(id, player);
-        if (!finished && state.watchAudioToVideoHandoff) throw new Error('Video handoff did not commit');
+        if (!finished) {
+          if (state.nativeBackgroundHandoff || (document.hidden && !state.systemPipActive)) return false;
+          throw new Error('Video handoff did not commit');
+        }
         state.watchVideoPlaying = true;
       } else {
         await Promise.resolve(player.pause()).catch(()=>{});
@@ -5326,6 +5578,7 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
       refreshPersistentMiniVideoChrome();
       return true;
     } catch (error) {
+      if (generation !== state.watchVimeoGeneration || state.watchVimeo !== player || state.watchMode !== 'video') return false;
       console.warn('[Playback] AUDIO -> VIDEO aborted; native audio remains source', error);
       state.watchAudioToVideoHandoff = false;
       state.watchAudioToVideoHandoffId = '';
@@ -5335,6 +5588,9 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
       setPlaybackAuthorityFence('AUDIO', id, 5000);
       await setVimeoHandoffMuted(player, true);
       try { await player.pause(); } catch (_) {}
+      // Home has already started the native background transaction. A late
+      // foreground readiness failure must not restart or seek its Audio owner.
+      if (state.nativeBackgroundHandoff || (document.hidden && !state.systemPipActive)) return false;
       // Native authority may have changed before a commit error. Restore the
       // audible source and its live shadow clock, rather than rendering Audio
       // over a silent VIDEO owner with a cleared current item.
@@ -6030,6 +6286,22 @@ function analyticsScreenLabel() {
   return names[String(state.screen || '')] || String(state.screen || 'Home');
 }
 
+function preserveHomeSearchDraft() {
+  const input = document.getElementById('homeLibrarySearch');
+  if (state.screen !== 'home' || !input) return () => {};
+  const value = input.value, focused = document.activeElement === input;
+  const start = input.selectionStart, end = input.selectionEnd;
+  return () => {
+    const replacement = document.getElementById('homeLibrarySearch');
+    if (state.screen !== 'home' || !replacement) return;
+    replacement.value = value;
+    if (focused) {
+      replacement.focus({preventScroll:true});
+      try { replacement.setSelectionRange(start, end); } catch (_) {}
+    }
+  };
+}
+
 function preserveAuthFormDraft() {
   // Keep an in-progress form in the DOM only. Never put credentials in state,
   // storage, markup or logs. A login attempt or mode change clears the draft.
@@ -6057,6 +6329,13 @@ function preserveAuthFormDraft() {
 
 function render() {
   if (tabSwipeRenderGate.shouldDefer()) return;
+  // Keep the actual focused input/Android IME connection alive. Copying the
+  // value into a replacement field still drops native keys queued for the old one.
+  if (state.screen === 'home' && !state.loading && !state.error && document.activeElement?.id === 'homeLibrarySearch') {
+    homeSearchRenderDeferred = true;
+    return;
+  }
+  homeSearchRenderDeferred = false;
   usageAnalytics.setScreen(analyticsScreenLabel());
   if (['live','live-boro','live-flatbush'].includes(state.screen)) usageAnalytics.event('livestream_opened', { dedupeKey:'livestream-open', cooldownMs:60000 });
   if (state.loading) {
@@ -6085,9 +6364,11 @@ function render() {
     : state.screen === 'library' ? libraryHtml()
     : accountHtml();
   const restoreAuthDraft = preserveAuthFormDraft();
+  const restoreSearchDraft = preserveHomeSearchDraft();
   app.innerHTML = shell(content + playlistPickerHtml());
   bind();
   restoreAuthDraft();
+  restoreSearchDraft();
   syncLivePlaybackAnalytics();
   updatePlayerUi();
   refreshOfflineButtonsForKey();
@@ -6253,7 +6534,8 @@ function bind() {
   }));
   document.querySelectorAll('[data-save-offline-kind]').forEach(el=>el.addEventListener('click',event=>{event.stopPropagation();saveOffline(el.dataset.saveOfflineKind,el.dataset.saveOfflineId);}));
   document.querySelectorAll('[data-offline-play]').forEach(el=>el.addEventListener('click',()=>playOfflineRecord(el.dataset.offlinePlay)));
-  document.querySelectorAll('[data-offline-delete]').forEach(el=>el.addEventListener('click',()=>deleteOffline(el.dataset.offlineDelete)));
+  document.querySelectorAll('[data-offline-delete]').forEach(el=>el.addEventListener('click',()=>requestOfflineDeletion(el.dataset.offlineDelete)));
+  bindOfflineDeleteDialog(document.getElementById('offlineDeleteMount'));
   document.querySelectorAll('[data-open-playlist-picker]').forEach(el=>el.addEventListener('click',event=>{event.stopPropagation();openPlaylistPicker(el.dataset.playlistKind,el.dataset.playlistId);}));
   document.querySelectorAll('[data-playlist-picker-close]').forEach(el=>el.addEventListener('click',event=>{if(event.target.closest('[data-playlist-picker-panel]') && event.target!==el)return;state.playlistPickerItem=null;render();}));
   document.querySelectorAll('[data-playlist-picker-panel]').forEach(el=>el.addEventListener('click',event=>event.stopPropagation()));
@@ -7773,13 +8055,22 @@ function reconcileNativeWatchAudio(snapshot) {
   // AUDIO remains the owner while the foreground destination seeks/buffers.
   // Its position callbacks must not park that destination or replace its view.
   if (state.watchAudioToVideoHandoff && String(state.watchAudioToVideoHandoffId || '') === String(snapshot.lectureId || '')) return;
+  // Initial MP3 prewarming publishes AUDIO before Video can decode. That
+  // metadata callback is not a user Audio selection or a completed Home handoff.
+  if (state.watchMode === 'video' && snapshot.audioAuthorityCommitted !== true && !state.nativeBackgroundHandoff && !document.hidden) return;
   const wasVideo = state.watchMode === 'video';
   ensureNativeAudioCurrentForWatch(snapshot);
   state.nativeBackgroundHandoff = false;
   state.watchMode = 'audio';
   state.watchVideoPlaying = false;
-  // Change ownership before pause emits callbacks, and cancel old recovery.
-  if (state.watchVimeo) {
+  // The opt-in Media3 HLS player is the SAME native Audio player. Pausing
+  // that object here would silence Audio immediately after the user switches
+  // from Video, precisely the real Android 11/15 regression captured by CI.
+  // Only the legacy WebView decoder needs to be muted and parked.
+  if (state.watchVimeo?.isIrgunNativeVideoPlayer) {
+    if (wasVideo) state.watchVimeo.setMode('audio').catch(error =>
+      console.warn('[Media3] could not hide native Video surface after Home',error));
+  } else if (state.watchVimeo) {
     setVimeoHandoffMuted(state.watchVimeo, true).catch(() => {});
     Promise.resolve(state.watchVimeo.pause()).catch(() => {});
   }
@@ -8052,6 +8343,9 @@ const PlaybackController = {
       return;
     }
     state.nativeBackgroundHandoff = true;
+    state.watchAudioToVideoHandoff = false;
+    state.watchAudioToVideoHandoffId = '';
+    state.watchAudioToVideoTargetSeconds = 0;
     const id = state.watchVideo ? videoId(state.watchVideo) : state.nativePlayback?.lectureId;
     setPlaybackAuthorityFence('AUDIO', id, 5000);
     await state.watchVimeo.pause();
@@ -8339,11 +8633,18 @@ async function preserveWatchTime() {
 
 async function closeWatch(save = true) {
   if (!state.watchVideo) return;
+  const closingPlayer = state.watchVimeo;
+  const generation = state.watchVimeoGeneration;
+  const continuingAudioId = usesNativeUnifiedAudio() && state.watchMode === 'audio' && !playbackIsPaused()
+    ? String(state.current?.id || '') : '';
   if (save) await preserveWatchTime();
   if (state.watchMode === 'video' && state.watchVideo && save) {
     let duration = 0;
     try { duration = state.watchVimeo ? await state.watchVimeo.getDuration() : Number(state.watchVideo.duration) || 0; } catch (_) {}
-    await saveHistory(videoId(state.watchVideo), 'video', state.watchResumeSeconds || 0, duration, false, { reconcile:true });
+    // Queue the actual position before closing, but keep Back usable while
+    // server history writes or reconciliation are slow.
+    saveHistory(videoId(state.watchVideo), 'video', state.watchResumeSeconds || 0, duration, false, { reconcile:true }).catch(error =>
+      console.warn('Could not save Video history after closing Watch', error));
   } else if (state.watchMode === 'audio' && save) {
     const snapshot = captureCurrentAudioHistorySnapshot(videoId(state.watchVideo));
     // Do not block the Back button on a slow network history write. The
@@ -8352,7 +8653,20 @@ async function closeWatch(save = true) {
     if (snapshot) saveAudioHistorySnapshot(snapshot, false, { reconcile:true }).catch(error =>
       console.warn('Could not save Audio history after closing Watch', error));
   }
-  try { if (state.watchVimeo) await state.watchVimeo.destroy(); } catch (_) {}
+  if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
+  try { if (closingPlayer) await closingPlayer.destroy(); } catch (_) {}
+  if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
+  if (continuingAudioId) {
+    // Removing a parked WebView decoder can deliver AUDIO_FOCUS_LOSS to the
+    // still-playing Media3 source. The native guard preserves explicit Pause.
+    await new Promise(resolve => setTimeout(resolve,150));
+    if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
+    if (state.watchMode === 'audio' && String(state.current?.id || '') === continuingAudioId) {
+      await nativeMediaPlugin().restoreAudioAfterVideoTeardown({lectureId:continuingAudioId}).catch(()=>{});
+      await PlaybackController.refreshFromNative().catch(()=>{});
+    }
+  }
+  if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
   if (state.watchMode === 'video') {
     clearCurrentAudioStateForVideo();
     clearNativeMediaSession();
@@ -8383,6 +8697,44 @@ async function performWatchModeSwitch(mode) {
   if (!state.watchVideo || !['video', 'audio'].includes(mode) || mode === state.watchMode) return true;
   const video = state.watchVideo;
   const id = videoId(video);
+
+  if (state.watchVimeo?.isIrgunNativeVideoPlayer) {
+    // Media3 beta: Audio/Video is a video-track selection change in the SAME
+    // ExoPlayer and MediaSession. No pause, new MediaItem, hidden MP3 shadow,
+    // stale clock, sound overlap or WebView handoff transaction.
+    const player=state.watchVimeo;
+    const previous=state.watchMode;
+    await player.setMode(mode);
+    let observed=null;
+    for(let attempt=0;attempt<12;attempt++){
+      observed=await player.refresh();
+      if(observed.active&&observed.videoSelected===(mode==='video'))break;
+      await new Promise(resolve=>setTimeout(resolve,120));
+    }
+    if(!observed?.active||observed.videoSelected!==(mode==='video')){
+      console.warn('[Media3 beta] native mode switch did not commit',observed);
+      await player.setMode(previous).catch(()=>{});
+      return false;
+    }
+    state.watchResumeSeconds=Math.max(0,Number(observed.positionMs||0)/1000);
+    state.watchMode=mode;
+    state.watchVideoPlaying=mode==='video'&&Boolean(observed.playing);
+    state.watchAudioToVideoHandoff=false;
+    state.watchAudioToVideoHandoffId='';
+    state.watchAudioToVideoTargetSeconds=0;
+    state.watchMinimized=false;
+    if(mode==='audio'){
+      if(!state.current || String(state.current.id)!==String(id)) state.current=videoAudioPlaybackItem(video,id);
+      setNativePipEligibility(false);
+    }
+    await PlaybackController.refreshFromNative().catch(()=>{});
+    render();
+    if(mode==='video') player.updateFrame();
+    if(state.user){
+      saveHistory(id,mode,state.watchResumeSeconds,Number(observed.durationMs||0)/1000,false,{reconcile:true}).catch(()=>{});
+    }
+    return true;
+  }
 
   if (mode === 'audio') {
     state.watchAudioToVideoHandoff = false;
@@ -8478,6 +8830,18 @@ async function performWatchModeSwitch(mode) {
 
 async function switchWatchMode(mode) {
   if (!state.watchVideo || !['video', 'audio'].includes(mode)) return;
+  // Both direct HLS and Vimeo can fail while starting Video offline. When the
+  // UI still says Video but Media3 continues offline Audio, a new physical
+  // Video tap after reconnect must retry a genuine, safe handoff.
+  if (mode === 'video' && state.watchMode === 'video' &&
+      !state.watchVimeo && !watchVimeoInitFlight &&
+      usesNativeUnifiedAudio() && state.current?.id === videoId(state.watchVideo) &&
+      state.nativePlayback.mode === 'AUDIO') {
+    state.watchMode = 'audio';
+    state.watchVideoPlaying = false;
+    state.watchAudioToVideoHandoff = false;
+    state.watchAudioToVideoHandoffId = '';
+  }
   // Last tap wins. A tap that arrives while a handoff is running replaces the
   // pending target instead of being dropped.
   state.pendingWatchMode = mode;
@@ -8531,6 +8895,24 @@ function loadWatchVimeoSdk() {
 // into two different HLS stages. A fallback increments the generation, so it
 // starts a fresh initialization after the failed player has been destroyed.
 let watchVimeoInitFlight = null;
+async function finishInitializedNativeVideoHandoff(player, video, videoKey) {
+  const generation = state.watchVimeoGeneration;
+  // Reopening Watch creates a new decoder. It needs the same live-clock,
+  // decoded-frame and bounded rollback transaction as a parked Video switch.
+  const transferred = await resumeParkedVideoFromAudio(video, videoKey, true);
+  if (generation !== state.watchVimeoGeneration || state.watchVimeo !== player ||
+      videoId(state.watchVideo) !== videoKey || state.watchMode !== 'video' || state.nativeBackgroundHandoff ||
+      (document.hidden && !state.systemPipActive)) return false;
+  if (!transferred) {
+    state.watchMode = 'audio';
+    state.watchVideoPlaying = false;
+    parkHostedVideoForAudio();
+    render();
+    updatePlayerUi();
+  }
+  return transferred;
+}
+
 function initWatchVimeo(userInitiated = false) {
   if (state.watchVimeo) return Promise.resolve();
   const generation = state.watchVimeoGeneration;
@@ -8560,13 +8942,34 @@ async function initWatchVimeoOnce(userInitiated = false) {
   try {
     if (state.watchVideoForceVimeoId !== videoKey) {
       try {
-        player = await createAndroidHlsPlayer({
+        if (Capacitor.getPlatform() === 'android' && nativeMedia3BetaEnabled()) {
+          try {
+            player = await createNativeMedia3VideoPlayer({
+              apiBase:API,videoId:videoKey,iframe:frame,
+              resumeSeconds:Math.max(0,Number(state.watchResumeSeconds)||0),
+              title:displayShiurTitle(video.title,'Shiur'),
+              speaker:video._speakerLabel||video.speaker||'Irgun Shiurai Torah',
+              image:video.thumbnail||video.image||'',
+              audioUrl:video.hasAudio?audioUrl(mediaApiId(video,videoKey)):'',
+              speed:Number(state.playbackSpeed)||1,
+              onError:error=>console.warn('[Media3 beta] native Video failed',error)
+            });
+          } catch (nativeError) {
+            console.warn('[Media3 beta] falling back to the existing WebView player',nativeError);
+          }
+        }
+        if (!player) player = await createAndroidHlsPlayer({
           apiBase: API,
           platform: Capacitor.getPlatform(),
           videoId: videoKey,
           iframe: frame,
           resumeSeconds: Math.max(0, Number(state.watchResumeSeconds) || 0),
           isPictureInPicture: () => state.systemPipActive,
+          onSpeedChange: rate => {
+            if (generation === state.watchVimeoGeneration && videoId(state.watchVideo) === videoKey) {
+              void PlaybackController.setSpeed(rate);
+            }
+          },
           onMinimize: () => {
             if (generation === state.watchVimeoGeneration && state.watchMode === 'video' && !state.systemPipActive && !state.watchMinimized && videoId(state.watchVideo) === videoKey) {
               void minimizeWatchToPersistent();
@@ -8630,7 +9033,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
       if (state.systemPipActive && state.watchResumeSeconds > 0 && (state.systemPipLastSeconds < 3 || state.watchResumeSeconds >= state.systemPipLastSeconds - 3)) {
         state.systemPipLastSeconds = state.watchResumeSeconds;
       }
-      syncNativeMediaSession(videoMediaItem, true, data.seconds || 0, data.duration || video.duration || 0, 'video');
+      if (!player.isIrgunNativeVideoPlayer) syncNativeMediaSession(videoMediaItem, true, data.seconds || 0, data.duration || video.duration || 0, 'video');
       if (!usesNativeUnifiedAudio() && 'mediaSession' in navigator && Number(data.duration) > 0) {
         try { navigator.mediaSession.setPositionState({duration:Number(data.duration), playbackRate:1, position:Math.min(Number(data.seconds)||0, Number(data.duration))}); } catch (_) {}
       }
@@ -8654,7 +9057,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
       usageAnalytics.setMedia({isPlaying:true,mediaType:'video',playerState:'playing',shiurId:String(videoKey)});
       usageAnalytics.event('video_start',{shiurId:String(videoKey),mediaType:'video',dedupeKey:`video-start:${videoKey}`,cooldownMs:10000});
       refreshPersistentMiniVideoChrome();
-      prewarmVideoAudioMetadata(video, videoKey);
+      if (!player.isIrgunNativeVideoPlayer) prewarmVideoAudioMetadata(video, videoKey);
       let t = await player.getCurrentTime().catch(()=>state.watchResumeSeconds || 0);
       const d = await player.getDuration().catch(()=>Number(video.duration)||0);
       // Rescue a handoff if Vimeo's first play attempt was delayed. Never stop the
@@ -8673,7 +9076,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
         });
       }
       state.watchResumeSeconds = Math.max(0, Number(t) || state.watchResumeSeconds || 0);
-      syncNativeMediaSession(videoMediaItem, true, t, d, 'video');
+      if (!player.isIrgunNativeVideoPlayer) syncNativeMediaSession(videoMediaItem, true, t, d, 'video');
     });
     player.on('pause', async () => {
       if (generation !== state.watchVimeoGeneration) return;
@@ -8682,14 +9085,14 @@ async function initWatchVimeoOnce(userInitiated = false) {
       refreshPersistentMiniVideoChrome();
       const t = await player.getCurrentTime().catch(()=>state.watchResumeSeconds || 0);
       const d = await player.getDuration().catch(()=>Number(video.duration)||0);
-      syncNativeMediaSession(videoMediaItem, false, t, d, 'video');
+      if (!player.isIrgunNativeVideoPlayer) syncNativeMediaSession(videoMediaItem, false, t, d, 'video');
     });
     player.on('ended', data => {
       if (generation!==state.watchVimeoGeneration) return;
       state.watchVideoPlaying = false;
       usageAnalytics.setMedia({isPlaying:false,mediaType:'video',playerState:'paused',shiurId:String(videoKey)});
       refreshPersistentMiniVideoChrome();
-      syncNativeMediaSession(videoMediaItem, false, data.duration || video.duration || 0, data.duration || video.duration || 0, 'video');
+      if (!player.isIrgunNativeVideoPlayer) syncNativeMediaSession(videoMediaItem, false, data.duration || video.duration || 0, data.duration || video.duration || 0, 'video');
       saveHistory(videoId(video), 'video', data.duration || video.duration || 0, data.duration || video.duration || 0, true);
     });
     if (player.on) {
@@ -8701,7 +9104,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
     // Publish the media URL immediately so Android can pre-warm the background
     // audio engine while Vimeo is loading/playing. This makes Home-button handoff
     // much closer to continuous playback.
-    syncNativeMediaSession(videoMediaItem, false, requestedResume, Number(video.duration) || 0, 'video');
+    if (!player.isIrgunNativeVideoPlayer) syncNativeMediaSession(videoMediaItem, false, requestedResume, Number(video.duration) || 0, 'video');
 
     // The iframe itself already contains #t=<seconds>s, so Vimeo requests the
     // middle of the video from the beginning instead of loading 0:00 and then
@@ -8715,9 +9118,9 @@ async function initWatchVimeoOnce(userInitiated = false) {
     }
     state.watchVimeoReady = true;
     if (typeof player.setPlaybackRate === 'function') await player.setPlaybackRate(Number(state.playbackSpeed)||1).catch(()=>{});
-    prewarmVideoAudioMetadata(video, videoKey);
+    if (!player.isIrgunNativeVideoPlayer) prewarmVideoAudioMetadata(video, videoKey);
 
-    if (requestedResume > 1) {
+    if (!player.isIrgunNativeVideoPlayer && requestedResume > 1) {
       // Usually the timestamp fragment already put Vimeo at the right place. Verify
       // quickly and use the SDK seek only as a fallback, avoiding the old multi-second
       // ready -> seek -> buffer cycle.
@@ -8744,7 +9147,17 @@ async function initWatchVimeoOnce(userInitiated = false) {
     }
 
     if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video') return;
-    if (audioToVideoHandoff && state.watchAudioToVideoHandoff && state.watchAudioToVideoHandoffId === videoKey && !playbackIsPaused()) {
+    if (player.isIrgunNativeVideoPlayer) {
+      // The same Media3 service already owns BOTH picture and sound. There is
+      // no separate WebView decoder to synchronize or commit as a shadow source.
+      state.watchAudioToVideoHandoff = false;
+      state.watchAudioToVideoHandoffId = '';
+      state.watchAudioToVideoTargetSeconds = 0;
+      state.watchVideoPlaying = !(await player.getPaused().catch(()=>true));
+      player.updateFrame?.();
+    } else if (audioToVideoHandoff && state.watchAudioToVideoHandoff && state.watchAudioToVideoHandoffId === videoKey && !playbackIsPaused() && usesNativeUnifiedAudio()) {
+      if (!await finishInitializedNativeVideoHandoff(player, video, videoKey)) return;
+    } else if (audioToVideoHandoff && state.watchAudioToVideoHandoff && state.watchAudioToVideoHandoffId === videoKey && !playbackIsPaused()) {
       // Vimeo is now initialized. Chase the live audio clock once, while muted,
       // so switching after listening in Audio mode never replays the loading gap.
       const liveTarget = Math.max(0, playbackPositionSeconds() || requestedResume);
@@ -9033,6 +9446,7 @@ window.addEventListener('online', () => {
   if (state.error || state.offlineMode || state.usingCachedLibrary) bootstrap({ background:true });
 });
 window.addEventListener('offline', () => {
+  restoreOfflineAccount();
   if (state.libraryReady) { state.offlineMode = true; state.usingCachedLibrary = true; }
   else { state.loading = false; state.error = 'offline'; state.offlineMode = true; }
   render();
@@ -9043,9 +9457,31 @@ window.addEventListener('offline', () => {
 // Android has completed Activity.onResume. The second pull reopens the native
 // event gate if onResume ran after the first one.
 let foregroundPlaybackRefreshTimer = null;
+let foregroundFocusRepairTimer = null;
+async function repairAudioFocusOnForegroundReturn() {
+  // Android 11 can lose Media3 focus as its parked WebView Video decoder
+  // resumes after notification navigation. Native code verifies this was an
+  // AUDIO_FOCUS_LOSS for the same shiur; explicit Pause stays respected.
+  if (document.hidden || !usesNativeUnifiedAudio() || state.mediaSwitchBusy ||
+      !state.watchVideo || state.watchMode !== 'audio' ||
+      state.nativePlayback.mode !== 'AUDIO' ||
+      state.nativePlayback.audioIsPlaying || state.nativePlayback.audioPlayWhenReady) return;
+  const id = videoId(state.watchVideo);
+  if (!id || state.current?.id !== id) return;
+  await nativeMediaPlugin().restoreAudioAfterVideoTeardown({lectureId:id});
+  await PlaybackController.refreshFromNative();
+}
 function refreshPlaybackAfterForeground() {
   if (!usesNativeUnifiedAudio() || document.hidden) return;
   if (foregroundPlaybackRefreshTimer) clearTimeout(foregroundPlaybackRefreshTimer);
+  if (foregroundFocusRepairTimer) clearTimeout(foregroundFocusRepairTimer);
+  // A focus-loss callback can arrive after the first foreground state pull.
+  // One delayed, identity-bound repair covers this race without looping.
+  foregroundFocusRepairTimer = setTimeout(() => {
+    foregroundFocusRepairTimer = null;
+    if (!document.hidden) PlaybackController.refreshFromNative()
+      .then(repairAudioFocusOnForegroundReturn).catch(() => {});
+  }, 2400);
   // Schedule the second pull after the first bridge call finishes. If onResume
   // closes the native event gate during a slow first pull, a concurrent 450ms
   // request would only share its promise and never reopen the ticker.

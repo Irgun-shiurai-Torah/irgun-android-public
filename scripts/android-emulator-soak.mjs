@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
+import {settledNativeTapPoint} from './android-native-tap-point.mjs';
 const pkg='org.irgunshiuraitorah.app';
 const adb=(...args)=>execFileSync('adb',args,{encoding:'utf8',timeout:20000}).trim();
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
@@ -21,14 +22,26 @@ async function connect(){
   ws.addEventListener('message',event=>{const m=JSON.parse(event.data),p=pending.get(m.id);if(!p)return;pending.delete(m.id);clearTimeout(p.timer);if(m.error||m.result?.exceptionDetails)p.reject(new Error('Read-only CDP observation error'));else p.resolve(m.result.result.value);});
   ws.addEventListener('close',()=>{for(const p of pending.values()){clearTimeout(p.timer);p.reject(new Error('CDP connection closed'));}pending.clear();ws=undefined;});
 }
-async function state(){
+async function evaluate(expression){
   await connect();
-  const id=++evalId,expression="window.Capacitor.nativePromise('IrgunPlayback','qaPlaybackSnapshot',{})";
+  const id=++evalId;
   return await new Promise((resolve,reject)=>{
     const timer=setTimeout(()=>{pending.delete(id);reject(new Error('Native Media3 state observation timed out'));},9000);
     pending.set(id,{resolve,reject,timer});
     ws.send(JSON.stringify({id,method:'Runtime.evaluate',params:{expression,returnByValue:true,awaitPromise:true}}));
   });
+}
+async function state(){return evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaPlaybackSnapshot',{})");}
+async function readMedia(){return JSON.parse(await evaluate('JSON.stringify(window.ISTReleaseQA.snapshot())'));}
+async function tap(selector){
+  const measured=await settledNativeTapPoint({readBounds:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),delay,
+    readPoint:async()=>JSON.parse(await evaluate('JSON.stringify((()=>{const e=document.querySelector('+JSON.stringify(selector)+'),r=e?.getBoundingClientRect();if(!r)return null;const x=r.left+r.width/2,y=r.top+r.height/2,h=document.elementFromPoint(x,y);return h&&(h===e||e.contains(h))?{x,y,width:innerWidth,height:innerHeight}:null;})())'))});
+  adb('shell','input','tap',...measured.point.map(String));await delay(500);
+}
+async function waitMedia(predicate,message){
+  const end=Date.now()+65000;let s;
+  while(Date.now()<end){s=await readMedia();if(predicate(s))return s;await delay(500);}
+  throw new Error(message);
 }
 function assertAudio(s){
   assert.equal(s.mode,'AUDIO','Expected native AUDIO authority');
@@ -77,6 +90,20 @@ try{
       await delay(1700);
       report.checks.push('Home/background/notification/reopen preserved app at minute '+m);
     }
+    if(m===2||m===7||m===11) {
+      const before=await state();await tap('[data-watch-mode="video"]');
+      const video=await waitMedia(s=>s.watchMode==='video'&&s.video&&!s.video.paused&&!s.video.muted&&s.video.width>0,'Long session must regain actual moving Video');
+      assert.ok(video.video.time>=before.audioPositionMs/1000-4,'Long-session Video handoff must preserve position');
+      await tap('[data-minimize-watch]');await waitMedia(s=>s.minimized,'Long session mini player did not open');
+      await delay(2500);const moved=await readMedia();
+      assert.ok(moved.video.frames>video.video.frames+2,'Long-session mini-player picture must actually move');
+      await tap('[data-expand-watch]');await waitMedia(s=>!s.minimized,'Long session full player did not return');
+      await tap('[data-watch-mode="audio"]');
+      const deadline=Date.now()+45000;let audio;
+      while(Date.now()<deadline){audio=await state();if(audio.mode==='AUDIO'&&audio.audioIsPlaying)break;await delay(500);}
+      assertAudio(audio);assert.ok(audio.audioPositionMs/1000>=moved.video.time-4,'Long-session Audio handoff must retain video position');
+      report.checks.push('Real Audio/Video switches and moving mini/full video at minute '+m);
+    }
     assert.equal(pid(),initialPid,'Irgun Android process restarted during 15-minute soak');
     const current=await state();assertAudio(current);
     const last=report.samples.at(-1);
@@ -86,6 +113,10 @@ try{
   }
   assert.ok(Date.now()-startMs>=soakMs,'A true 15-minute test interval is required');
   report.checks.push('Actual 15-minute session completed without process restart, stalled timer or vanished controls');
+  const baseline=report.samples[0].pssKb,peak=Math.max(...report.samples.map(s=>s.pssKb));
+  report.memoryBudget={baselineKb:baseline,peakKb:peak,maxGrowthKb:131072,maxPssKb:393216};
+  assert.ok(peak<=393216&&peak-baseline<=131072,'15-minute app memory must stay within 384 MiB total and 128 MiB growth');
+  report.checks.push('Observed process memory stays within the declared long-session budget');
   report.status='passed';
 }catch(error){report.status='failed';report.error=String(error.stack||error);process.exitCode=1;}
 finally{

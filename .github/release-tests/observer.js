@@ -5,6 +5,9 @@ window.ISTReleaseQA = { snapshot() {
   const host = document.querySelector('#persistentVideoMount');
   return {
     screen: String(state.screen || ''),
+    searchQuery: String(state.libraryQuery || ''),
+    fullscreen: !!(document.fullscreenElement || document.webkitFullscreenElement),
+    commentsLoaded: !state.watchCommentsLoading,
     ready: !!state.libraryReady && !state.loading,
     lang: document.documentElement.lang,
     watchId: state.watchVideo ? String(videoId(state.watchVideo)) : '',

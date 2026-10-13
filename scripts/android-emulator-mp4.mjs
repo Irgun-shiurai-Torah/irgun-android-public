@@ -1,7 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import {observedAdb} from './android-adb-observer.mjs';
+import {observedAdb, discoverAppWebView} from './android-adb-observer.mjs';
+import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {typeObservedNativeText} from './android-native-text-entry.mjs';
 
 // Read the real WebView through CDP, but perform every navigation gesture with
 // Android input events. No DOM clicks or synthetic touch events stand in for UI.
@@ -10,11 +12,7 @@ const report = { gestures: [], checks: [] };
 const adb = observedAdb(report);
 let ws;
 try {
-  const pid = adb('shell', 'pidof', 'org.irgunshiuraitorah.app').split(/\s+/)[0];
-  adb('forward', 'tcp:9222', `localabstract:webview_devtools_remote_${pid}`);
-  const pages = await (await fetch('http://127.0.0.1:9222/json/list')).json();
-  const page = pages.find(p => p.type === 'page' && /localhost/.test(p.url));
-  assert.ok(page?.webSocketDebuggerUrl, 'App WebView must be inspectable');
+  const page = await discoverAppWebView({adb,report});
   ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('CDP connection timeout')), 10000);
@@ -90,6 +88,7 @@ try {
       iframeSrc:document.querySelector('#watchVimeoFrame')?.getAttribute('src'),
       video:v?{src:v.currentSrc||v.src,time:v.currentTime,paused:v.paused,ready:v.readyState,width:v.videoWidth,muted:v.muted,volume:v.volume,
         frames:v.getVideoPlaybackQuality?.().totalVideoFrames??v.webkitDecodedFrameCount,error:v.error?.code,
+        startup:{phase:v.dataset.startupBufferPhase||'',required:Number(v.dataset.startupBufferRequired||0),bufferAtStart:Number(v.dataset.startupBufferAtStart||0),waitMs:Number(v.dataset.startupBufferWaitMs||0),waitingCount:Number(v.dataset.startupWaitingCount||0)},
         seeking:v.seeking,rate:v.playbackRate,buffered:Array.from({length:v.buffered.length},(_,i)=>[v.buffered.start(i),v.buffered.end(i)]),
         rect:r?{x:r.x,y:r.y,width:r.width,height:r.height}:null,
         stage:stage?{x:stage.x,y:stage.y,width:stage.width,height:stage.height}:null}:null,
@@ -119,11 +118,18 @@ try {
   };
   const geometry=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
   assert.equal(geometry.focused,true,'Native app window must be foreground before media taps');
-  const {left,top,right,bottom}=geometry;
+  let {left,top,right,bottom}=geometry;
   assert.ok([left,top,right,bottom].every(Number.isFinite)&&right>left&&bottom>top,
     'Fresh native WebView bounds required');
   report.nativeBounds=[left,top,right,bottom];
-  const nativePoint=p=>[Math.round(left+p.x*(right-left)/p.width),Math.round(top+p.y*(bottom-top)/p.height)];
+  const freshPoint=async readPoint=>{
+    const measured=await settledNativeTapPoint({
+      readBounds:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),readPoint,delay
+    });
+    [left,top,right,bottom]=measured.bounds;
+    report.nativeBounds=measured.bounds;
+    return measured;
+  };
   const visiblePoint=async selector=>JSON.parse(await evaluate(`JSON.stringify((()=>{
     // A card has several Watch targets. Its cover center can be obscured by
     // sibling Watch/Listen buttons; choose a genuinely visible target instead.
@@ -136,8 +142,9 @@ try {
     return null;
   })())`));
   const tapVisible=async selector=>{
-    const p=await visiblePoint(selector);assert.ok(p,`Visible native tap target required: ${selector}`);
-    const xy=nativePoint(p);adb('shell','input','tap',...xy.map(String));report.gestures.push({selector,point:xy});
+    const measured=await freshPoint(()=>visiblePoint(selector));
+    adb('shell','input','tap',...measured.point.map(String));
+    report.gestures.push({selector,...measured});
   };
   // Navigate through the real Home search with native taps, typing and scrolling.
   // CDP only reads hit-tested coordinates and media state.
@@ -154,17 +161,42 @@ try {
   await tapVisible('#homeLibrarySearch');
   const code=String(target.shiurCode||target.title.match(/IST-[A-Z]+\d+/)?.[0]||'');
   assert.ok(/^IST-[A-Z]+\d+$/.test(code),'Reported shiur search code required');
-  adb('shell','input','text',code);adb('shell','input','keyevent','KEYCODE_ENTER');await delay(800);
-  // Dismiss the keyboard only if still present, without navigating back.
-  if(/mInputShown=true/.test(adb('shell','dumpsys','input_method')))adb('shell','input','keyevent','KEYCODE_BACK');
-  const selector=`[data-watch="${target.id}"]`;
+  const searchState=async()=>JSON.parse(await evaluate("JSON.stringify({screen:window.ISTReleaseQA?.snapshot?.().screen,focused:document.activeElement?.id||'',value:document.getElementById('homeLibrarySearch')?.value??null,query:window.ISTReleaseQA?.snapshot?.().searchQuery??null})"));
+  let observedSearch;
+  for(let i=0;i<30;i++) {observedSearch=await searchState();if(observedSearch.focused==='homeLibrarySearch')break;await delay(150);}
+  report.searchBeforeTyping=observedSearch;
+  assert.equal(observedSearch.focused,'homeLibrarySearch','Actual Android tap must focus Home search before sending text');
+  await typeObservedNativeText({value:code,delay,
+    readValue:async()=>{const s=await searchState();assert.equal(s.focused,'homeLibrarySearch','Each real native key must target the focused Home search');return s.value;},
+    typeCharacter:character=>adb('shell','input','text',character)
+  });
+  observedSearch=await searchState();report.searchAfterTyping=observedSearch;
+  assert.equal(observedSearch.focused,'homeLibrarySearch','Feed refresh must preserve Home input focus');
+  assert.equal(observedSearch.value,code,'Native keyboard text must remain in the actual Home search input');
+  adb('shell','input','keyevent','KEYCODE_ENTER');
+  for(let i=0;i<40;i++) {observedSearch=await searchState();if(observedSearch.screen==='shiurim')break;await delay(200);}
+  report.searchAfterSubmit=observedSearch;
+  assert.equal(observedSearch.screen,'shiurim','Enter in the focused search input must open search results, not a lecture');
+  assert.equal(observedSearch.query,code,'Actual search results must use the typed lecture code');
+  // Enter can start hiding the IME while dumpsys still reports it as shown.
+  // Escape dismisses input without sending Android Back to the app Activity.
+  if(/(?:mInputShown|isInputViewShown)=true/.test(adb('shell','dumpsys','input_method'))) {
+    adb('shell','input','keyevent','KEYCODE_ESCAPE');await delay(500);
+    assert.equal((await searchState()).screen,'shiurim','Keyboard dismissal must not leave search results');
+  }
+  const selector=`.media-primary-overlay button[data-watch="${target.id}"],button.media-title[data-watch="${target.id}"]`;
   for(let i=0;i<12 && !(await visiblePoint(selector));i++) {
     adb('shell','input','swipe',String(right-40),String(bottom-130),String(right-40),String(top+190),'450');
     await delay(400);
   }
   await tapVisible(selector);
+  report.afterWatchTap=await read();
   await wait(s=>s.video?.ready>=2 && s.video.width>0);
   const loaded=await read();report.loaded=loaded;
+  assert.ok(Math.abs(loaded.video.rate-1)<.02,'A fresh actual video must start at 1x before any speed setting');
+  assert.ok(Math.abs(loaded.native.playbackSpeed-1)<.02,'Fresh native playback must default to 1x, never 0.75x');
+  assert.equal(Boolean(await evaluate('window.ISTReleaseQA.snapshot().isLoggedIn')),process.env.IRGUN_EXPECT_SIGNED_IN==='1','Actual baseline must run in its declared account state');
+  report.checks.push({label:'Actual fresh session starts at 1x in the declared logged-in or logged-out state',videoRate:loaded.video.rate,nativeRate:loaded.native.playbackSpeed});
   assert.ok(loaded.video.rect.width>100 && loaded.video.rect.height>50,'Direct video must occupy a visible surface');
   assert.ok(loaded.video.rect.y>=0 && loaded.video.rect.y+loaded.video.rect.height<=bottom-top,'Direct video must fit the native viewport');
   const embed=new URL((await read()).iframeSrc);
@@ -181,8 +213,14 @@ try {
     assert.ok(p,'Visible, hit-tested play control required');
     adb('shell','input','tap',String(Math.round(left+p.x*(right-left)/p.width)),String(Math.round(top+p.y*(bottom-top)/p.height)));
   };
-  if((await read()).video.paused)await tapPlayPause();
-  await wait(s=>s.video&&!s.video.paused&&s.video.time>0);
+  const initialPlay=await read();
+  if(initialPlay.video.paused&&initialPlay.video.startup.phase!=='loading')await tapPlayPause();
+  // MP4 startup may silently prime its decoder before the six-second buffer
+  // exists. Its internal video.play() is not user-visible playback: require
+  // the completed startup gate, not merely a moving muted priming clock.
+  await wait(s=>s.video && s.video.startup.phase==='ready' &&
+    Number(s.video.startup.bufferAtStart)+.1>=Number(s.video.startup.required) &&
+    !s.video.paused && s.video.time>0);
   const moving=async label=>{
     const before=await read();await delay(3500);const after=await read();
     report.checks.push({label,before,after});
@@ -239,14 +277,14 @@ try {
   // Use the observed range value to refine fresh physical touch coordinates.
   let seekOffset=0;
   for(let i=0;i<8;i++) {
-    const seek=JSON.parse(await evaluate(`JSON.stringify((()=>{
+    const measured=await freshPoint(async()=>JSON.parse(await evaluate(`JSON.stringify((()=>{
       const e=document.querySelector('#watchAudioSeek'),r=e?.getBoundingClientRect();if(!r)return null;
       const max=Number(e.max),usable=r.width-16,rtl=getComputedStyle(e).direction==='rtl';
       const x=r.left+8+usable*(rtl?1-600/max:600/max)+${seekOffset},y=r.top+r.height/2;
       return document.elementFromPoint(x,y)===e?{x,y,width:innerWidth,height:innerHeight,rtl,usable,max}:null;
-    })())`));
-    assert.ok(seek,'Visible hit-tested audio seek bar required');
-    const xy=nativePoint(seek);adb('shell','input','tap',...xy.map(String));await delay(350);
+    })())`)));
+    const seek=measured.domPoint,xy=measured.point;
+    adb('shell','input','tap',...xy.map(String));await delay(350);
     const observed=await read();
     report.gestures.push({label:i?'Refine native seek-bar touch':'Seek Audio to 10 minutes',point:xy,
       rtl:seek.rtl,rangeValue:observed.seek?.value,audioPositionMs:observed.native.audioPositionMs});

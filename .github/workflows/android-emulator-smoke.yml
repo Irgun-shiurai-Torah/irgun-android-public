@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/android-emulator-smoke.yml'
       - 'scripts/android-emulator-*'
+      - 'scripts/test_android_emulator_prepare.mjs'
       - 'scripts/prepare_android_icons.sh'
       - 'app-icon-v*-master.png'
       - 'src/**'
@@ -19,6 +20,7 @@ on:
     paths:
       - '.github/workflows/android-emulator-smoke.yml'
       - 'scripts/android-emulator-*'
+      - 'scripts/test_android_emulator_prepare.mjs'
       - 'src/**'
       - 'android/**'
       - 'index.html'
@@ -27,6 +29,13 @@ on:
 
 permissions:
   contents: read
+
+# The emulator takes several minutes to build and boot. When a PR is updated,
+# cancel only its older startup runs so CI validates the latest app and fixes
+# without burning emulator minutes on obsolete commits.
+concurrency:
+  group: irgun-android-startup-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   startup:
@@ -54,7 +63,9 @@ jobs:
           sudo apt-get install -y imagemagick
           bash scripts/prepare_android_icons.sh
       - name: Check tab gesture regressions
-        run: node --test scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs
+        run: node --test scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs scripts/test_android_native_tap_point.mjs scripts/test_android_native_text_entry.mjs scripts/test_android_video_startup_buffer.mjs scripts/test_android_emulator_prepare.mjs scripts/test_android_background_handoff.mjs
+      - name: Append required read-only playback and search observer to disposable APK
+        run: cat .github/release-tests/observer.js >> src/main.js
       - run: npm run build
       - run: npx cap sync android
       - name: Generate Android launcher resources

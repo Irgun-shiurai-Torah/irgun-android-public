@@ -2,6 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
+import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {safeNativeBackgroundHandoff} from './android-background-handoff-check.mjs';
+import {startMediaRequest,completeMediaRequest,failedDuringOffline} from './android-network-evidence.mjs';
+import {fullscreenEducationTapPoint,mediaNotificationClock,mediaNotificationControlPoint} from './android-system-ui-observation.mjs';
 
 // Run after android-emulator-mp4.mjs: the actual reported shiur is already
 // playing in native AUDIO mode. All UI actions below are physical ADB events.
@@ -12,6 +16,7 @@ const adb = (...args) => execFileSync('adb', args, { encoding:'utf8', timeout:30
 const report = {startedAt:new Date().toISOString(),checks:[],failures:[], device:'Android emulator'};
 const ensureReport = () => mkdirSync('emulator-report',{recursive:true});
 let ws,seq=0,pending=new Map(),bounds;
+let networkPhase='normal';const networkRequests=new Map();report.networkEvidence=[];
 const screenshot = name => {try {writeFileSync('emulator-report/'+name+'.png', execFileSync('adb',['exec-out','screencap','-p'],{timeout:15000}));} catch {}};
 const save = () => writeFileSync('emulator-report/release-regressions.json',JSON.stringify(report,null,2));
 
@@ -38,25 +43,37 @@ async function connect() {
   });
   ws=socket;seq=0;pending=new Map();
   socket.addEventListener('message',ev=>{
-    const message=JSON.parse(ev.data),p=pending.get(message.id);
+    const message=JSON.parse(ev.data);
+    if(message.method==='Network.requestWillBeSent') {
+      const data=message.params,request=startMediaRequest(data,networkPhase);
+      if(request)networkRequests.set(data.requestId,request);
+      return;
+    }
+    if(message.method==='Network.loadingFinished'||message.method==='Network.loadingFailed') {
+      const data=message.params,request=networkRequests.get(data.requestId);
+      if(request&&(request.phase!=='normal'||networkPhase!=='normal'))report.networkEvidence.push(completeMediaRequest(request,data,networkPhase));
+      networkRequests.delete(data.requestId);return;
+    }
+    const p=pending.get(message.id);
     if(!p)return;
     pending.delete(message.id);clearTimeout(p.timer);
     if(message.error||message.result?.exceptionDetails)p.reject(new Error('WebView read failed: '+JSON.stringify(message.error||message.result.exceptionDetails)));
-    else p.resolve(message.result?.result?.value);
+    else p.resolve(message.result);
   });
   socket.addEventListener('close',()=>{
     for(const p of pending.values()){clearTimeout(p.timer);p.reject(new Error('WebView inspector disconnected'));}
     pending.clear();
   });
 }
-async function evaluate(expression) {
+async function command(method,params={}) {
   assert.ok(ws?.readyState===WebSocket.OPEN,'WebView observation channel unavailable');
   return await new Promise((resolve,reject)=>{
     const id=++seq,timer=setTimeout(()=>{pending.delete(id);reject(new Error('WebView observation timeout'));},12000);
     pending.set(id,{resolve,reject,timer});
-    ws.send(JSON.stringify({id,method:'Runtime.evaluate',params:{expression,returnByValue:true,awaitPromise:true}}));
+    ws.send(JSON.stringify({id,method,params}));
   });
 }
+async function evaluate(expression) {return command('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true}).then(result=>result.result.value);}
 async function read() {
   const snap=await evaluate('JSON.stringify(window.ISTReleaseQA?.snapshot?.() || {observerMissing:true})');
   const s=JSON.parse(snap);
@@ -68,7 +85,7 @@ async function wait(test,message,timeout=45000) {
   const deadline=Date.now()+timeout;
   let last, lastError;
   while(Date.now()<deadline) {
-    try {last=await read();if(test(last))return last;}catch(e){lastError=String(e.message);}
+    try {last=await read();if(await test(last))return last;}catch(e){lastError=String(e.message);}
     await delay(600);
   }
   throw new Error(message+'; last='+JSON.stringify(last||{})+'; error='+String(lastError||'none'));
@@ -96,10 +113,8 @@ async function hit(selector){
   return JSON.parse(await evaluate(expr));
 }
 async function tap(selector){
-  bounds=await nativeBounds();
-  const point=await hit(selector);
-  assert.ok(point,'A visible, hit-tested native control is required: '+selector);
-  const xy=nativeXY(point);
+  const measured=await settledNativeTapPoint({readBounds:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),readPoint:()=>hit(selector),delay});
+  bounds=measured.bounds;const xy=measured.point;
   adb('shell','input','tap',String(xy[0]),String(xy[1]));
   await delay(500);
   return xy;
@@ -118,22 +133,23 @@ async function tapWithScroll(selector) {
   }
   throw new Error('Required control was not visible after native scrolling: '+selector);
 }
-async function tapPositiveAndroidDialog(){
-  const xml=nativeHierarchy('emulator-report/irgun-offline-delete-dialog.xml');
-  const nodes=xml.match(/<node\b[^>]*>/g)||[];
-  const positive=nodes.find(n=>/text="(OK|Yes|Delete|Remove)"/i.test(n)&&/clickable="true"/.test(n));
-  const rect=positive?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
-  assert.ok(rect&&rect[2]>rect[0]&&rect[3]>rect[1],
-    'Actual Android offline-file deletion confirmation must be visible');
-  adb('shell','input','tap',String(Math.round((rect[0]+rect[2])/2)),String(Math.round((rect[1]+rect[3])/2)));
+async function tapOfflineDeleteConfirmation(){
+  // The app's asynchronous confirmation keeps playback/bridge JS running.
+  // The same real removal assertion follows a physical, hit-tested button tap.
+  assert.ok(await hit('[data-offline-delete-confirm]'),'Actual offline confirmation must be visible');
+  const point=await tap('[data-offline-delete-confirm]');
+  report.offlineConfirmation={physicalTap:point,dialogClosed:false};save();
+  await wait(async()=>!await hit('[data-offline-delete-confirm]'),
+    'Actual positive confirmation tap did not close the offline deletion dialog',20000);
+  report.offlineConfirmation.dialogClosed=true;save();
 }
 function checks(label,details={}) {report.checks.push({label,...details});save();}
 async function section(name,fn){
-  report.activeSection=name;save();
+  report.activeSection=name;report.scenarios||=[];const scenario={name,status:'running',startedAt:new Date().toISOString(),expected:name};report.scenarios.push(scenario);save();
   report.device = String(adb('shell','getprop','ro.build.version.release')).trim();
   report.androidApi = Number(adb('shell','getprop','ro.build.version.sdk'));
-  try {await fn();checks(name);console.log('PASS: '+name);}
-  catch(e){const error=String(e.stack||e);report.failures.push({name,error});screenshot('failed-'+report.failures.length);console.error('FAIL: '+name+': '+error.slice(0,1400));}
+  try {await fn();scenario.status='passed';checks(name);console.log('PASS: '+name);}
+  catch(e){scenario.status='failed';const error=String(e.stack||e);try{scenario.actual=await read();}catch(observation){scenario.observationError=String(observation.message);}report.failures.push({name,expected:name,error,screenshot:'failed-'+(report.failures.length+1)+'.png'});screenshot('failed-'+report.failures.length);console.error('FAIL: '+name+': '+error.slice(0,1400));}
   finally{
     // A failed notification observation must not leave SystemUI covering every
     // later physical tap. Its original failure remains in the report.
@@ -142,7 +158,7 @@ async function section(name,fn){
       adb('shell','am','start','-W','-n',pkg+'/.MainActivity');
       await delay(500);
     }
-    save();
+    scenario.finishedAt=new Date().toISOString();save();
   }
 }
 function noDuplicatePlayback(s){
@@ -164,8 +180,16 @@ function audibleAudio(s){
   if(s.video)assert.ok(s.video.paused||s.video.muted||s.video.volume===0,'Video must not audibly duplicate native audio');
 }
 async function videoReady(){
-  const current=await read();
-  if(current.watchMode!=='video')await tap('[data-watch-mode="video"]');
+  let current=await read();
+  if(!current.watchId&&current.currentId) {
+    if(!current.playerOpen)await tapWithScroll('.mini-player .mini-copy');
+    await tapWithScroll('[data-player-watch="'+current.currentId+'"]');
+    await wait(s=>!!s.watchId,'Existing lecture did not reopen from the native audio player');
+    await closePlayer();current=await read();
+  }
+  if(current.watchMode!=='video' ||
+      (current.native.mode==='AUDIO'&&!current.video&&!String(current.hostClass||'').includes('watch-video-host')))
+    await tap('[data-watch-mode="video"]');
   return await wait(
     s=>s.watchMode==='video'&&s.video&&!s.video.paused&&s.video.ready>=2&&s.video.width>0&&
       !s.video.muted&&s.video.volume>0&&s.native.mode==='VIDEO'&&
@@ -184,6 +208,64 @@ async function closePlayer(){
     await tapWithScroll('[data-close-player]');
     await wait(s=>!s.playerOpen,'Closing the full native player did not restore its compact view',14000);
   }
+}
+async function seekAudio(seconds) {
+  let offset=0;
+  for(let i=0;i<8;i++) {
+    const measured=await settledNativeTapPoint({
+      readBounds:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),delay,
+      readPoint:async()=>JSON.parse(await evaluate('JSON.stringify((()=>{const e=document.querySelector("#watchAudioSeek"),r=e?.getBoundingClientRect();if(!r)return null;const max=Number(e.max),usable=r.width-16,rtl=getComputedStyle(e).direction==="rtl",x=r.left+8+usable*(rtl?1-'+seconds+'/max:'+seconds+'/max)+'+offset+',y=r.top+r.height/2;return document.elementFromPoint(x,y)===e?{x,y,width:innerWidth,height:innerHeight,max,usable,rtl}:null;})())'))
+    });
+    bounds=measured.bounds;adb('shell','input','tap',...measured.point.map(String));await delay(450);
+    const state=await read(),position=Number(state.native.audioPositionMs)/1000;
+    if(Math.abs(position-seconds)<8)return state;
+    const range=Number(await evaluate('document.querySelector("#watchAudioSeek")?.value'));
+    assert.ok(Number.isFinite(range),'Actual audio seek input must be observable');
+    offset+=(seconds-range)*measured.domPoint.usable/measured.domPoint.max*(measured.domPoint.rtl?-1:1);
+  }
+  return wait(s=>Math.abs(Number(s.native.audioPositionMs)/1000-seconds)<8,'Native seek did not reach '+seconds+' seconds');
+}
+async function nativeNotificationTap(pattern,name) {
+  const xml=nativeHierarchy('emulator-report/notification-'+name+'.xml');
+  const point=mediaNotificationControlPoint(xml,name,pattern);
+  adb('shell','input','tap',...point.map(String));
+  await delay(800);
+}
+async function verifyOfflineServerHistory(id) {
+  const expected=(await read()).native.audioPositionMs/1000;
+  const headers={Origin:'https://localhost','X-Irgun-App':'1','Content-Type':'application/json'};
+  const response=await fetch('https://api.irgunshiuraitorah.com/login',{method:'POST',headers,body:JSON.stringify({email:process.env.IRGUN_TEST_EMAIL,password:process.env.IRGUN_TEST_PASSWORD}),signal:AbortSignal.timeout(20000)});
+  assert.equal(response.status,200,'Independent QA session required to verify offline history reached server');
+  const session=await response.json();assert.ok(session.sessionToken&&!session.user?.isAdmin,'Dedicated non-admin session required');
+  const authenticated={...headers,Authorization:'Bearer '+session.sessionToken};
+  try {
+    let match;const deadline=Date.now()+45000;
+    while(Date.now()<deadline) {
+      const response=await fetch('https://api.irgunshiuraitorah.com/history',{headers:authenticated,signal:AbortSignal.timeout(12000)});
+      assert.equal(response.status,200,'Real server history must be readable after reconnect');
+      const data=await response.json(),actualPosition=(await read()).native.audioPositionMs/1000;
+      match=(data.items||[]).find(x=>String(x.videoId||x.rawAudioId||x.id||'').replace(/^audio:/,'')===String(id)&&String(x.mediaType||'').toLowerCase()==='audio'&&Number(x.progressSeconds||x.positionSeconds||0)>=Math.floor(expected)&&Number(x.progressSeconds||x.positionSeconds||0)<=actualPosition+3);
+      if(match)break;await delay(1000);
+    }
+    assert.ok(match,'Offline playback progress must synchronise to the real server after reconnect');
+    checks('Signed-in offline playback synchronised real server history after reconnection',{id,expectedSeconds:Math.floor(expected),actualSeconds:Number(match.progressSeconds||match.positionSeconds||0)});
+  }finally {await fetch('https://api.irgunshiuraitorah.com/logout',{method:'POST',headers:authenticated,signal:AbortSignal.timeout(10000)}).catch(()=>{});}
+}
+async function notificationClock() {
+  const xml=nativeHierarchy('emulator-report/notification-clock.xml');
+  return mediaNotificationClock(xml);
+}
+async function dismissFullscreenEducation() {
+  const geometry=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+  if(geometry.focused)return;
+  const xml=nativeHierarchy('emulator-report/fullscreen-education.xml');
+  const point=fullscreenEducationTapPoint(xml);
+  assert.ok(point,'Fullscreen window is covered by an unidentified dialog; Back behaviour is unverified');
+  screenshot('fullscreen-education');
+  adb('shell','input','tap',String(point[0]),String(point[1]));
+  await wait(async()=>Boolean((await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})")).focused),
+    'Actual Got it tap must return foreground focus to the fullscreen app');
+  checks('First-use Android fullscreen education dismissed with physical Got it tap');
 }
 async function setOnline(online){
   adb('shell','svc','wifi',online?'enable':'disable');
@@ -204,6 +286,8 @@ ensureReport();
 try{
   await connect();bounds=await nativeBounds();
   const initial=await wait(s=>s.ready&&s.watchId&&s.watchMode==='audio'&&s.native.audioIsPlaying,'Existing real-MP4 audio/video handoff test must leave audio playing');
+  assert.equal(initial.isLoggedIn,process.env.IRGUN_EXPECT_SIGNED_IN==='1','Media suite must execute in its declared logged-in or logged-out state');
+  report.accountMode=initial.isLoggedIn?'logged-in':'logged-out';
   audibleAudio(initial);report.initial={watchId:initial.watchId,positionMs:initial.native.audioPositionMs};
   checks('Started from successful real-media 10-minute audio/video handoff');
 
@@ -217,6 +301,78 @@ try{
       assert.ok(vv.video.time>v.video.time+1,'Video froze after handoff');
       const resumed=await audioReady();audibleAudio(resumed);
       assert.ok(Number(resumed.native.audioPositionMs)/1000>=vv.video.time-5,'Return to Audio lost playback progress');
+    }
+  });
+
+  await section('Near-end native seek, pause/resume and return preserve actual decoded audio position',async()=>{
+    const original=await audioReady(),duration=Number(original.native.audioDurationMs)/1000;
+    assert.ok(duration>600,'Actual native duration must load before seeking near the end');
+    const position=Number(original.native.audioPositionMs)/1000;
+    await tap('.watch-audio-controls [data-play-toggle]');
+    await wait(s=>!s.native.audioIsPlaying&&!s.native.audioPlayWhenReady,'Pause must stop native audio before near-end seeking');
+    await seekAudio(duration-90);
+    await tap('.watch-audio-controls [data-play-toggle]');
+    const started=await wait(s=>s.native.audioIsPlaying,'Playback must resume from the near-end position');
+    await delay(2400);const advanced=await read();audibleAudio(advanced);
+    assert.ok(advanced.native.audioPositionMs>started.native.audioPositionMs+1000,'Near-end clock must advance');
+    await tap('.watch-audio-controls [data-play-toggle]');
+    await wait(s=>!s.native.audioIsPlaying,'Pause after near-end playback failed');
+    await seekAudio(position);
+    await tap('.watch-audio-controls [data-play-toggle]');await audioReady();
+    checks('Near-end seeking verified against actual Media3 clock',{durationSeconds:duration,nearEndSeconds:started.native.audioPositionMs/1000,restoredSeconds:position});
+  });
+
+  await section('Video speed selector persists 1.25x, 1.5x and 2x through Audio and Video switches',async()=>{
+    await videoReady();
+    for(const rate of [1.25,1.5,2,1]) {
+      await tap('[data-hls-speed]');await delay(600);
+      const xml=nativeHierarchy('emulator-report/video-speed-'+rate+'.xml');
+      const wanted='text="'+rate+'×"';
+      const node=(xml.match(/<node\b[^>]*>/g)||[]).find(n=>n.includes(wanted)&&/visible="true"/.test(n));
+      const rect=node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
+      assert.ok(rect&&rect[2]>rect[0]&&rect[3]>rect[1],'Real Android video-speed popup must show '+rate+'x');
+      adb('shell','input','tap',String(Math.round((rect[0]+rect[2])/2)),String(Math.round((rect[1]+rect[3])/2)));
+      const adjusted=await wait(s=>s.video&&Math.abs(s.video.rate-rate)<.05&&Math.abs(s.speed-rate)<.05,'Video speed selector must update both actual video rate and shared preference');
+      const audio=await audioReady();assert.ok(Math.abs(audio.native.playbackSpeed-rate)<.05,'Audio must inherit the selected video speed');
+      const video=await videoReady();assert.ok(Math.abs(video.video.rate-rate)<.05,'Returning to Video must retain the selected speed');
+      checks('Real Video speed '+rate+'x survives both handoffs',{selectedVideoRate:adjusted.video.rate,audioRate:audio.native.playbackSpeed,returnedVideoRate:video.video.rate});
+    }
+  });
+
+  await section('True video fullscreen and Android Back exit retain moving picture',async()=>{
+    await videoReady();
+    for(let i=0;i<2;i++) {
+      const before=await read();await tap('[data-hls-fullscreen]');
+      const full=await wait(s=>s.fullscreen,'Fullscreen button must enter actual Android WebView fullscreen');
+      await delay(700);await dismissFullscreenEducation();
+      await delay(2200);const moving=await read();audibleVideo(moving);
+      assert.ok(moving.video.frames>full.video.frames+2,'Actual fullscreen picture must continue moving');
+      screenshot('video-fullscreen-'+i);
+      adb('shell','input','keyevent','KEYCODE_BACK');
+      const exit=await wait(s=>!s.fullscreen&&!!s.watchId,'Android Back must exit fullscreen before leaving the lecture');
+      assert.ok(exit.video.time>=before.video.time-2,'Fullscreen/Back must not restart video');
+      await sampleMovingVideo();
+    }
+  });
+
+  await section('Android portrait/landscape rotation retains moving video and unclipped controls',async()=>{
+    const auto=adb('shell','settings','get','system','accelerometer_rotation');
+    const rotation=adb('shell','settings','get','system','user_rotation');
+    try {
+      adb('shell','settings','put','system','accelerometer_rotation','0');
+      const before=await videoReady();
+      for(const value of [1,0,1,0]) {
+        adb('shell','settings','put','system','user_rotation',String(value));await delay(1800);
+        const shape=JSON.parse(await evaluate('JSON.stringify({w:innerWidth,h:innerHeight,rect:(()=>{const r=document.querySelector("#watchDirectHlsVideo")?.getBoundingClientRect();return r?{left:r.left,right:r.right,top:r.top,bottom:r.bottom}:null})()})'));
+        assert.equal(shape.w>shape.h,value===1,'Actual WebView must rotate with Android, not merely accept a setting');
+        assert.ok(shape.rect&&shape.rect.left>=-2&&shape.rect.right<=shape.w+2,'Rotated video must fit actual viewport width');
+        const movement=await sampleMovingVideo();assert.ok(movement.after.video.time>=before.video.time-2,'Rotation lost the lecture position');
+        screenshot('video-rotation-'+value);
+      }
+    }finally {
+      for(const [key,value] of [['accelerometer_rotation',auto],['user_rotation',rotation]])
+        if(/^\d+$/.test(value))adb('shell','settings','put','system',key,value);else adb('shell','settings','delete','system',key);
+      await delay(900);bounds=await nativeBounds();
     }
   });
 
@@ -245,17 +401,54 @@ try{
     noDuplicatePlayback(full);
   });
 
+  await section('Actual Hebrew/English player labels, RTL and moving picture survive language changes',async()=>{
+    await videoReady();
+    const readLabels=async()=>JSON.parse(await evaluate('JSON.stringify({lang:document.documentElement.lang,dir:document.documentElement.dir,labels:[...document.querySelectorAll(".watch-hls-controls [aria-label]")].filter(e=>!e.hidden).map(e=>({key:Object.keys(e.dataset).find(k=>k.startsWith("hls")),label:e.getAttribute("aria-label")})),title:document.querySelector(".watch-title")?.textContent||document.querySelector(".watch-overlay h1")?.textContent||""})'));
+    await audioReady();await tap('[data-close-watch]');await wait(s=>!s.watchId,'Close Watch must reveal the real language control');
+    await tap('[data-language-toggle]');await wait(s=>/^he/.test(s.lang),'Hebrew button must change actual player language');
+    await videoReady();
+    await delay(1500);const hebrew=await readLabels();
+    assert.equal(hebrew.dir,'rtl','Hebrew player document must be RTL');
+    assert.ok(hebrew.labels.length>=5,'Real player must expose translated accessible control labels');
+    assert.ok(hebrew.labels.every(x=>/[\u0590-\u05ff]/.test(x.label)),'Visible player controls must have Hebrew labels, including changing Play/Pause and Mute controls');
+    await sampleMovingVideo();screenshot('hebrew-moving-player');
+    await audioReady();await tap('[data-close-watch]');await wait(s=>!s.watchId,'Close Hebrew Watch must reveal language control');
+    await tap('[data-language-toggle]');await wait(s=>s.lang==='en','Language button must restore English');
+    await videoReady();
+    await delay(900);const english=await readLabels();
+    assert.equal(english.dir,'ltr');assert.ok(english.labels.every(x=>/[A-Za-z]/.test(x.label)),'Actual player labels must return to English');
+    checks('Native Hebrew/English video control labels verified',{hebrew,english});
+  });
+
   await section('Home during video continues native audio; media notification and controls reopen',async()=>{
     await closePlayer();const v=await videoReady();audibleVideo(v);
     const beforePosition=v.video.time;
+    const homeAt=Date.now();
     adb('shell','input','keyevent','KEYCODE_HOME');
-    await delay(3600);
+    // Native Media3 must actually become audible after the asynchronous Home
+    // transfer; an arbitrary fixed sleep can sample VIDEO just before READY.
+    const background=await wait(s=>safeNativeBackgroundHandoff(s),
+      'Home did not establish audible native Audio with a simultaneously silent Video source',6500);
+    const handoffMs=Date.now()-homeAt;
+    assert.ok(handoffMs<=6500,'Home handoff exceeded the bounded background playback deadline');
+    report.backgroundHandoffMs=handoffMs;
     const notification=adb('shell','dumpsys','notification','--noredact');
     assert.ok(notification.includes(pkg),'The app did not post a media notification while backgrounded');
     const sessions=adb('shell','dumpsys','media_session');
     assert.ok(sessions.includes(pkg),'The Android Media3 session is absent while backgrounded');
-    const background=await read();audibleAudio(background);
-    assert.ok(background.native.audioPositionMs/1000>=beforePosition+1,'Home must preserve the actual playing position');
+    audibleAudio(background);
+    // A seamless handoff preserves the same clock; it need not gain a full
+    // additional second while switching audio focus in ~1.6s. Require
+    // continuity against the pre-Home video position with both a rewind guard
+    // and a bounded forward-drift guard, then independently prove advancement.
+    const backgroundSeconds=background.native.audioPositionMs/1000;
+    const elapsedSeconds=(Date.now()-homeAt)/1000;
+    assert.ok(backgroundSeconds>=beforePosition-1.0 &&
+      backgroundSeconds<=beforePosition+elapsedSeconds+1.2,
+      'Home must preserve real position (before='+beforePosition+
+      ', native='+backgroundSeconds+', elapsed='+elapsedSeconds+')');
+    report.backgroundPosition={videoBeforeSeconds:beforePosition,nativeAfterSeconds:backgroundSeconds,
+      elapsedSeconds,deltaSeconds:backgroundSeconds-beforePosition};
     await delay(1400);
     const continuing=await read();audibleAudio(continuing);
     assert.ok(continuing.native.audioPositionMs>background.native.audioPositionMs+700,
@@ -269,7 +462,25 @@ try{
     // updating media progress view to become idle. Taps still use ADB input.
     const xml=nativeHierarchy('emulator-report/irgun-notification.xml');
     screenshot('actual-android-notification-shade');
-    const nodes=xml.match(/<node\b[^>]*>/g)||[];
+    await nativeNotificationTap(/(?:content-desc="Pause"|resource-id="[^"]*actionPlayPause")/,'pause');
+    await wait(s=>!s.native.audioIsPlaying,'Physical notification Pause must stop actual Media3 audio');
+    await nativeNotificationTap(/(?:content-desc="Play"|resource-id="[^"]*actionPlayPause")/,'play');
+    const playing=await wait(s=>s.native.audioIsPlaying,'Physical notification Play must resume actual Media3 audio');
+    if(report.androidApi===30) {
+      // Android 11's notification shade shows a collapsed media card. Expand
+      // real Quick Settings before requiring its visible seek-bar timer.
+      adb('shell','cmd','statusbar','expand-settings');await delay(1000);
+      screenshot('expanded-android11-media-timer');
+    }
+    const clockBefore=await notificationClock();await delay(3500);const clockAfter=await notificationClock();
+    assert.ok(clockAfter>=clockBefore+2,'The visible Android notification timer must advance, not remain at 0:00');
+    await nativeNotificationTap(/(?:content-desc="Forward 15 seconds"|resource-id="[^"]*actionNext")/,'forward');
+    const physicalForward=await wait(s=>s.native.audioPositionMs>=playing.native.audioPositionMs+12000,'Physical notification Forward did not seek');
+    await nativeNotificationTap(/(?:content-desc="Back 15 seconds"|resource-id="[^"]*actionPrev")/,'back');
+    await wait(s=>s.native.audioPositionMs<=physicalForward.native.audioPositionMs-11000,'Physical notification Back did not seek');
+    checks('Physical notification Play/Pause/Forward/Back and visible timer',{clockBefore,clockAfter});
+    const updatedXml=nativeHierarchy('emulator-report/irgun-notification-after-controls.xml');
+    const nodes=updatedXml.match(/<node\b[^>]*>/g)||[];
     const title=String(v.native.title||'');
     assert.ok(title,'The playing Irgun session must identify its notification title');
     const escapedTitle=title.replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;').replaceAll('>','&gt;');
@@ -306,6 +517,57 @@ try{
     checks('Android MediaSession Play, Pause, +15s, -15s and timer after reopening');
   });
 
+  await section('Another real Android audio app interrupts Media3 and playback resumes after focus returns',async()=>{
+    await closePlayer();const before=await audioReady();
+    adb('shell','am','start','-W','-n','org.irgunshiuraitorah.qa/.AudioFocusActivity');
+    const interrupted=await wait(s=>!s.native.audioIsPlaying,'Irgun must pause actual audio when another foreground audio app takes transient focus',6500);
+    const focus=adb('logcat','-d','-s','IrgunQAAudioFocus:I','*:S');
+    assert.match(focus,/requestResult=1/,'Other audio app must obtain real Android audio focus');
+    assert.match(focus,/toneStarted=true/,'Other audio app must really start its audio output');
+    await delay(1600);const held=await read();
+    assert.ok(Math.abs(held.native.audioPositionMs-interrupted.native.audioPositionMs)<500,'Irgun audio must remain stopped while another app holds focus');
+    const resumed=await wait(s=>s.native.audioIsPlaying,'Irgun native audio must resume after the other app abandons transient focus',20000);
+    assert.ok(resumed.native.audioPositionMs>=before.native.audioPositionMs-750,'Audio interruption must preserve playback position');
+    adb('shell','am','start','-W','-n',pkg+'/.MainActivity');await delay(700);bounds=await nativeBounds();
+    audibleAudio(await read());
+  });
+
+  if(report.androidApi>=33)await section('Denied and granted Android notification permission retain media playback and notification',async()=>{
+    await audioReady();
+    try {
+      adb('shell','pm','revoke',pkg,'android.permission.POST_NOTIFICATIONS');
+      assert.match(adb('shell','dumpsys','package',pkg),/android.permission.POST_NOTIFICATIONS: granted=false/,'Actual notification permission must be denied');
+      adb('shell','input','keyevent','KEYCODE_HOME');await delay(2000);
+      const start=await read();await delay(2300);const after=await read();audibleAudio(after);
+      assert.ok(after.native.audioPositionMs>start.native.audioPositionMs+1000,'Permission denial must not stop media');
+      adb('shell','cmd','statusbar','expand-notifications');await delay(1200);
+      const xml=nativeHierarchy('emulator-report/notification-permission-denied.xml');
+      assert.ok(xml.includes('media_progress_bar')||xml.includes('media_elapsed_time')||xml.includes('qs_media_controls'),'Actual exempt media notification must remain visible with notifications denied');
+    }finally {
+      adb('shell','cmd','statusbar','collapse');adb('shell','pm','grant',pkg,'android.permission.POST_NOTIFICATIONS');
+      adb('shell','am','start','-W','-n',pkg+'/.MainActivity');await delay(700);bounds=await nativeBounds();
+    }
+    assert.match(adb('shell','dumpsys','package',pkg),/android.permission.POST_NOTIFICATIONS: granted=true/,'Actual notification permission must be granted again');
+    audibleAudio(await read());
+  });
+
+  await section('Android forced Doze preserves foreground media audio and position',async()=>{
+    await audioReady();
+    try {
+      adb('shell','input','keyevent','KEYCODE_HOME');adb('shell','dumpsys','battery','unplug');
+      adb('shell','input','keyevent','KEYCODE_SLEEP');
+      adb('shell','cmd','deviceidle','force-idle');
+      assert.match(adb('shell','dumpsys','deviceidle'),/mState=IDLE/,'Android must really enter deep Doze');
+      const start=await read();await delay(4500);const after=await read();audibleAudio(after);
+      assert.ok(after.native.audioPositionMs>start.native.audioPositionMs+2000,'Media clock must advance during actual Android Doze');
+    }finally {
+      adb('shell','cmd','deviceidle','unforce');adb('shell','dumpsys','battery','reset');
+      adb('shell','input','keyevent','KEYCODE_WAKEUP');adb('shell','input','keyevent','KEYCODE_MENU');
+      adb('shell','am','start','-W','-n',pkg+'/.MainActivity');await delay(900);bounds=await nativeBounds();
+    }
+    audibleAudio(await read());
+  });
+
   await section('Actual offline download plays native audio without Wi-Fi or mobile data',async()=>{
     await closePlayer();await videoReady();
     const before=await read();
@@ -314,6 +576,10 @@ try{
     const saved=await wait(s=>s.offline.some(x=>x.id===before.watchId&&x.bytes>0),'Audio file was not downloaded to Android local storage',180000);
     const record=saved.offline.find(x=>x.id===before.watchId);
     assert.ok(record?.uri&&record.bytes>0,'Offline download requires a verified local URI and file size');
+    const savedPath=record.uri.replace(/^file:\/\//,'');
+    assert.ok(savedPath.startsWith('/data/user/0/'+pkg+'/files/irgun-offline/')&&!savedPath.includes('..'),
+      'Downloaded file must be within this app\'s private offline directory');
+    adb('shell','run-as',pkg,'ls',savedPath);
     const beforeAudio=await read();
     assert.ok(beforeAudio.video&&!beforeAudio.video.paused&&beforeAudio.native.mode==='VIDEO',
       'Downloading an offline file interrupted an actively playing video before switching to Audio');
@@ -325,12 +591,54 @@ try{
       const end=await read();audibleAudio(end);
       assert.ok(end.native.audioPositionMs>start.native.audioPositionMs+1400,'Downloaded audio must continue playing without internet');
       checks('Actual downloaded audio played while offline',{bytes:record.bytes,downloadAttempts:record.downloadAttempts});
+      ws.close();adb('shell','am','force-stop',pkg);adb('shell','am','start','-W','-n',pkg+'/.SplashActivity');
+      await delay(2500);await connect();bounds=await nativeBounds();
+      const restarted=await wait(s=>s.ready&&s.offline.some(x=>x.key===record.key),'Actual offline app restart must load the cached library and saved download');
+      assert.equal(restarted.isLoggedIn,process.env.IRGUN_EXPECT_SIGNED_IN==='1','Offline restart must retain the declared account session');
+      await tap('.bottom-nav [data-nav="library"]');
+      for(let i=0;i<7&&!await hit('[data-library-section="downloads"]');i++) {
+        const strip=JSON.parse(await evaluate('JSON.stringify((()=>{const r=document.querySelector(".library-tabs-scroll")?.getBoundingClientRect();return r?{x:r.x,y:r.y,w:r.width,h:r.height,width:innerWidth,height:innerHeight,rtl:getComputedStyle(document.querySelector(".library-tabs-scroll")).direction==="rtl"}:null;})())'));
+        assert.ok(strip,'Actual Library tab strip must render offline');
+        const from=nativeXY({x:strip.x+strip.w*(strip.rtl?.18:.82),y:strip.y+strip.h*.5,width:strip.width,height:strip.height}),to=nativeXY({x:strip.x+strip.w*(strip.rtl?.82:.18),y:strip.y+strip.h*.5,width:strip.width,height:strip.height});
+        adb('shell','input','swipe',...from.map(String),...to.map(String),'420');await delay(500);
+      }
+      await tap('[data-library-section="downloads"]');await tapWithScroll('[data-offline-play="'+record.key+'"]');
+      const startAfterRestart=await wait(s=>s.currentOffline&&s.native.audioIsPlaying,'Persisted local audio must start without internet after process restart');
+      await delay(4500);const endAfterRestart=await read();audibleAudio(endAfterRestart);
+      assert.ok(endAfterRestart.native.audioPositionMs>startAfterRestart.native.audioPositionMs+1800,'Restarted offline audio clock must advance');
+      report.offlineRestart={bytes:record.bytes,positionBeforeMs:startAfterRestart.native.audioPositionMs,positionAfterMs:endAfterRestart.native.audioPositionMs};
+      checks('Process restart while offline reopens and plays the real downloaded file');
     }finally{await setOnline(true);}
+    if(process.env.IRGUN_EXPECT_SIGNED_IN==='1')await verifyOfflineServerHistory(record.id);
+    const audioBeforeVideo=await read();
+    assert.equal(audioBeforeVideo.native.mode,'AUDIO','Native MP3 must own playback until actual Video frames arrive');
+    const recoveredVideo=await sampleMovingVideo();
+    assert.ok(recoveredVideo.before.video.time>=audioBeforeVideo.native.audioPositionMs/1000-8,
+      'Video after offline MP3 rewinded the live audio position');
+    checks('Reconnected offline MP3 returns to advancing Video frames',{
+      videoSeconds:recoveredVideo.after.video.time,
+      audioBeforeSeconds:audioBeforeVideo.native.audioPositionMs/1000,
+      framesDecoded:recoveredVideo.after.video.frames-recoveredVideo.before.video.frames
+    });
     const present=await read();
     assert.ok(present.offline.some(x=>x.key===record.key&&x.bytes>0),'Downloaded file disappeared before deletion');
     await tap('[data-save-offline-kind="video"][data-save-offline-id="'+before.watchId+'"]');
-    await tapPositiveAndroidDialog();
+    const modalBefore=await read();await delay(1300);const modalAfter=await read();audibleVideo(modalAfter);
+    assert.ok(modalAfter.video.time>modalBefore.video.time+.5&&modalAfter.video.frames>modalBefore.video.frames,
+      'Actual Video clock and decoded frames must advance while the offline confirmation is open');
+    await tap('[data-offline-delete-cancel]');
+    assert.equal(await hit('[data-offline-delete-confirm]'),null,'Physical Cancel must close the actual offline confirmation');
+    assert.ok((await read()).offline.some(x=>x.key===record.key),'Cancel must retain the downloaded record');
+    adb('shell','run-as',pkg,'ls',savedPath);
+    checks('Physical offline Cancel preserves the actual file while the modal keeps Video moving');
+    await tap('[data-save-offline-kind="video"][data-save-offline-id="'+before.watchId+'"]');
+    await tapOfflineDeleteConfirmation();
     await wait(s=>!s.offline.some(x=>x.key===record.key),'Offline file was not deleted after user confirmation',25000);
+    let deletionError;
+    try{adb('shell','run-as',pkg,'ls',savedPath);}catch(error){deletionError=error;}
+    assert.ok(deletionError,'The actual MP3 file must be absent from Android storage, not only removed from the UI');
+    assert.match([deletionError.stderr,deletionError.stdout,deletionError.message].map(value=>String(value||'')).join('\n'),/No such file or directory/,
+      'File absence must be confirmed by Android, not a permission or observer failure');
     checks('Offline download was deleted by physical Android UI with server playback unaffected');
   });
 
@@ -348,6 +656,45 @@ try{
     assert.ok(after.video.time>recovered.video.time+0.8,'Video clock did not recover');
     assert.ok(after.video.time>=prior-2,'Video resumed from the beginning after Wi-Fi loss');
     checks('Video playback recovery after Wi-Fi/mobile-data interruption',{startSeconds:prior,endSeconds:after.video.time});
+  });
+
+  await section('Actual slow WebView transport and failed unbuffered HLS requests recover without restarting',async()=>{
+    await closePlayer();const start=await videoReady();
+    assert.equal(start.sourceType,'hls','Slow/interrupted transport test must run on real HLS video');
+    const seekVideo=async seconds=>{
+      const point=JSON.parse(await evaluate('JSON.stringify((()=>{const e=document.querySelector("[data-hls-seek]"),r=e?.getBoundingClientRect(),v=document.querySelector("#watchDirectHlsVideo");if(!r||!v?.duration)return null;const fraction='+seconds+'/v.duration,rtl=getComputedStyle(e).direction==="rtl",x=r.left+8+(r.width-16)*(rtl?1-fraction:fraction),y=r.top+r.height/2;return document.elementFromPoint(x,y)===e?{x,y,width:innerWidth,height:innerHeight}:null;})())'));
+      assert.ok(point,'Visible HLS seek bar required to fetch real unbuffered video');
+      bounds=await nativeBounds();adb('shell','input','tap',...nativeXY(point).map(String));await delay(500);
+      const observed=Number(await evaluate('document.querySelector("#watchDirectHlsVideo")?.dataset.hlsSeekRequestedSeconds || NaN'));
+      assert.ok(Number.isFinite(observed)&&Math.abs(observed-seconds)<15,
+        'Physical HLS range tap did not dispatch a seek to its requested position: expected='+seconds+' observed='+observed);
+      report.physicalHlsSeeks||=[];
+      report.physicalHlsSeeks.push({expectedSeconds:seconds,requestedSeconds:observed});save();
+    };
+    await command('Network.enable');await command('Network.setCacheDisabled',{cacheDisabled:true});
+    try {
+      networkPhase='slow';
+      await command('Network.emulateNetworkConditions',{offline:false,latency:800,downloadThroughput:160000,uploadThroughput:40000});
+      await seekVideo(start.video.time+180);
+      await wait(s=>s.video&&!s.video.paused&&s.video.time>start.video.time+140,'Slow real HLS transport did not recover at requested position',65000);
+      await sampleMovingVideo();
+      assert.ok(report.networkEvidence.some(x=>x.phase==='slow'&&!x.error&&x.bytes>0&&x.elapsedMs>=650),'A real HLS request must transfer bytes under measured latency; accepting a throttle command alone is not a pass');
+      const beforeLoss=await read(),target=beforeLoss.video.time+180;
+      networkPhase='offline';
+      await command('Network.emulateNetworkConditions',{offline:true,latency:0,downloadThroughput:-1,uploadThroughput:-1});
+      await seekVideo(target);
+      const failureDeadline=Date.now()+10000;
+      while(Date.now()<failureDeadline&&!report.networkEvidence.some(failedDuringOffline)) await delay(300);
+      assert.ok(report.networkEvidence.some(failedDuringOffline),'Unbuffered HLS must really encounter a failed network request');
+      networkPhase='reconnected';
+      await command('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});
+      await wait(s=>s.video&&!s.video.paused&&s.video.time>target-20,'Playback must recover close to the interrupted seek position',65000);
+      await sampleMovingVideo();
+      assert.ok(adb('shell','pidof',pkg),'App must remain alive during real network transport failures');
+    }finally {
+      networkPhase='normal';await command('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});
+      await command('Network.setCacheDisabled',{cacheDisabled:false});
+    }
   });
 
   await section('Long-session lock/unlock and resumed media controls do not crash',async()=>{
@@ -389,6 +736,12 @@ try{
       checks('Native playback speed '+rate+'x',{timeBeforeMs:old,timeAfterMs:newer.native.audioPositionMs});
     }
     await closePlayer();
+    const atSpeed=await read(),lecture=atSpeed.currentId;
+    await videoReady();const videoAtSpeed=await wait(s=>s.video&&Math.abs(s.video.rate-1.5)<.05,'Video handoff must preserve the chosen 1.5x speed');
+    await audioReady();const audioAtSpeed=await wait(s=>Math.abs(s.native.playbackSpeed-1.5)<.05,'Audio handoff must preserve the chosen 1.5x speed');
+    assert.equal(audioAtSpeed.watchId,lecture,'Speed handoffs must keep the same shiur');
+    checks('Audio to Video to Audio retains 1.5x',{videoRate:videoAtSpeed.video.rate,audioRate:audioAtSpeed.native.playbackSpeed});
+    await closePlayer();
     ws.close();
     adb('shell','am','force-stop',pkg);
     adb('shell','am','start','-W','-n',pkg+'/.SplashActivity');
@@ -404,6 +757,7 @@ try{
         await tap('[data-close-watch]');
         await wait(s=>!s.watchId,'Watch overlay must close before checking main navigation');
       }
+      if (/^he/.test((await read()).lang)) await tap('[data-language-toggle]');
       const english=await wait(s=>s.ready&&s.lang==='en','English app must render before narrow layout');
       assert.ok(english.ready);
       adb('shell','wm','size','240x320');
@@ -452,7 +806,7 @@ try{
   try{adb('shell','wm','size','reset');}catch{}
   try{ws?.close();}catch{}
   report.finishedAt=new Date().toISOString();
-  report.status=report.failures.length?'failed':'passed';
+  report.status=report.failures.length||!report.scenarios?.length?'failed':'passed';
   save();
   console.log(JSON.stringify({status:report.status,checks:report.checks.map(x=>x.label),failures:report.failures},null,2));
   if(report.failures.length)process.exitCode=1;

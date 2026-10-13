@@ -3,6 +3,8 @@ import { writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {observedAdb} from './android-adb-observer.mjs';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
+import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {typeObservedNativeText} from './android-native-text-entry.mjs';
 
 // Read the real WebView through CDP, but perform every navigation gesture with
 // Android input events. No DOM clicks or synthetic touch events stand in for UI.
@@ -23,9 +25,19 @@ try {
     ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('CDP connection failed')); }, { once: true });
   });
   let sequence = 0;
-  const pending = new Map();
+  const pending = new Map(), networkRequests = new Map();
+  report.blockedVimeoRequests=[];
   ws.addEventListener('message', event => {
     const message=JSON.parse(event.data);
+    if(message.method==='Network.requestWillBeSent') {
+      networkRequests.set(message.params.requestId,message.params.request.url);return;
+    }
+    if(message.method==='Network.loadingFailed') {
+      const url=networkRequests.get(message.params.requestId)||'';
+      if(/^https:\/\/(?:[^/]+\.)?(?:vimeo\.com|vimeocdn\.com)\//.test(url)&&message.params.blockedReason)
+        report.blockedVimeoRequests.push({url,reason:message.params.blockedReason});
+      return;
+    }
     if(message.method==='Runtime.consoleAPICalled') {
       const msg=(message.params?.args||[]).map(x=>String(x.value??x.description??'')).join(' ').slice(0,350);
       if(/HLS|MP4|Playback|Vimeo|CORS|fetch|video/i.test(msg)) {
@@ -38,14 +50,19 @@ try {
     if (!request) return;
     pending.delete(message.id); clearTimeout(request.timer);
     if (message.error || message.result?.exceptionDetails) request.reject(new Error(JSON.stringify(message)));
-    else request.resolve(message.result.result.value);
+    else request.resolve(message.result);
   });
-  const evaluate = expression => new Promise((resolve, reject) => {
+  const command = (method,params={}) => new Promise((resolve, reject) => {
     const id = ++sequence;
     const timer = setTimeout(() => { pending.delete(id); reject(new Error('CDP read timeout')); }, 10000);
     pending.set(id, { resolve, reject, timer });
-    ws.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, returnByValue: true, awaitPromise: true } }));
+    ws.send(JSON.stringify({ id, method, params }));
   });
+  const evaluate=expression=>command('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true}).then(r=>r.result.value);
+  // Block genuine third-party transport, without substituting any HTTP response.
+  await command('Network.enable');
+  await command('Network.setBlockedURLs',{urls:['*://*.vimeo.com/*','*://vimeo.com/*','*://*.vimeocdn.com/*']});
+  report.vimeoTransportDisabled=true;
   // Read-only CDP console inspection; Android taps still use real adb input.
   ws.send(JSON.stringify({id:++sequence,method:'Runtime.enable'}));
   const catalog = await (await fetch('https://api.irgunshiuraitorah.com/video-map?driveLibrary=1', {
@@ -79,6 +96,7 @@ try {
         hlsRecoveryAttempts:v.dataset.hlsRecoveryAttempts||null,
         hlsQualityRecovery:v.dataset.hlsQualityRecovery||null,
         hlsCurrentLevel:v.dataset.hlsCurrentLevel??null,hlsBufferedLevel:v.dataset.hlsBufferedLevel??null,
+        startup:{phase:v.dataset.startupBufferPhase||'',required:Number(v.dataset.startupBufferRequired||0),bufferAtStart:Number(v.dataset.startupBufferAtStart||0),waitMs:Number(v.dataset.startupBufferWaitMs||0),waitingCount:Number(v.dataset.startupWaitingCount||0),visibleRebufferCount:Number(v.dataset.startupVisibleRebufferCount||0)},
         seeking:v.seeking,rate:v.playbackRate,buffered:Array.from({length:v.buffered.length},(_,i)=>[v.buffered.start(i),v.buffered.end(i)]),
         rect:r?{x:r.x,y:r.y,width:r.width,height:r.height}:null,
         stage:stage?{x:stage.x,y:stage.y,width:stage.width,height:stage.height}:null}:null,
@@ -106,7 +124,7 @@ try {
   const measuredBounds=[windowBounds.left,windowBounds.top,windowBounds.right,windowBounds.bottom];
   assert.ok(measuredBounds.every(Number.isFinite)&&measuredBounds[2]>measuredBounds[0]&&measuredBounds[3]>measuredBounds[1],
     'Actual native WebView bounds must have a nonzero size');
-  const [left,top,right,bottom]=measuredBounds;
+  let [left,top,right,bottom]=measuredBounds;
   report.nativeBounds=measuredBounds;
   const nativePoint=p=>[Math.round(left+p.x*(right-left)/p.width),Math.round(top+p.y*(bottom-top)/p.height)];
   const visiblePoint=async selector=>JSON.parse(await evaluate(`JSON.stringify((()=>{
@@ -121,8 +139,12 @@ try {
     return null;
   })())`));
   const tapVisible=async selector=>{
-    const p=await visiblePoint(selector);assert.ok(p,`Visible native tap target required: ${selector}`);
-    const xy=nativePoint(p);adb('shell','input','tap',...xy.map(String));report.gestures.push({selector,point:xy});
+    const measured=await settledNativeTapPoint({
+      readBounds:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),
+      readPoint:()=>visiblePoint(selector),delay
+    });
+    [left,top,right,bottom]=measured.bounds;
+    adb('shell','input','tap',...measured.point.map(String));report.gestures.push({selector,...measured});
   };
   // Navigate through the real Home search with native taps, typing and scrolling.
   // CDP only reads hit-tested coordinates and media state.
@@ -139,9 +161,31 @@ try {
   await tapVisible('#homeLibrarySearch');
   const code=String(target.shiurCode||target.title.match(/\bCH\s*\d+\b/i)?.[0]?.replace(/\s+/g,'')||'');
   assert.ok(/^[A-Z]+\d+$/.test(code),'HLS fixture must have a searchable lecture code from its actual title');
-  adb('shell','input','text',code);adb('shell','input','keyevent','KEYCODE_ENTER');await delay(800);
-  // Dismiss the keyboard only if still present, without navigating back.
-  if(/mInputShown=true/.test(adb('shell','dumpsys','input_method')))adb('shell','input','keyevent','KEYCODE_BACK');
+  const searchState=async()=>JSON.parse(await evaluate("JSON.stringify({screen:window.ISTReleaseQA?.snapshot?.().screen,focused:document.activeElement?.id||'',value:document.getElementById('homeLibrarySearch')?.value??null,query:window.ISTReleaseQA?.snapshot?.().searchQuery??null})"));
+  let observedSearch;
+  for(let i=0;i<30;i++) {observedSearch=await searchState();if(observedSearch.focused==='homeLibrarySearch')break;await delay(150);}
+  report.searchBeforeTyping=observedSearch;
+  assert.equal(observedSearch.focused,'homeLibrarySearch','Actual Android tap must focus Home search before sending text');
+  await typeObservedNativeText({value:code,delay,
+    readValue:async()=>{const s=await searchState();assert.equal(s.focused,'homeLibrarySearch','Each real native key must target the focused Home search');return s.value;},
+    typeCharacter:character=>adb('shell','input','text',character)
+  });
+  observedSearch=await searchState();report.searchAfterTyping=observedSearch;
+  assert.equal(observedSearch.focused,'homeLibrarySearch','Feed refresh must preserve Home input focus');
+  assert.equal(observedSearch.value,code,'Native keyboard text must remain in the actual Home search input');
+  adb('shell','input','keyevent','KEYCODE_ENTER');
+  for(let i=0;i<40;i++) {observedSearch=await searchState();if(observedSearch.screen==='shiurim')break;await delay(200);}
+  report.searchAfterSubmit=observedSearch;
+  assert.equal(observedSearch.screen,'shiurim','Enter in the focused search input must open search results, not a lecture');
+  assert.equal(observedSearch.query,code,'Actual search results must use the typed lecture code');
+  // Enter already navigated to Shiurim and destroyed the focused Home field.
+  // Android 16 can report a stale mInputShown=true after this navigation;
+  // sending BACK at that moment finishes the Activity and opens Pixel Launcher.
+  // Do not treat a stale IME service flag as permission to press Android Back.
+  await delay(500);
+  assert.equal((await searchState()).screen,'shiurim','Search submission must remain on results');
+  const postSearchBounds = await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+  assert.equal(postSearchBounds.focused,true,'Search navigation must keep Irgun in the Android foreground');
   // Click the actual Watch button, never a card surface near Listen.
   const selector=`.media-primary-overlay button[data-watch="${target.id}"],button.media-title[data-watch="${target.id}"]`;
   for(let i=0;i<12 && !(await visiblePoint(selector));i++) {
@@ -167,8 +211,14 @@ try {
     assert.ok(p,'Visible, hit-tested play control required');
     adb('shell','input','tap',String(Math.round(left+p.x*(right-left)/p.width)),String(Math.round(top+p.y*(bottom-top)/p.height)));
   };
-  if((await read()).video.paused)await tapPlayPause();
-  await wait(s=>s.video&&!s.video.paused&&s.video.time>0);
+  const initialPlay=await read();
+  if(initialPlay.video.paused&&initialPlay.video.startup.phase!=='loading')await tapPlayPause();
+  // MP4 startup may silently prime its decoder before the six-second buffer
+  // exists. Its internal video.play() is not user-visible playback: require
+  // the completed startup gate, not merely a moving muted priming clock.
+  await wait(s=>s.video && s.video.startup.phase==='ready' &&
+    Number(s.video.startup.bufferAtStart)+.1>=Number(s.video.startup.required) &&
+    !s.video.paused && s.video.time>0);
   const moving=async label=>{
     const before=await read();await delay(3500);const after=await read();
     report.checks.push({label,before,after});
@@ -177,6 +227,20 @@ try {
     assert.equal(after.video.error,undefined);assert.equal(after.diagnostic,false,'Internal fallback banner must be absent');
   };
   await moving('Reported shiur starts with moving direct video');
+  const steadyStart=await read();
+  assert.ok(steadyStart.video.startup.required>=6,'Initial 1x video must wait for at least six seconds of actual buffered media');
+  assert.ok(steadyStart.video.startup.bufferAtStart+.1>=steadyStart.video.startup.required,'Actual initial Play must not precede the required real media buffer');
+  report.initialPlaybackSamples=[];
+  let previous=steadyStart;
+  for(let i=0;i<6;i++) {
+    await delay(2000);const current=await read();
+    report.initialPlaybackSamples.push({time:current.video.time,frames:current.video.frames,ready:current.video.ready,waitingCount:current.video.startup.waitingCount,visibleRebufferCount:current.video.startup.visibleRebufferCount});
+    assert.ok(!current.video.paused&&current.video.ready>=2,'Initial playback must remain playing after its single preparation period');
+    assert.ok(current.video.time>previous.video.time+.5&&current.video.frames>previous.video.frames,'Initial picture and media clock must keep advancing');
+    assert.equal(current.video.startup.visibleRebufferCount,0,'Video must not display a repeated loading overlay during the first fifteen seconds of actual playback');
+    previous=current;
+  }
+  report.checks.push({label:'Actual HLS starts after real six-second buffer and avoids repeated initial loading stalls',startup:steadyStart.video.startup,samples:report.initialPlaybackSamples.length});
 
   const initial=await read();
   assert.equal(initial.sourceType,'hls','Actual app playback must use HLS, NOT direct MP4 or Vimeo fallback');
@@ -247,6 +311,8 @@ try {
       beforeMs:start,afterMs:Number(progressed.native.audioPositionMs)});
     screenshot('soak-audio-source-started');
   }
+  assert.ok(report.blockedVimeoRequests.length>0,'The real Vimeo iframe request must actually be blocked, not just hidden');
+  report.checks.push({label:'Moving HLS video and quality change work with actual Vimeo network requests blocked',blockedRequests:report.blockedVimeoRequests.length});
   report.result='passed';
 } catch (error) {
   report.result='failed';report.error=String(error.stack||error);

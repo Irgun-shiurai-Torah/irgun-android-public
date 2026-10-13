@@ -1,31 +1,18 @@
+import {bufferedVideoSecondsAhead, waitForInitialVideoBuffer, firstBufferedStartupFrame} from './android-video-startup-buffer.js';
 const hlsLibraryPromises = new Map();
 
 function loadHls(apiBase) {
   if (window.Hls) return Promise.resolve(window.Hls);
   if (hlsLibraryPromises.has(apiBase)) return hlsLibraryPromises.get(apiBase);
-  const promise = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = `${apiBase}/media-player/hls.js`;
-    script.async = true;
-    const timer = setTimeout(() => {
-      script.remove();
-      hlsLibraryPromises.delete(apiBase);
-      reject(new Error('HLS player library timed out'));
-    }, 12000);
-    script.onload = () => {
-      clearTimeout(timer);
-      if (window.Hls) resolve(window.Hls);
-      else {
-        hlsLibraryPromises.delete(apiBase);
-        reject(new Error('HLS player library unavailable'));
-      }
-    };
-    script.onerror = () => {
-      clearTimeout(timer);
-      hlsLibraryPromises.delete(apiBase);
-      reject(new Error('HLS player library failed to load'));
-    };
-    document.head.appendChild(script);
+  // Ship the decoder SDK (including its inline worker) with the APK. Starting
+  // a supported HLS lecture must not depend on another remote script request.
+  const promise = import('hls.js/dist/hls.min.js').then(module => {
+    const Hls = module.default || window.Hls;
+    if (typeof Hls?.isSupported !== 'function') throw new Error('Bundled HLS player library unavailable');
+    return Hls;
+  }).catch(error => {
+    hlsLibraryPromises.delete(apiBase);
+    throw error;
   });
   hlsLibraryPromises.set(apiBase, promise);
   return promise;
@@ -33,7 +20,9 @@ function loadHls(apiBase) {
 
 function makePlayerAdapter(video, stage, getHls, readyPromise) {
   const listeners = new Map();
+  let stalledHandoffRetargets = 0;
   const emit = (name, data) => {
+    if (video.dataset.startupBufferPhase === 'priming' && ['play','pause','timeupdate','ended'].includes(name)) return;
     for (const callback of listeners.get(name) || []) {
       try { callback(data); } catch (error) { console.warn('HLS player listener failed', error); }
     }
@@ -60,6 +49,30 @@ function makePlayerAdapter(video, stage, getHls, readyPromise) {
     getCurrentTime:() => Promise.resolve(Math.max(0, Number(video.currentTime) || 0)),
     getDuration:() => Promise.resolve(Number(video.duration) || 0),
     getPaused:() => Promise.resolve(video.paused),
+    // HLS.js can remain pinned to a decoded keyframe after a high-speed
+    // Audio -> Video catch-up. Retarget the missing fragment ONCE; do not
+    // replace the media element, replay from 0:00, or turn off native Audio.
+    retargetStalledHandoff:seconds => {
+      const hls = getHls();
+      const target = Number(seconds);
+      if (!hls || stalledHandoffRetargets >= 1 || video.paused ||
+          !Number.isFinite(target) || target <= 0 ||
+          Math.abs(target - (Number(video.currentTime) || 0)) < 0.6 ||
+          typeof hls.stopLoad !== 'function' || typeof hls.startLoad !== 'function') return Promise.resolve(false);
+      try {
+        video.currentTime = Math.min(target, Number.isFinite(video.duration) && video.duration > 0
+          ? Math.max(0, video.duration - .25) : target);
+        hls.stopLoad();
+        hls.startLoad(video.currentTime);
+        stalledHandoffRetargets++;
+        video.dataset.hlsHandoffRetargetAt = String(video.currentTime);
+        console.warn('[Playback] Retargeting stalled HLS handoff without restarting native Audio',video.currentTime);
+        return Promise.resolve(true);
+      } catch (error) {
+        console.warn('[Playback] Unable to retarget stalled HLS handoff',error);
+        return Promise.resolve(false);
+      }
+    },
     setCurrentTime:seconds => {
       const duration = Number(video.duration) || 0;
       const target = Math.max(0, Number(seconds) || 0);
@@ -87,7 +100,7 @@ function makePlayerAdapter(video, stage, getHls, readyPromise) {
   return adapter;
 }
 
-async function getAndroidHlsSource(apiBase, videoId) {
+export async function getAndroidHlsSource(apiBase, videoId) {
   const lookup = async retry => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10000);
@@ -102,12 +115,30 @@ async function getAndroidHlsSource(apiBase, videoId) {
       clearTimeout(timer);
     }
   };
-  // New shiurim may have an MP4 before their HLS backup is ready. Either direct
-  // source is playable; a missing HLS copy must not discard a valid MP4.
-  return lookup(false);
+  // New shiurim may have an MP4 before their HLS backup is ready. Either
+  // source is playable. An emulator's first source.json request sometimes
+  // times out even when the Worker/HLS media is healthy; falling back directly
+  // to Vimeo turns a temporary connection failure into a black player.
+  // Retry the descriptor once, before creating a media element, so users see
+  // one prepared video instead of several repeated playback starts.
+  try {
+    return await lookup(false);
+  } catch (error) {
+    const message = String(error?.message || '');
+    const retryable = error?.name === 'AbortError' ||
+      error?.name === 'TimeoutError' ||
+      error instanceof TypeError ||
+      /Video sources unavailable \((?:429|5\d\d)\)/.test(message);
+    if (!retryable || (typeof navigator !== 'undefined' && navigator.onLine === false)) throw error;
+    console.warn('[Playback] Retrying temporary video source lookup failure',message);
+    // Wi-Fi often needs longer than 350ms to recover after offline Audio.
+    // Retry only the source descriptor; never build a second player here.
+    await new Promise(resolve => setTimeout(resolve,1100));
+    return lookup(true);
+  }
 }
 
-export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, poster = '', resumeSeconds = 0, onError, onMinimize, isPictureInPicture = () => false } = {}) {
+export async function createAndroidHlsPlayer({ apiBase, platform, videoId, iframe, poster = '', resumeSeconds = 0, onError, onMinimize, onSpeedChange, isPictureInPicture = () => false } = {}) {
   if (!apiBase || !videoId || !iframe || platform !== 'android') return null;
   const sources = await getAndroidHlsSource(String(apiBase).replace(/\/$/, ''), videoId);
   if (!sources) return null;
@@ -134,7 +165,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   video.className = 'watch-frame watch-direct-hls-video';
   video.controls = false;
   video.playsInline = true;
-  video.preload = 'metadata';
+  video.preload = 'auto';
   video.defaultPlaybackRate = 1;
   video.playbackRate = 1;
   video.setAttribute('playsinline', '');
@@ -170,20 +201,38 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   let singleTapTimer = 0;
   let lastSideTap = null;
   let pointerStart = null;
+  let seekGestureActive = false;
   let ignoreClickUntil = 0;
   let visualCheck = 0;
   let playbackIntent = 0;
+  let stalledHandoffResumes = 0;
   let playbackWanted = false;
+  let initialPlaybackStarted = false;
+  let startupPlayTask = null;
+  let startupPlayIntent = null;
+  let desiredMuted = Boolean(video.muted);
+  let startupPrime = null;
+  let initialPlayingAt = 0;
+  video.dataset.startupWaitingCount = '0';
+  video.dataset.startupVisibleRebufferCount = '0';
+  video.addEventListener('waiting', () => {
+    if (initialPlayingAt && Date.now() - initialPlayingAt < 15000)
+      video.dataset.startupWaitingCount = String(Number(video.dataset.startupWaitingCount || 0) + 1);
+  });
   let qualityMotionTimer = 0;
   let cancelQualityRecovery = () => {};
   const playVideo = () => { playbackWanted = true; return video.play(); };
   const pausePlayback = () => {
     playbackWanted = false;
     ++playbackIntent;
+    // Audio mode parks this video. A future deliberate Audio -> Video switch
+    // receives its own one permitted HLS decoder resume.
+    stalledHandoffResumes = 0;
     ++visualCheck;
     clearTimeout(qualityMotionTimer);
     cancelQualityRecovery();
     video.pause();
+    if (startupPrime) { startupPrime = null; video.muted = desiredMuted; }
     return Promise.resolve();
   };
   let hasVisibleFrame = false;
@@ -250,31 +299,62 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     const current = Number(video.currentTime) || 0;
     currentLabel.textContent = formatTime(current);
     durationLabel.textContent = formatTime(duration);
-    seekControl.value = duration ? String(Math.round(current / duration * 1000)) : '0';
+    // Updating the slider on every media timeupdate used to overwrite a real
+    // Android drag/tap before the browser dispatched its final change event.
+    if (!seekGestureActive)
+      seekControl.value = duration ? String(Math.round(current / duration * 1000)) : '0';
   };
   const updatePlayIcon = () => {
-    const playing = !video.paused && !video.ended;
+    const playing = (!video.paused && !video.ended) || (playbackWanted && !initialPlaybackStarted);
     playButton.textContent = playing ? 'Ⅱ' : '▶';
-    playButton.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+    playButton.setAttribute('aria-label', window.IST_I18N?.t?.(playing ? 'Pause' : 'Play') || (playing ? 'Pause' : 'Play'));
   };
   const volumeIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 4 6 8H3v8h3l5 4V4z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M15 9a4 4 0 0 1 0 6m2-9a8 8 0 0 1 0 12"/></svg>';
   const mutedIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11 4 6 8H3v8h3l5 4V4z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="m16 9 5 6m0-6-5 6"/></svg>';
   const updateVolumeIcon = () => {
     const muted = video.muted || video.volume === 0;
     muteButton.innerHTML = muted ? mutedIcon : volumeIcon;
-    muteButton.setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
+    muteButton.setAttribute('aria-label', window.IST_I18N?.t?.(muted ? 'Unmute' : 'Mute') || (muted ? 'Unmute' : 'Mute'));
     volumeControl.value = String(video.volume);
   };
-  video.addEventListener('timeupdate', updateTimeline);
+  // Chromium may issue a brief internal 'waiting' as it switches decoded
+  // segments even with ~18s already buffered and frames continuing to advance.
+  // Do not flicker the user's loading overlay for that harmless event. A real
+  // frozen decoder still shows loading after 500ms, and its visible stalls
+  // remain explicitly counted for the strict real-emulator regression.
+  let rebufferTimer = 0;
+  let waitClock = 0;
+  const clearRebufferTimer = () => {
+    clearTimeout(rebufferTimer);
+    rebufferTimer = 0;
+  };
+  video.addEventListener('timeupdate', () => {
+    if (rebufferTimer && video.currentTime > waitClock + .15) clearRebufferTimer();
+    updateTimeline();
+  });
   video.addEventListener('durationchange', updateTimeline);
   video.addEventListener('play', () => { updatePlayIcon(); if (!hasVisibleFrame) loading.hidden = false; });
-  video.addEventListener('pause', updatePlayIcon);
-  video.addEventListener('waiting', () => { if (!video.paused) loading.hidden = false; });
-  video.addEventListener('playing', () => { if (hasVisibleFrame) loading.hidden = true; });
-  video.addEventListener('canplay', () => { if (hasVisibleFrame) loading.hidden = true; });
+  video.addEventListener('pause', () => { clearRebufferTimer(); updatePlayIcon(); });
+  video.addEventListener('waiting', () => {
+    if (video.paused) return;
+    if (!initialPlaybackStarted || !hasVisibleFrame) { loading.hidden = false; return; }
+    clearRebufferTimer();
+    waitClock = Number(video.currentTime) || 0;
+    rebufferTimer = setTimeout(() => {
+      rebufferTimer = 0;
+      if (destroyed || video.paused || video.ended) return;
+      if (video.currentTime > waitClock + .15 && video.readyState >= 2) return;
+      loading.hidden = false;
+      if (initialPlayingAt && Date.now() - initialPlayingAt < 15000)
+        video.dataset.startupVisibleRebufferCount = String(Number(video.dataset.startupVisibleRebufferCount || 0) + 1);
+    },500);
+  });
+  video.addEventListener('playing', () => { clearRebufferTimer(); if (hasVisibleFrame) loading.hidden = true; });
+  video.addEventListener('canplay', () => { clearRebufferTimer(); if (hasVisibleFrame) loading.hidden = true; });
   video.addEventListener('volumechange', updateVolumeIcon);
   updateVolumeIcon();
-  const togglePlayback = () => video.paused ? playVideo().catch(() => {}) : pausePlayback();
+  const togglePlayback = () => video.paused && (initialPlaybackStarted || !playbackWanted)
+    ? adapter.play().catch(() => {}) : pausePlayback();
   playButton.addEventListener('click', togglePlayback);
   video.addEventListener('pointerdown', event => {
     if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
@@ -322,20 +402,55 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     if (Date.now() < ignoreClickUntil) { event.preventDefault(); return; }
     togglePlayback();
   });
+  const commitSeek = (position, origin) => {
+    const duration = Number(video.duration) || 0;
+    if (!duration || !Number.isFinite(position)) return;
+    const target = Math.max(0, Math.min(position, Math.max(0, duration - .25)));
+    // One actual seek per completed physical gesture. Pointer delivery is
+    // reliable on WebView versions which emit input but not change on a tap.
+    if (Math.abs((Number(video.currentTime) || 0) - target) > 0.25)
+      video.currentTime = target;
+    seekControl.value = String(Math.round(target / duration * 1000));
+    currentLabel.textContent = formatTime(target);
+    video.dataset.hlsSeekRequestedSeconds = String(target);
+    video.dataset.hlsSeekOrigin = origin;
+  };
+  seekControl.addEventListener('pointerdown', () => { seekGestureActive = true; });
+  seekControl.addEventListener('pointercancel', () => {
+    seekGestureActive = false;
+    updateTimeline();
+  });
+  seekControl.addEventListener('pointerup', event => {
+    if (!seekGestureActive) return;
+    seekGestureActive = false;
+    const box = seekControl.getBoundingClientRect();
+    if (!(box.width > 16) || !Number.isFinite(event.clientX)) return;
+    const x = Math.max(0, Math.min(1, (event.clientX - box.left - 8) / (box.width - 16)));
+    const rtl = typeof getComputedStyle === 'function' && getComputedStyle(seekControl).direction === 'rtl';
+    const fraction = rtl ? 1 - x : x;
+    commitSeek((Number(video.duration) || 0) * fraction, 'pointer');
+  });
   seekControl.addEventListener('input', () => {
     const duration = Number(video.duration) || 0;
     currentLabel.textContent = formatTime(duration * Number(seekControl.value) / 1000);
   });
+  // Keyboard/assistive range changes continue to use the native control.
   seekControl.addEventListener('change', () => {
-    const duration = Number(video.duration) || 0;
-    if (duration) video.currentTime = duration * Number(seekControl.value) / 1000;
+    seekGestureActive = false;
+    commitSeek((Number(video.duration) || 0) * Number(seekControl.value) / 1000, 'change');
   });
-  muteButton.addEventListener('click', () => { video.muted = !video.muted; });
+  muteButton.addEventListener('click', () => { desiredMuted = !desiredMuted; video.muted = startupPrime ? true : desiredMuted; });
   volumeControl.addEventListener('input', () => {
     video.volume = Number(volumeControl.value);
-    if (video.volume > 0) video.muted = false;
+    if (video.volume > 0) { desiredMuted = false; video.muted = Boolean(startupPrime); }
   });
-  speedSelect.addEventListener('change', () => { video.playbackRate = Number(speedSelect.value) || 1; });
+  speedSelect.addEventListener('change', () => {
+    const rate = Number(speedSelect.value) || 1;
+    video.playbackRate = rate;
+    // Only a user's speed selection updates the shared preference. Temporary
+    // handoff/decoder catch-up rates must not overwrite it.
+    onSpeedChange?.(rate);
+  });
   pipButton.hidden = !(document.pictureInPictureEnabled && video.requestPictureInPicture);
   pipButton.addEventListener('click', () => video.requestPictureInPicture?.().catch(() => {}));
   fullscreenButton.addEventListener('click', async () => {
@@ -497,12 +612,21 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   };
   // A play event can fire before a remote HLS segment has arrived. Start the
   // visual deadline only once the browser reports actual playback.
-  video.addEventListener('playing', () => { if (!hasVisibleFrame && !recoveryInProgress) void checkVisualPlayback(); });
+  video.addEventListener('playing', () => {
+    if (video.dataset.startupBufferPhase === 'priming') return;
+    if (!initialPlaybackStarted) {
+      initialPlaybackStarted = true;
+      initialPlayingAt = Date.now();
+      video.dataset.startupBufferAtStart = String(bufferedVideoSecondsAhead(video));
+    }
+    if (!hasVisibleFrame && !recoveryInProgress) void checkVisualPlayback();
+  });
   const onVisibilityChange = () => {
     if (document.hidden && !isPictureInPicture() && !destroyed) {
       // Android may pause the element without cancelling a queued play or HLS
       // recovery. Cancel that intent before Home suspends JS, so revealing this
       // WebView cannot steal audio focus back from the native Audio owner.
+      desiredMuted = true;
       video.muted = true;
       void pausePlayback();
       return;
@@ -511,7 +635,7 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
   };
   document.addEventListener('visibilitychange', onVisibilityChange);
   stalledPlaybackWatchdog = setInterval(() => {
-    if (destroyed || recoveryInProgress || document.hidden || video.paused || video.ended ||
+    if (destroyed || recoveryInProgress || video.dataset.startupBufferPhase === 'priming' || document.hidden || video.paused || video.ended ||
         !activeSource || video.seeking || video.readyState < 2) {
       lastMotionAt = Date.now();
       previousClock = Number(video.currentTime) || 0;
@@ -589,15 +713,16 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
           startLevel:0,
           capLevelToPlayerSize:true
         });
-        hls.attachMedia(video);
-        hls.loadSource(url);
+        // Install every listener BEFORE requesting the HLS playlist. A fast
+        // WebView may finish parsing while a slow JS observer is still being
+        // installed; missing MANIFEST_PARSED incorrectly triggers MP4 fallback.
         hls.on(Hls.Events.FRAG_CHANGED, (_event, info) => {
           if (info?.frag?.type === 'main') video.dataset.hlsCurrentLevel = String(info.frag.level);
         });
         hls.on(Hls.Events.FRAG_BUFFERED, (_event, info) => {
           if (info?.frag?.type === 'main') video.dataset.hlsBufferedLevel = String(info.frag.level);
         });
-        await new Promise((resolve, reject) => {
+        const manifestReady = new Promise((resolve, reject) => {
           let finished = false;
           const timer = setTimeout(() => finish(new Error('HLS playlist timed out')), 15000);
           const finish = error => {
@@ -627,6 +752,9 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
             else void recoverFromHlsFailure(info, Hls);
           });
         });
+        hls.attachMedia(video);
+        hls.loadSource(url);
+        await manifestReady;
       }
     }
     await new Promise((resolve, reject) => {
@@ -698,6 +826,8 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
       if (sources.hls) {
         try { await attachSource(sources.hls, true); }
         catch (hlsError) {
+          video.dataset.hlsFallbackReason = String(hlsError?.message || hlsError);
+          console.warn('[Playback] HLS attachment failed', hlsError);
           if (!sources.mp4) throw hlsError;
           await attachSource(sources.mp4, false);
         }
@@ -710,15 +840,183 @@ export async function createAndroidHlsPlayer({ apiBase, platform, videoId, ifram
     }
   })();
   const adapter = makePlayerAdapter(video, stage, () => hls, readyPromise);
+  adapter.resumeStalledHandoff = async () => {
+    // Older Android HLS and MP4 decoders can pause after the first real frame,
+    // despite the user's uninterrupted Play request. Resume once, silently,
+    // while Media3 Audio remains authoritative. Never wake startup priming,
+    // turn a user Pause into Play, or restart after Home/background.
+    const hlsReady = activeSource === sources.hls && Boolean(hls);
+    const mp4Ready = activeSource === sources.mp4 && video.readyState >= 2;
+    if (destroyed || (!hlsReady && !mp4Ready) ||
+        !playbackWanted || !initialPlaybackStarted || !video.paused ||
+        !video.muted || video.ended || startupPrime ||
+        stalledHandoffResumes >= 1 ||
+        (document.hidden && !isPictureInPicture())) return false;
+    if (mp4Ready) {
+      // A remote MP4 seek still fetching its first byte range is not a
+      // decoder-generated pause. Do not attempt Play or steal audio focus
+      // until a real media runway is present at the current position.
+      const at = Number(video.currentTime) || 0;
+      let ahead = 0;
+      for (let i = 0; i < (video.buffered?.length || 0); i++) {
+        if (video.buffered.start(i) <= at && video.buffered.end(i) > at)
+          ahead = Math.max(ahead, video.buffered.end(i) - at);
+      }
+      if (ahead < 1.5) return false;
+    }
+    const expectedIntent = playbackIntent;
+    stalledHandoffResumes += 1;
+    try {
+      await video.play();
+      if (destroyed || !playbackWanted || expectedIntent !== playbackIntent) {
+        video.pause();
+        return false;
+      }
+      video.dataset.hlsHandoffResumeCount = String(stalledHandoffResumes);
+      return !video.paused;
+    } catch (error) {
+      console.warn('[Playback] Stalled HLS Video could not resume',error);
+      return false;
+    }
+  };
+  // The decoder may be paused while we silently prime an MP4 buffer. That
+  // does not mean the listener pressed Pause. Native Video -> Audio handoff
+  // must preserve the user's requested playback intent.
+  adapter.getPlaybackIntent = () => Boolean(playbackWanted);
   adapter.pause = pausePlayback;
+  adapter.setMuted = muted => {
+    desiredMuted = Boolean(muted);
+    video.muted = startupPrime ? true : desiredMuted;
+    return Promise.resolve(desiredMuted);
+  };
   adapter.play = () => {
     const intent = playbackIntent;
-    return readyPromise.then(() => {
-      if (!destroyed && intent === playbackIntent) return playVideo();
-    });
+    if (startupPlayTask && startupPlayIntent === intent) return startupPlayTask;
+    playbackWanted = true;
+    updatePlayIcon();
+    startupPlayIntent = intent;
+    const cancelled = () => destroyed || intent !== playbackIntent || (document.hidden && !isPictureInPicture());
+    const task = readyPromise.then(async () => {
+      if (cancelled()) return;
+      if (!initialPlaybackStarted) {
+        loading.hidden = false;
+        video.dataset.startupBufferPhase = 'loading';
+        const startupStartedAt = Date.now();
+        const startPosition = Number(video.currentTime) || 0;
+        // API 35 occasionally exhausts its 12s startup runway at second 13.
+        // Buffer three real HLS segments (~18s) before the first visible Play,
+        // so it does not start/loading/start again. MP4 keeps its 6s threshold.
+        // At higher requested rates, the gate multiplies seconds by rate.
+        const startupBufferSeconds = activeSource === sources.hls ? 16 : 6;
+        const prime = {intent};
+        let priming = false, primingError;
+        let buffered;
+        try {
+          try {
+            buffered = await waitForInitialVideoBuffer(video, {
+              isCancelled:cancelled,
+              seconds:startupBufferSeconds,
+              timeoutMs:activeSource === sources.hls ? 45000 : 25000,
+            // During silent MP4 prime the hidden playhead moves with incoming
+            // data and maintains a ~2s live runway. It would never satisfy
+            // a 6s *ahead* check. Measure the real downloaded six seconds
+            // from the intended start, then rewind before audible playback.
+            bufferFromSeconds:() => priming ? startPosition : Number(video.currentTime) || 0,
+            onSample:sample => {
+              if (primingError) throw primingError;
+              video.dataset.startupBufferRequired = String(sample.required);
+              video.dataset.startupBufferAhead = String(sample.ahead);
+              // Some WebViews preload only ~2 seconds of MP4 while paused,
+              // despite preload=auto. Prime that real decoder silently under the
+              // loading cover, then restore the exact requested start position.
+              if (!priming && activeSource !== sources.hls && sample.elapsedMs >= 1500) {
+                priming = true;
+                startupPrime = prime;
+                video.dataset.startupBufferPhase = 'priming';
+                video.muted = true;
+                void video.play().catch(error => { primingError = error; });
+              }
+            }
+            });
+          } catch (error) {
+            // A valid HLS playlist may be ready even if the first video bytes
+            // arrive unusually late on an overcommitted Android emulator.
+            // Give that SAME source one final, bounded chance to fill the real
+            // decoder, rather than tearing it down or requiring another Play tap.
+            // No fake buffer, MP4 fallback, seek reset or fresh decoder.
+            const delayedHls = activeSource === sources.hls && hls &&
+              video.readyState >= 1 && !video.error && !cancelled() &&
+              error?.message === 'Video did not buffer enough to start smoothly';
+            if (!delayedHls) throw error;
+            video.dataset.startupBufferPhase = 'late-hls-recovery';
+            console.warn('[Playback] Waiting for late HLS media bytes without recreating player');
+            buffered = await waitForInitialVideoBuffer(video, {
+              seconds:startupBufferSeconds, timeoutMs:15000,
+              isCancelled:cancelled,
+              onSample:sample=>{
+                video.dataset.startupBufferRequired = String(sample.required);
+                video.dataset.startupBufferAhead = String(sample.ahead);
+              }
+            });
+          }
+          if (priming && startupPrime === prime) {
+            video.pause();
+            if (!cancelled()) {
+              video.currentTime = startPosition;
+              await new Promise(resolve => setTimeout(resolve, 0));
+              buffered = await waitForInitialVideoBuffer(video, {timeoutMs:6000,isCancelled:cancelled});
+            }
+          }
+        } finally {
+          if (priming && startupPrime === prime) {
+            video.pause();
+            startupPrime = null;
+            video.muted = desiredMuted;
+          }
+        }
+        if (!buffered || cancelled()) return;
+        if (activeSource === sources.hls) {
+          const firstFrame = firstBufferedStartupFrame(video,startupBufferSeconds);
+          if (firstFrame != null) {
+            // Only align a <=100ms real first-frame gap, and only after
+            // confirmed contiguous media bytes are already buffered. Finish
+            // the seek while the loading cover is still visible, before Play.
+            video.currentTime = firstFrame;
+            buffered = await waitForInitialVideoBuffer(video, {
+              timeoutMs:5000, seconds:startupBufferSeconds, isCancelled:cancelled,
+              onSample:sample => {
+                video.dataset.startupBufferRequired = String(sample.required);
+                video.dataset.startupBufferAhead = String(sample.ahead);
+              }
+            });
+            if (!buffered || cancelled()) return;
+            video.dataset.hlsInitialFrameAligned = String(firstFrame);
+          }
+        }
+        video.dataset.startupBufferPhase = 'ready';
+        video.dataset.startupBufferWaitMs = String(Date.now() - startupStartedAt);
+      }
+      if (!cancelled()) return playVideo();
+    }).catch(error => {
+      if (!cancelled()) {
+        playbackWanted = false;
+        updatePlayIcon();
+        video.dataset.startupBufferPhase = 'failed';
+        video.dataset.startupFailureReason = String(error?.name || 'Error') + ': ' + String(error?.message || error).slice(0,240);
+        video.dataset.startupBufferAhead = String(bufferedVideoSecondsAhead(video));
+        console.warn('[Playback] Video start failed after real buffer inspection', error, video.dataset.startupFailureReason);
+        loading.hidden = false;
+        const label = error?.name === 'NotAllowedError' ?
+          'Playback needs another tap to start.' : 'Connection is slow. Tap Play to retry.';
+        loading.textContent = window.IST_I18N?.t?.(label) || label;
+      }
+      throw error;
+    }).finally(() => { if (startupPlayTask === task) startupPlayTask = null; });
+    startupPlayTask = task;
+    return task;
   };
   // Keep the adapter's reference to the HLS instance current after attachment and recovery.
-  adapter.destroy = () => { destroyed = true; clearInterval(stalledPlaybackWatchdog); ++visualCheck; clearTimeout(qualityMotionTimer); cancelQualityRecovery(); clearTimeout(singleTapTimer); clearTimeout(seekHintTimer); document.removeEventListener('visibilitychange', onVisibilityChange); try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
+  adapter.destroy = () => { destroyed = true; clearRebufferTimer(); clearInterval(stalledPlaybackWatchdog); ++visualCheck; clearTimeout(qualityMotionTimer); cancelQualityRecovery(); clearTimeout(singleTapTimer); clearTimeout(seekHintTimer); document.removeEventListener('visibilitychange', onVisibilityChange); try { hls?.destroy(); } catch (_) {} video.pause(); video.removeAttribute('src'); video.load(); restoreIframe(); return Promise.resolve(); };
   adapter.on('error', detail => {
     // A Drive video has no Vimeo source to fall back to. Stop its soundtrack
     // rather than leave the user listening to a black, unresponsive player.

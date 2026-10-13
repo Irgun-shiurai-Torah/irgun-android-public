@@ -13,6 +13,7 @@ async function api(path,{method='GET',body,credentials=true,customToken}={}){
   if(credentials&&token)headers.Authorization='Bearer '+(customToken||token);
   const response=await fetch(base+path,{method,headers,body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(30000)});
   const data=await response.json().catch(()=>({}));
+  if(path==='/login') (report.loginResponses||=[]).push({status:response.status,cfRay:response.headers.get('cf-ray'),date:response.headers.get('date')});
   return {status:response.status,data};
 }
 function requireOk(res,label){assert.equal(res.status,200,label+' returned HTTP '+res.status+': '+String(res.data?.error||''));return res.data;}
