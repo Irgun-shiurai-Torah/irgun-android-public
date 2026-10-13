@@ -169,6 +169,29 @@ test('Android HLS handoff can resume one decoder-generated pause, never a user P
     assert.equal(video.muted,true,'Muted handoff must not create overlapping Audio');
   }});
 });
+test('Android MP4 handoff resumes a decoder-generated pause once, without overriding user Pause or unbuffered seeks',async()=>{
+  for(const cached of [true,false]) {
+    await fixture({video:{mp4:'https://media.example.test/video.mp4'}},'lecture',723,{onReady:async player=>{
+      const video=player.getVideoElement();
+      video.readyState=4;video.videoWidth=640;video.muted=true;
+      video.buffered={length:1,start:()=>720,end:()=>750};
+      let plays=0;
+      video.play=async()=>{plays++;video.paused=false;};
+      await player.setMuted(true);
+      await player.play();video.dispatchEvent(new Event('playing'));
+      assert.equal(plays,1);
+      video.paused=true;
+      if(!cached)video.buffered={length:1,start:()=>700,end:()=>720};
+      assert.equal(await player.resumeStalledHandoff(),cached,
+        'Only a prior playing, currently buffered, muted MP4 handoff can resume');
+      assert.equal(plays,cached?2:1,'An absent MP4 byte range must not start or replay video');
+      video.paused=true;
+      assert.equal(await player.resumeStalledHandoff(),false,'Only one recovery is allowed');
+      await player.pause();
+      assert.equal(await player.resumeStalledHandoff(),false,'An actual Pause must never be overridden');
+    }});
+  }
+});
 test('pausing during an HLS visual retry cannot restart parked video or select MP4',async t=>{
   t.mock.timers.enable({apis:['setTimeout','setInterval','Date']});
   await fixture(recoverySources,'1233236785:585d5d53db',0,{Hls:RecoveringHls,onReady:async player=>{
@@ -537,6 +560,59 @@ test('Audio handoff rejects a stationary destination and preserves explicit Paus
 });
 test('Audio handoff accepts a synchronized destination only after clocks and frames advance',async()=>{
   const f=handoffFixture();assert.ok(await f.wait(f.player,'lecture',800)>600);
+});
+for(const cached of [true,false])test('Android 11 1.5x Audio-to-Video handoff uses at most one VERIFIED buffered live-clock correction, cached='+cached,async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
+  let position=441,lastSeekAt=0,liveSeekAt=null,frames=100;
+  const seeks=[];
+  const element={
+    paused:false,seeking:false,readyState:4,videoWidth:640,
+    playbackRate:1.5,
+    buffered:{length:1,start:()=>430,end:()=>cached?600:460},
+    getVideoPlaybackQuality:()=>({totalVideoFrames:100+Math.floor(Date.now()/30)})
+  };
+  const videoSeconds=()=>{
+    if(liveSeekAt!==null)return position+(Date.now()-liveSeekAt)/1000*1.5;
+    // The decoded Android 11 picture advances at only 1x while Media3 Audio
+    // is at the user's 1.5x speed. Changing HTML playbackRate cannot catch up.
+    return 441+Date.now()/1000;
+  };
+  const player={getSourceType:()=> 'hls',getVideoElement:()=>element,
+    getPaused:async()=>false,getCurrentTime:async()=>videoSeconds(),
+    setCurrentTime:async target=>{
+      seeks.push({target,at:Date.now()});position=target;liveSeekAt=Date.now();return target;
+    }};
+  const state={playbackSpeed:1.5,watchAudioToVideoHandoff:true,
+    watchAudioToVideoHandoffId:'lecture',watchAudioToVideoTargetSeconds:457,
+    nativePlayback:{mode:'AUDIO',audioIsPlaying:true,audioPlayWhenReady:true}};
+  const context={state,Date,setTimeout,usesNativeUnifiedAudio:()=>true,
+    playbackPositionSeconds:()=>457+Date.now()/1000*1.5,
+    console:{warn(){}}};
+  const start=mainSource.indexOf('async function waitForVimeoHandoffReady(');
+  runInNewContext(mainSource.slice(start,mainSource.indexOf('function videoAudioPlaybackItem(',start))+
+    '\nthis.wait=waitForVimeoHandoffReady;',context);
+  let settled=false,result;
+  const pending=context.wait(player,'lecture',15000).then(value=>{settled=true;result=value;});
+  for(let i=0;i<200&&!settled;i++){
+    t.mock.timers.tick(100);
+    for(let j=0;j<18;j++)await Promise.resolve();
+  }
+  assert.equal(settled,true,'A bounded 15s handoff must settle; never hang CI');
+  await pending;
+  if(cached) {
+    assert.equal(seeks.length,1,'Only one buffered live HLS correction may occur');
+    assert.ok(seeks[0].at>=5000,'Do not abort the first pending keyframe before true motion');
+    assert.ok(Math.abs(seeks[0].target-(457+seeks[0].at/1000*1.5))<.2,
+      'Seek to the actual Media3 Audio clock, not the old Video timestamp');
+    assert.ok(result>460,'After correction, genuinely advancing frames must be accepted');
+    assert.ok(Math.abs(result-context.playbackPositionSeconds())<=1.01,'Audio and Video clocks must match');
+  } else {
+    assert.equal(seeks.length,0,'Never seek to a live segment not actually buffered');
+    assert.equal(result,null,'Unrecoverable HLS delay must fail instead of duplicating audio');
+  }
+  assert.equal(state.nativePlayback.mode,'AUDIO',
+    'Native Audio is kept authoritative until the caller commits a proven Video picture');
+  assert.equal(element.playbackRate,1.5,'The selected 1.5x speed must be restored');
 });
 test('HLS handoff lets a keyframe decode before chasing the advancing Audio clock',async t=>{
   t.mock.timers.enable({apis:['setTimeout','Date'],now:0});
