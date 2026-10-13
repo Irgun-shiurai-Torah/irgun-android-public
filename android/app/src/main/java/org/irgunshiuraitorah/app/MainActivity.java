@@ -35,6 +35,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(IrgunGoogleAuthPlugin.class);
         registerPlugin(IrgunFullscreenPlugin.class);
         registerPlugin(IrgunPlaybackPlugin.class);
+        registerPlugin(IrgunNativeVideoPlugin.class);
         registerPlugin(IrgunPictureInPicturePlugin.class);
         registerPlugin(IrgunAnalyticsPlugin.class);
         super.onCreate(savedInstanceState);
