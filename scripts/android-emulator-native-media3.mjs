@@ -208,10 +208,35 @@ try {
     }
     throw new Error(label+'; last='+JSON.stringify(result));
   };
+  const captureVisibleNativePicture=(snapshot,name)=>{
+    const m=snapshot.media3;
+    assert.ok(m.surfaceVisibleOnScreen && m.surfaceVisibleWidth>120 &&
+      m.surfaceVisibleHeight>65 && m.surfaceX>=0 && m.surfaceY>=0,
+      'Native decoded frames are NOT enough: Android PlayerView must be physically visible, not parked at x=-12000; '+JSON.stringify(m));
+    const png='emulator-report/'+name+'.png';
+    writeFileSync(png,execFileSync('adb',['exec-out','screencap','-p']));
+    const w=Math.max(10,Math.round(m.surfaceVisibleWidth*.56));
+    const h=Math.max(10,Math.round(m.surfaceVisibleHeight*.55));
+    const x=Math.round(m.surfaceX+(m.surfaceVisibleWidth-w)/2);
+    const y=Math.round(m.surfaceY+(m.surfaceVisibleHeight-h)/2);
+    // This fixed HLS fixture shows a well-lit beis midrash. An entirely black
+    // Android screencap is a failed Video test even if ExoPlayer decodes frames.
+    // -alpha off avoids counting PNG alpha as 50% brightness for BLACK pixels.
+    const mean=Number(execFileSync('convert',[png,'-crop',w+'x'+h+'+'+x+'+'+y,
+      '+repage','-alpha','off','-colorspace','Gray','-format','%[fx:mean]','info:'],
+      {encoding:'utf8'}).trim());
+    assert.ok(Number.isFinite(mean)&&mean>.075,
+      'SCREEN BLACK: real Android video viewport has luminance '+mean+
+      ' despite a moving ExoPlayer clock; screenshot='+png+'; native='+JSON.stringify(m));
+    report.checks.push({label:'Real Android screenshot shows nonblack VIDEO pixels',
+      image:png,physicalViewport:{x,y,w,h},meanLuminance:mean});
+    return mean;
+  };
   const first=await waitNative(s=>s.activeMode==='video'&&
     s.media3.active&&s.media3.videoSelected&&s.media3.playing&&
     s.media3.sourceType==='hls'&&s.media3.firstFrame&&
-    s.media3.width>0&&s.media3.height>0&&s.media3.frames>=8,
+     s.media3.width>0&&s.media3.height>0&&s.media3.frames>=8&&
+    s.media3.surfaceVisibleOnScreen&&s.media3.surfaceVisibleWidth>120,
     'Native Media3 must render real moving HLS video, without MP4/WebView fallback');
   assert.equal(first.native.mode,'VIDEO','Media3 session must own VIDEO playback');
   assert.equal(first.iframeSrc,'about:blank','Vimeo must not load while native Media3 owns Video');
@@ -219,7 +244,7 @@ try {
   assert.ok(first.media3.positionMs>0&&first.media3.bufferedPositionMs>first.media3.positionMs,
     'Native ExoPlayer must have real prepared media');
   report.checks.push({label:'Native HLS decodes visible frames with exactly one Media3 player',snapshot:first.media3});
-  writeFileSync('emulator-report/media3-first-frames.png',execFileSync('adb',['exec-out','screencap','-p']));
+  captureVisibleNativePicture(first,'media3-first-frames');
   await delay(3000);
   const moved=await sample();
   assert.ok(moved.media3.positionMs>first.media3.positionMs+1800,'Native VIDEO clock must progress');
@@ -245,14 +270,17 @@ try {
   await tapVisible('[data-watch-mode="video"]');
   const resumed=await waitNative(s=>s.activeMode==='video'&&s.media3.active&&
     s.media3.videoSelected&&s.media3.playing&&s.media3.firstFrame&&
-    s.native.mode==='VIDEO'&&s.media3.frames>audioProgress.media3.frames+12,
+    s.native.mode==='VIDEO'&&s.media3.frames>audioProgress.media3.frames+12&&
+    s.media3.surfaceVisibleOnScreen&&s.media3.surfaceVisibleWidth>120,
     'Physical Audio to Video switch must display freshly rendered native frames');
   assert.ok(resumed.media3.positionMs>=audioProgress.media3.positionMs-1250,
     'Returning to Video must preserve the SAME advancing Media3 clock');
   assert.equal(resumed.media3.sourceType,'hls','Track-only Video restore must retain original HLS');
   assert.equal(resumed.video,null,'No second WebView video player may be created during mode switches');
   report.checks.push({label:'Audio to Video resumes moving decoded frames in the same Media3 engine',snapshot:resumed.media3});
-  writeFileSync('emulator-report/media3-video-restored.png',execFileSync('adb',['exec-out','screencap','-p']));
+  const restoredLuminance=captureVisibleNativePicture(resumed,'media3-video-restored');
+  report.restoredVisiblePicture={luminance:restoredLuminance,frameCount:resumed.media3.frames,
+    surfaceX:resumed.media3.surfaceX,surfaceY:resumed.media3.surfaceY};
 
   if (process.env.IRGUN_NATIVE_MEDIA3_SOAK === '1') {
     // A REAL wall-clock 15-minute Media3 HLS soak, not a mock clock or a
