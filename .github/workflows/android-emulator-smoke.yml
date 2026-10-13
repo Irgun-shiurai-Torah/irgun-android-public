@@ -63,7 +63,7 @@ jobs:
           sudo apt-get install -y imagemagick
           bash scripts/prepare_android_icons.sh
       - name: Check tab gesture regressions
-        run: node --test scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs scripts/test_android_native_tap_point.mjs scripts/test_android_native_text_entry.mjs scripts/test_android_video_startup_buffer.mjs scripts/test_android_emulator_prepare.mjs
+        run: node --test scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs scripts/test_android_native_tap_point.mjs scripts/test_android_native_text_entry.mjs scripts/test_android_video_startup_buffer.mjs scripts/test_android_emulator_prepare.mjs scripts/test_android_background_handoff.mjs
       - name: Append required read-only playback and search observer to disposable APK
         run: cat .github/release-tests/observer.js >> src/main.js
       - run: npm run build
