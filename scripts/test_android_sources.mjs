@@ -1439,3 +1439,33 @@ test('actual QA session accessor reads the module token without putting it in th
  const script=readFileSync('scripts/android-emulator-account.mjs','utf8');
  assert.match(script,/window\.ISTAccountTest\.sessionToken\(\)/);assert.doesNotMatch(script,/JSON\.stringify\(state\.token\)/);
 });
+
+test('HLS manifest and fatal-error listeners install before any playlist request',()=>{
+  const hlsSource=readFileSync(new URL('../src/android-hls-video.js',import.meta.url),'utf8');
+  const start=hlsSource.indexOf('hls = new Hls({');
+  const end=hlsSource.indexOf('await manifestReady;',start);
+  assert.ok(start>=0&&end>start,'HLS.js attachment and manifest gating must be present');
+  const attach=hlsSource.slice(start,end);
+  for(const registration of ['Hls.Events.MANIFEST_PARSED','Hls.Events.ERROR',
+    'Hls.Events.FRAG_CHANGED','Hls.Events.FRAG_BUFFERED']){
+    const listener=attach.indexOf('hls.on('+registration);
+    assert.ok(listener>=0&&listener<attach.indexOf('hls.loadSource(url)'),
+      registration+' must be subscribed before loadSource can emit events');
+    assert.ok(listener<attach.indexOf('hls.attachMedia(video)'),
+      registration+' must be subscribed before attaching a media element');
+  }
+});
+
+test('late HLS startup recovery retains one decoder and exposes real failure causes',()=>{
+  const source=readFileSync(new URL('../src/android-hls-video.js',import.meta.url),'utf8');
+  const start=source.indexOf("video.dataset.startupBufferPhase = 'late-hls-recovery'");
+  const end=source.indexOf('if (priming && startupPrime === prime)',start);
+  assert.ok(start>=0 && end>start,'HLS late decoder recovery must be present');
+  const retry=source.slice(start,end);
+  assert.match(retry,/waitForInitialVideoBuffer\(video/);
+  assert.match(retry,/timeoutMs:15000/);
+  assert.doesNotMatch(retry,/attachSource\(|new Hls\(|video\.src\s*=/,
+    'A recovered HLS start must not replace the existing decoded media source');
+  assert.match(source,/video\.dataset\.startupFailureReason/,
+    'Startup failure must preserve the actual error for emulator diagnostics');
+});
