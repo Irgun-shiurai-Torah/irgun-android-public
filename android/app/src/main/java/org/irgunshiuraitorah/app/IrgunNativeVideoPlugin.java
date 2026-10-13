@@ -240,6 +240,19 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("error", state.error);
             response.put("fullscreen", fullscreen);
             response.put("surfaceVisible", surface != null && surface.getVisibility() == View.VISIBLE);
+            // Native decoder counters alone cannot prove a visible picture.
+            // Check the REAL Android global-visible view rectangle: earlier
+            // Audio -> Video reports showed x=-12000 and a black screenshot
+            // while Media3 was happily decoding video frames.
+            android.graphics.Rect onScreen = new android.graphics.Rect();
+            boolean visibleOnScreen = surface != null && surface.isShown()
+                && surface.getGlobalVisibleRect(onScreen)
+                && onScreen.width() > 0 && onScreen.height() > 0;
+            response.put("surfaceVisibleOnScreen", visibleOnScreen);
+            response.put("surfaceX", visibleOnScreen ? onScreen.left : -1);
+            response.put("surfaceY", visibleOnScreen ? onScreen.top : -1);
+            response.put("surfaceVisibleWidth", visibleOnScreen ? onScreen.width() : 0);
+            response.put("surfaceVisibleHeight", visibleOnScreen ? onScreen.height() : 0);
             response.put("surfaceWidth", surface == null ? 0 : surface.getWidth());
             response.put("surfaceHeight", surface == null ? 0 : surface.getHeight());
             response.put("rootWidth", root == null ? 0 : root.getWidth());
