@@ -8692,6 +8692,44 @@ async function performWatchModeSwitch(mode) {
   const video = state.watchVideo;
   const id = videoId(video);
 
+  if (state.watchVimeo?.isIrgunNativeVideoPlayer) {
+    // Media3 beta: Audio/Video is a video-track selection change in the SAME
+    // ExoPlayer and MediaSession. No pause, new MediaItem, hidden MP3 shadow,
+    // stale clock, sound overlap or WebView handoff transaction.
+    const player=state.watchVimeo;
+    const previous=state.watchMode;
+    await player.setMode(mode);
+    let observed=null;
+    for(let attempt=0;attempt<12;attempt++){
+      observed=await player.refresh();
+      if(observed.active&&observed.videoSelected===(mode==='video'))break;
+      await new Promise(resolve=>setTimeout(resolve,120));
+    }
+    if(!observed?.active||observed.videoSelected!==(mode==='video')){
+      console.warn('[Media3 beta] native mode switch did not commit',observed);
+      await player.setMode(previous).catch(()=>{});
+      return false;
+    }
+    state.watchResumeSeconds=Math.max(0,Number(observed.positionMs||0)/1000);
+    state.watchMode=mode;
+    state.watchVideoPlaying=mode==='video'&&Boolean(observed.playing);
+    state.watchAudioToVideoHandoff=false;
+    state.watchAudioToVideoHandoffId='';
+    state.watchAudioToVideoTargetSeconds=0;
+    state.watchMinimized=false;
+    if(mode==='audio'){
+      if(!state.current || String(state.current.id)!==String(id)) state.current=videoAudioPlaybackItem(video,id);
+      setNativePipEligibility(false);
+    }
+    await PlaybackController.refreshFromNative().catch(()=>{});
+    render();
+    if(mode==='video') player.updateFrame();
+    if(state.user){
+      saveHistory(id,mode,state.watchResumeSeconds,Number(observed.durationMs||0)/1000,false,{reconcile:true}).catch(()=>{});
+    }
+    return true;
+  }
+
   if (mode === 'audio') {
     state.watchAudioToVideoHandoff = false;
     state.watchAudioToVideoHandoffId = '';
