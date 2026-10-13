@@ -209,6 +209,7 @@ public final class NativeMetadataRegression {
   String vimeoId,title,speaker,image,mediaKind,sourceId,paidAudioId,trackId,videoSource;
   float logicalSpeed=1,logicalVolume=1;
   boolean syncingVideoShadow;
+  boolean nativeVideoSourceActive=false,nativeVideoSelected=false;
   PlaybackMode playbackMode=PlaybackMode.AUDIO;
   FakePlayer player=new FakePlayer();
   static final class FakePlayer {
@@ -243,7 +244,18 @@ public final class NativeMetadataRegression {
     service.load("different",service.audioUrl,659235);
     require(service.player.items==1 && service.player.position==659235 && service.player.volume==0 && service.player.prepares==1,
       "Initial Video must still prepare one muted native shadow at its requested position");
-    System.out.println("Actual native metadata reload preserves Audio progress and intent; new-source staging passed");
+    // Native Media3 HLS is a new opt-in source inside this exact same player.
+    // Asynchronous UI metadata refreshes must not replace or rewind it with
+    // the old MP3 shadow while the picture is already moving.
+    service.nativeVideoSourceActive=true;service.nativeVideoSelected=true;
+    service.player.position=1001100;
+    int staged=service.player.items,seeks=service.player.seeks;
+    service.load("different",service.audioUrl,659235);
+    require(service.nativeVideoSourceActive && service.nativeVideoSelected,
+      "A same-lecture refresh must preserve native Video ownership");
+    require(service.player.items==staged && service.player.position==1001100 &&
+      service.player.seeks==seeks,"A native HLS item must never be reloaded/rewound by metadata");
+    System.out.println("Actual native metadata reload preserves Audio progress and intent; native Video source is safe");
   }
 }`);
     execFileSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,
