@@ -1,6 +1,7 @@
 package org.irgunshiuraitorah.app;
 
 import android.content.Intent;
+import android.net.Uri;
 import android.graphics.Color;
 import android.os.Handler;
 import android.os.Looper;
