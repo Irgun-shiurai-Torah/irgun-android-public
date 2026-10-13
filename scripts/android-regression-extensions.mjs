@@ -367,8 +367,8 @@ try{
         await tap('[data-hls-speed]');await delay(600);
         const xml=nativeHierarchy('emulator-report/video-speed-'+rate+'.xml');
         const wanted='text="'+rate+'×"';
-        const node=(xml.match(/<node\\b[^>]*>/g)||[]).find(n=>n.includes(wanted)&&/visible="true"/.test(n));
-        const rect=node?.match(/bounds="\\[(\\d+),(\\d+)\\]\\[(\\d+),(\\d+)\\]"/)?.slice(1).map(Number);
+        const node=(xml.match(/<node\b[^>]*>/g)||[]).find(n=>n.includes(wanted)&&/visible="true"/.test(n));
+        const rect=node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
         assert.ok(rect&&rect[2]>rect[0]&&rect[3]>rect[1],'Actual WebView speed picker option required: '+rate);
         adb('shell','input','tap',String(Math.round((rect[0]+rect[2])/2)),String(Math.round((rect[1]+rect[3])/2)));
         const adjusted=await wait(s=>s.video&&Math.abs(s.video.rate-rate)<.05&&Math.abs(s.speed-rate)<.05,'WebView speed option did not apply');
@@ -432,7 +432,8 @@ try{
       const before=await videoReady();
       for(const value of [1,0,1,0]) {
         adb('shell','settings','put','system','user_rotation',String(value));await delay(1800);
-        const shape=JSON.parse(await evaluate('JSON.stringify({w:innerWidth,h:innerHeight,rect:(()=>{const r=document.querySelector("#watchDirectHlsVideo")?.getBoundingClientRect();return r?{left:r.left,right:r.right,top:r.top,bottom:r.bottom}:null})()})'));
+        const shapeSelector=before.videoEngine==='native-media3'?'#watchVimeoFrame':'#watchDirectHlsVideo';
+        const shape=JSON.parse(await evaluate('JSON.stringify({w:innerWidth,h:innerHeight,rect:(()=>{const r=document.querySelector('+JSON.stringify(shapeSelector)+')?.getBoundingClientRect();return r?{left:r.left,right:r.right,top:r.top,bottom:r.bottom}:null})()})'));
         assert.equal(shape.w>shape.h,value===1,'Actual WebView must rotate with Android, not merely accept a setting');
         assert.ok(shape.rect&&shape.rect.left>=-2&&shape.rect.right<=shape.w+2,'Rotated video must fit actual viewport width');
         const movement=await sampleMovingVideo();assert.ok(movement.after.video.time>=before.video.time-2,'Rotation lost the lecture position');
@@ -457,6 +458,14 @@ try{
       noDuplicatePlayback(expanded);
       assert.ok(expanded.video.time>=miniNext.video.time-2,'Mini->full transition restarted video');
     }
+    if(before.videoEngine==='native-media3'){
+      assert.equal(await hit('[data-video-pip]'),null,'Android PiP button must remain hidden by user request');
+      const actual=await sampleMovingVideo();
+      assert.ok(actual.after.video.frames>actual.before.video.frames,
+        'Real native mini/full transitions must retain decoded moving frames');
+      checks('Three native mini/full transitions retain Media3 and hide unwanted PiP button');
+      return;
+    }
     await tap('[data-video-pip]');
     const pip=await wait(s=>s.pipActive,'Android system PiP was not entered',20000);
     assert.equal(pip.watchMode,'video');
@@ -472,13 +481,16 @@ try{
 
   await section('Actual Hebrew/English player labels, RTL and moving picture survive language changes',async()=>{
     await videoReady();
-    const readLabels=async()=>JSON.parse(await evaluate('JSON.stringify({lang:document.documentElement.lang,dir:document.documentElement.dir,labels:[...document.querySelectorAll(".watch-hls-controls [aria-label]")].filter(e=>!e.hidden).map(e=>({key:Object.keys(e.dataset).find(k=>k.startsWith("hls")),label:e.getAttribute("aria-label")})),title:document.querySelector(".watch-title")?.textContent||document.querySelector(".watch-overlay h1")?.textContent||""})'));
+    const media3Labels=(await read()).videoEngine==='native-media3';
+    const readLabels=async()=>JSON.parse(await evaluate(media3Labels?
+      'JSON.stringify({lang:document.documentElement.lang,dir:document.documentElement.dir,labels:[...document.querySelectorAll("[data-watch-mode], [data-close-watch]")].filter(e=>e.getBoundingClientRect().width>0&&e.getBoundingClientRect().height>0).map(e=>({key:e.dataset.watchMode||"back",label:e.textContent.trim()})),title:document.querySelector(".watch-title")?.textContent||""})':
+      'JSON.stringify({lang:document.documentElement.lang,dir:document.documentElement.dir,labels:[...document.querySelectorAll(".watch-hls-controls [aria-label]")].filter(e=>!e.hidden).map(e=>({key:Object.keys(e.dataset).find(k=>k.startsWith("hls")),label:e.getAttribute("aria-label")})),title:document.querySelector(".watch-title")?.textContent||""})'));
     await audioReady();await tap('[data-close-watch]');await wait(s=>!s.watchId,'Close Watch must reveal the real language control');
     await tap('[data-language-toggle]');await wait(s=>/^he/.test(s.lang),'Hebrew button must change actual player language');
     await videoReady();
     await delay(1500);const hebrew=await readLabels();
     assert.equal(hebrew.dir,'rtl','Hebrew player document must be RTL');
-    assert.ok(hebrew.labels.length>=5,'Real player must expose translated accessible control labels');
+    assert.ok(hebrew.labels.length>=(media3Labels?3:5),'Actual Watch must expose translated Video, Audio and Back controls');
     assert.ok(hebrew.labels.every(x=>/[\u0590-\u05ff]/.test(x.label)),'Visible player controls must have Hebrew labels, including changing Play/Pause and Mute controls');
     await sampleMovingVideo();screenshot('hebrew-moving-player');
     await audioReady();await tap('[data-close-watch]');await wait(s=>!s.watchId,'Close Hebrew Watch must reveal language control');
