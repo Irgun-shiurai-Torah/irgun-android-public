@@ -183,6 +183,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             case "pause": IrgunPlaybackService.pause(); break;
             case "seek": IrgunPlaybackService.seekTo(Math.max(0L,Math.round(call.getDouble("positionMs",0.0)))); break;
             case "speed": IrgunPlaybackService.setSpeed((float)Math.max(.25,call.getDouble("speed",1.0))); break;
+            case "volume": IrgunPlaybackService.setVolume((float)Math.max(0,Math.min(1,call.getDouble("volume",1.0)))); break;
             default: call.reject("Unsupported native playback command"); return;
         }
         call.resolve();
