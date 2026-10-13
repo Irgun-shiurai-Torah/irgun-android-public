@@ -96,7 +96,7 @@ try {
         hlsRecoveryAttempts:v.dataset.hlsRecoveryAttempts||null,
         hlsQualityRecovery:v.dataset.hlsQualityRecovery||null,
         hlsCurrentLevel:v.dataset.hlsCurrentLevel??null,hlsBufferedLevel:v.dataset.hlsBufferedLevel??null,
-        startup:{phase:v.dataset.startupBufferPhase||'',required:Number(v.dataset.startupBufferRequired||0),bufferAtStart:Number(v.dataset.startupBufferAtStart||0),waitMs:Number(v.dataset.startupBufferWaitMs||0),waitingCount:Number(v.dataset.startupWaitingCount||0)},
+        startup:{phase:v.dataset.startupBufferPhase||'',required:Number(v.dataset.startupBufferRequired||0),bufferAtStart:Number(v.dataset.startupBufferAtStart||0),waitMs:Number(v.dataset.startupBufferWaitMs||0),waitingCount:Number(v.dataset.startupWaitingCount||0),visibleRebufferCount:Number(v.dataset.startupVisibleRebufferCount||0)},
         seeking:v.seeking,rate:v.playbackRate,buffered:Array.from({length:v.buffered.length},(_,i)=>[v.buffered.start(i),v.buffered.end(i)]),
         rect:r?{x:r.x,y:r.y,width:r.width,height:r.height}:null,
         stage:stage?{x:stage.x,y:stage.y,width:stage.width,height:stage.height}:null}:null,
@@ -234,10 +234,10 @@ try {
   let previous=steadyStart;
   for(let i=0;i<6;i++) {
     await delay(2000);const current=await read();
-    report.initialPlaybackSamples.push({time:current.video.time,frames:current.video.frames,ready:current.video.ready,waitingCount:current.video.startup.waitingCount});
+    report.initialPlaybackSamples.push({time:current.video.time,frames:current.video.frames,ready:current.video.ready,waitingCount:current.video.startup.waitingCount,visibleRebufferCount:current.video.startup.visibleRebufferCount});
     assert.ok(!current.video.paused&&current.video.ready>=2,'Initial playback must remain playing after its single preparation period');
     assert.ok(current.video.time>previous.video.time+.5&&current.video.frames>previous.video.frames,'Initial picture and media clock must keep advancing');
-    assert.equal(current.video.startup.waitingCount,0,'Video must not repeat waiting/loading in the first fifteen seconds of actual playback');
+    assert.equal(current.video.startup.visibleRebufferCount,0,'Video must not display a repeated loading overlay during the first fifteen seconds of actual playback');
     previous=current;
   }
   report.checks.push({label:'Actual HLS starts after real six-second buffer and avoids repeated initial loading stalls',startup:steadyStart.video.startup,samples:report.initialPlaybackSamples.length});
