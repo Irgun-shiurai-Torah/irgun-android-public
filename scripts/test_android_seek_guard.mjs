@@ -342,10 +342,11 @@ public final class OfflineSourceRegression {
   // exercised against the complete Android Media3 implementation. In this
   // isolated test the exact production replaceOfflineAudioSourceInternal is
   // injected above; preserve its choice of legacy vs active native source.
-  void switchNativeVideoPresentationInternal(boolean showVideo,String local){
+  void switchNativeVideoPresentationInternal(boolean showVideo,String local,boolean forceNetworkAudio){
     require(nativeVideoSourceActive&&nativeVideoOfflineAudioActive,
       "Native deletion must operate on the actual active offline source");
-    require(!showVideo&&local.isEmpty(),"Deleting offline Audio must restore network Audio");
+    require(!showVideo&&local.isEmpty()&&forceNetworkAudio,
+      "Only explicit deletion may force downloaded Audio back to network");
     long position=player.position;boolean wanted=player.wanted;
     audioUrl=nativeVideoNetworkAudioUrl;player.uri=audioUrl;
     player.position=position;player.wanted=wanted;player.volume=logicalVolume;
