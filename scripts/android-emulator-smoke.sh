@@ -73,5 +73,9 @@ adb shell am start -W -n org.irgunshiuraitorah.app/.SplashActivity
 
 node scripts/android-emulator-inspect.mjs | tee emulator-report/webview.json
 node scripts/android-emulator-tabs.mjs | tee emulator-report/tab-swipes.log
-node scripts/android-emulator-mp4.mjs | tee emulator-report/reported-shiur.log
+# Android Video is now native Media3 exclusively. Do not require the retired
+# WebView <video> element or accidentally pass because a shadow MP3 advanced.
+# The native test physically taps Watch, Audio and Video and requires actual
+# HLS decoded frame movement and one continuous ExoPlayer position.
+node scripts/android-emulator-native-media3.mjs | tee emulator-report/native-media3-startup-test.log
 
