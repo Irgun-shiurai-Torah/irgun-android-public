@@ -199,6 +199,9 @@ function audibleVideo(s){
   if(s.videoEngine==='native-media3'){
     assert.ok(s.media3.active&&s.media3.videoSelected&&s.media3.playing&&
       s.media3.firstFrame&&s.media3.frames>=2,'ExoPlayer must render real video frames');
+    assert.ok(s.media3.surfaceVisibleOnScreen&&s.media3.surfaceVisibleWidth>120&&
+      s.media3.surfaceVisibleHeight>65&&s.media3.surfaceX>=0,
+      'Native PlayerView must be PHYSICALLY VISIBLE; decoded frames at x=-12000 are black video');
     assert.ok(s.native.audioOutputVolume>0,'Same native Media3 video/audio player must be audible');
   }else if(typeof s.native.audioOutputVolume==='number'){
     assert.equal(s.native.audioOutputVolume,0,'WebView Video requires a silent native Audio shadow');
@@ -230,7 +233,8 @@ async function videoReady(){
     s.video.ready>=2&&s.video.width>0&&!s.video.muted&&s.video.volume>0&&
     s.native.mode==='VIDEO'&&(s.videoEngine==='native-media3'?
       s.media3.active&&s.media3.videoSelected&&s.media3.playing&&s.media3.firstFrame&&
-      s.media3.frames>=2&&s.media3.bufferedPositionMs>s.media3.positionMs:
+      s.media3.frames>=2&&s.media3.bufferedPositionMs>s.media3.positionMs&&
+      s.media3.surfaceVisibleOnScreen&&s.media3.surfaceVisibleWidth>120:
       typeof s.native.audioOutputVolume!=='number'||s.native.audioOutputVolume===0),
     'Actual Video failed to regain audible moving VIDEO authority',65000);
   audibleVideo(playing);return playing;
