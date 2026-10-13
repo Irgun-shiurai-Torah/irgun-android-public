@@ -79,6 +79,25 @@ async function read() {
   const s=JSON.parse(snap);
   assert.equal(s.observerMissing,undefined,'QA observer must be appended to this disposable build');
   s.native=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaPlaybackSnapshot',{})");
+  // The Android Media3 engine renders into native PlayerView rather than HTML.
+  // Normalize ONLY actual ExoPlayer read-only observations (never fake frames,
+  // playing states, seeks, or times) so every existing assertion sees reality.
+  if(s.native.videoSource==='native-media3'){
+    s.videoEngine='native-media3';s.webViewVideo=s.video;
+    s.media3=await evaluate("window.Capacitor.nativePromise('IrgunNativeVideo','snapshot',{})");
+    assert.equal(s.webViewVideo,null,'Media3 cannot create a second WebView decoder');
+    s.iframeSources=JSON.parse(await evaluate('JSON.stringify([...document.querySelectorAll("#watchVimeoFrame")].map(e=>e.getAttribute("src")||""))'));
+    const n=s.media3;
+    s.video=n.active&&n.videoSelected?{
+      time:Number(n.positionMs)/1000,frames:Number(n.frames),paused:!n.playing,
+      ready:n.firstFrame&&n.width>0&&n.height>0?4:0,
+      width:Number(n.width),height:Number(n.height),
+      muted:Number(s.native.audioOutputVolume||0)<=0,
+      volume:Number(s.native.audioOutputVolume||0),
+      rate:Number(s.native.playbackSpeed),error:n.error||null,
+      buffered:Number(n.bufferedPositionMs)/1000
+    }:null;
+  }else{s.videoEngine='webview';}
   return s;
 }
 async function wait(test,message,timeout=45000) {
@@ -162,41 +181,59 @@ async function section(name,fn){
   }
 }
 function noDuplicatePlayback(s){
-  assert.ok(s.overlays===1,'Exactly one video overlay is expected');
-  assert.ok(s.videos<=1&&s.iframes<=1,'There must be no duplicated video/iframe');
+  if(s.videoEngine==='native-media3'){
+    assert.equal(s.videos,0,'Native Media3 must not use an HTML video decoder');
+    assert.ok(s.media3?.active,'Exactly one active native Media3 playback session required');
+    assert.ok(s.iframeSources?.every(src=>!src||src==='about:blank'),
+      'No network Vimeo iframe may play behind the native PlayerView');
+  }else{
+    assert.ok(s.overlays===1,'Exactly one WebView video overlay expected');
+    assert.ok(s.videos<=1&&s.iframes<=1,'No duplicate WebView video/iframe');
+  }
 }
 function audibleVideo(s){
-  assert.ok(s.video&&!s.video.paused&&s.video.ready>=2&&s.video.width>0,'Video must be decoding and playing');
+  assert.ok(s.video&&!s.video.paused&&s.video.ready>=2&&s.video.width>0,'Video must actually decode and play');
   assert.equal(s.video.error,null,'Video decoder must not fail');
-  assert.ok(!s.video.muted&&s.video.volume>0,'Video must be audible');
-  assert.equal(s.native.mode,'VIDEO','Media3 must authorize the video, not a second audio stream');
-  if(typeof s.native.audioOutputVolume==='number')assert.equal(s.native.audioOutputVolume,0,'Native shadow audio must be silent in video mode');
+  assert.ok(!s.video.muted&&s.video.volume>0,'Video must have audible output');
+  assert.equal(s.native.mode,'VIDEO','Native VIDEO must be authoritative');
+  if(s.videoEngine==='native-media3'){
+    assert.ok(s.media3.active&&s.media3.videoSelected&&s.media3.playing&&
+      s.media3.firstFrame&&s.media3.frames>=2,'ExoPlayer must render real video frames');
+    assert.ok(s.native.audioOutputVolume>0,'Same native Media3 video/audio player must be audible');
+  }else if(typeof s.native.audioOutputVolume==='number'){
+    assert.equal(s.native.audioOutputVolume,0,'WebView Video requires a silent native Audio shadow');
+  }
   noDuplicatePlayback(s);
 }
 function audibleAudio(s){
-  assert.equal(s.native.mode,'AUDIO','Media3 must authorize native audio');
-  assert.ok(s.native.audioIsPlaying,'Native audio must be playing');
-  if(typeof s.native.audioOutputVolume==='number')assert.ok(s.native.audioOutputVolume>0,'Native audio volume must be audible');
-  if(s.video)assert.ok(s.video.paused||s.video.muted||s.video.volume===0,'Video must not audibly duplicate native audio');
+  assert.equal(s.native.mode,'AUDIO','Media3 must authorize native Audio');
+  assert.ok(s.native.audioIsPlaying,'Actual native Audio must play');
+  if(typeof s.native.audioOutputVolume==='number')assert.ok(s.native.audioOutputVolume>0,'Native Audio must be audible');
+  if(s.videoEngine==='native-media3'){
+    assert.ok(!s.media3?.videoSelected,'Native video track must be deselected in Audio mode');
+    assert.equal(s.webViewVideo,null,'No second WebView audio output');
+  }else if(s.video)assert.ok(s.video.paused||s.video.muted||s.video.volume===0,'HTML video must not overlap native Audio');
 }
 async function videoReady(){
   let current=await read();
-  if(!current.watchId&&current.currentId) {
+  if(!current.watchId&&current.currentId){
     if(!current.playerOpen)await tapWithScroll('.mini-player .mini-copy');
     await tapWithScroll('[data-player-watch="'+current.currentId+'"]');
-    await wait(s=>!!s.watchId,'Existing lecture did not reopen from the native audio player');
+    await wait(s=>!!s.watchId,'Actual lecture did not reopen from the native player');
     await closePlayer();current=await read();
   }
-  if(current.watchMode!=='video' ||
-      (current.native.mode==='AUDIO'&&!current.video&&!String(current.hostClass||'').includes('watch-video-host')))
+  if(current.watchMode!=='video'||
+    (current.videoEngine==='native-media3'&&current.native.mode==='AUDIO'&&!current.media3?.videoSelected)||
+    (current.videoEngine!=='native-media3'&&current.native.mode==='AUDIO'&&!current.video&&!String(current.hostClass||'').includes('watch-video-host')))
     await tap('[data-watch-mode="video"]');
-  return await wait(
-    s=>s.watchMode==='video'&&s.video&&!s.video.paused&&s.video.ready>=2&&s.video.width>0&&
-      !s.video.muted&&s.video.volume>0&&s.native.mode==='VIDEO'&&
-      (typeof s.native.audioOutputVolume!=='number'||s.native.audioOutputVolume===0),
-    'Video did not regain moving, audible VIDEO authority without overlapping native audio',
-    65000
-  );
+  const playing=await wait(s=>s.watchMode==='video'&&s.video&&!s.video.paused&&
+    s.video.ready>=2&&s.video.width>0&&!s.video.muted&&s.video.volume>0&&
+    s.native.mode==='VIDEO'&&(s.videoEngine==='native-media3'?
+      s.media3.active&&s.media3.videoSelected&&s.media3.playing&&s.media3.firstFrame&&
+      s.media3.frames>=2&&s.media3.bufferedPositionMs>s.media3.positionMs:
+      typeof s.native.audioOutputVolume!=='number'||s.native.audioOutputVolume===0),
+    'Actual Video failed to regain audible moving VIDEO authority',65000);
+  audibleVideo(playing);return playing;
 }
 async function audioReady(){
   const current=await read();
