@@ -739,8 +739,96 @@ try{
     checks('Video playback recovery after Wi-Fi/mobile-data interruption',{startSeconds:prior,endSeconds:after.video.time});
   });
 
-  await section('Actual slow WebView transport and failed unbuffered HLS requests recover without restarting',async()=>{
+  await section('Native Media3 slow transport and real unbuffered HLS failure recover without rewind',async()=>{
     await closePlayer();const start=await videoReady();
+    if(start.videoEngine==='native-media3'){
+      assert.equal(start.media3.sourceType,'hls','Native transport regression must use the actual HLS source');
+      const originalPid=adb('shell','pidof',pkg);
+      const originalSource=start.native.lectureId;
+      let throttled=false;
+      const genuineSeek=async(bufferEnd)=>{
+        let before=await read(),last=before;
+        const target=Math.min(start.media3.durationMs-60000,
+          Math.max(before.media3.positionMs+45000,bufferEnd+40000));
+        assert.ok(target>before.media3.positionMs+30000,'Need a genuinely unbuffered distant seek target');
+        // Real Android MediaSession remote/physical media-key actions; never
+        // call IrgunNativeVideo.playback or set any test clock directly.
+        for(let n=0;n<28&&last.media3.positionMs<target-6000;n++){
+          adb('shell','input','keyevent','KEYCODE_MEDIA_FAST_FORWARD');
+          await delay(200);
+          last=await read();
+        }
+        assert.ok(last.media3.positionMs>=target-6000,
+          'Physical MediaSession forward gestures did not reach unbuffered HLS: '+JSON.stringify({
+            target,actual:last.media3.positionMs,buffered:before.media3.bufferedPositionMs}));
+        report.nativeTransportSeeks||=[];
+        report.nativeTransportSeeks.push({target,actual:last.media3.positionMs,
+          previouslyBuffered:before.media3.bufferedPositionMs,networkCondition:throttled?'throttled':'offline'});
+        save();
+        return last;
+      };
+      try{
+        // adb emu network commands shape the entire emulator network, including
+        // native ExoPlayer HTTP. CDP Network.emulateNetworkConditions would
+        // affect only WebView and was a false positive for this native engine.
+        adb('emu','network','speed','umts');
+        adb('emu','network','delay','edge');
+        throttled=true;
+        const networkStatus=adb('emu','network','status');
+        assert.ok(networkStatus.length>10,'Actual emulator shaping must be observable');
+        report.nativeNetworkThrottle=networkStatus.slice(0,1500);save();
+        const sought=await genuineSeek(start.media3.bufferedPositionMs);
+        const slow=await wait(s=>s.media3?.active&&s.media3.videoSelected&&
+          s.media3.sourceType==='hls'&&s.media3.firstFrame&&s.media3.playing&&
+          s.media3.bufferedPositionMs>s.media3.positionMs+1000&&
+          s.media3.positionMs>=sought.media3.positionMs-2000,
+          'Native HLS did not decode newly fetched frames under actual emulator network throttling',95000);
+        await delay(2500);const slowMoved=await read();
+        audibleVideo(slowMoved);
+        assert.ok(slowMoved.media3.positionMs>slow.media3.positionMs+900&&
+          slowMoved.media3.frames>slow.media3.frames+3,
+          'Under real emulator throttle, native HLS clock and decoded frames must advance');
+        checks('Native HLS continued after a physical seek under actual emulator-wide UMTS speed/EDGE latency',
+          {networkStatus,startedMs:start.media3.positionMs,throttledPositionMs:slowMoved.media3.positionMs});
+        await setOnline(false);
+        const lost=await genuineSeek(slowMoved.media3.bufferedPositionMs);
+        let stalled=false,last;
+        const deadline=Date.now()+18000;
+        while(Date.now()<deadline){
+          last=await read();
+          if(last.native.networkRecoveryPending||!last.media3?.playing){stalled=true;break;}
+          await delay(600);
+        }
+        assert.ok(stalled,
+          'Unbuffered native HLS must encounter actual transport loss when Android Wi-Fi/data are both disabled; last='+JSON.stringify({
+            native:last?.native,media3:last?.media3}));
+        checks('Native ExoPlayer observed actual stalled/unavailable unbuffered data while all Android networks were disabled',
+          {positionMs:lost.media3.positionMs,bufferedBeforeMs:slowMoved.media3.bufferedPositionMs,
+            recoveryPending:Boolean(last.native.networkRecoveryPending)});
+        await setOnline(true);
+        adb('emu','network','speed','full');
+        adb('emu','network','delay','none');
+        throttled=false;
+        const recovered=await wait(s=>s.media3?.active&&s.media3.videoSelected&&
+          s.media3.sourceType==='hls'&&s.media3.firstFrame&&s.media3.playing&&
+          s.media3.bufferedPositionMs>s.media3.positionMs&&
+          s.media3.positionMs>=lost.media3.positionMs-2000,
+          'Native HLS did not resume from the unbuffered failed seek after real network restoration',95000);
+        await delay(2500);const again=await read();audibleVideo(again);
+        assert.ok(again.media3.positionMs>recovered.media3.positionMs+900&&
+          again.media3.frames>recovered.media3.frames+3,
+          'Native HLS failed to render new frames after transport recovery');
+        assert.equal(adb('shell','pidof',pkg),originalPid,'Actual app process changed during network recovery');
+        assert.equal(again.native.lectureId,originalSource,'Network recovery changed to a different shiur');
+        checks('Native ExoPlayer resumed moving HLS at original lecture and position after genuine unbuffered network loss',
+          {fromMs:lost.media3.positionMs,toMs:again.media3.positionMs});
+      }finally{
+        try{await setOnline(true);}catch{}
+        try{adb('emu','network','speed','full');adb('emu','network','delay','none');}catch{}
+      }
+      return;
+    }
+
     assert.equal(start.sourceType,'hls','Slow/interrupted transport test must run on real HLS video');
     const seekVideo=async seconds=>{
       const point=JSON.parse(await evaluate('JSON.stringify((()=>{const e=document.querySelector("[data-hls-seek]"),r=e?.getBoundingClientRect(),v=document.querySelector("#watchDirectHlsVideo");if(!r||!v?.duration)return null;const fraction='+seconds+'/v.duration,rtl=getComputedStyle(e).direction==="rtl",x=r.left+8+(r.width-16)*(rtl?1-fraction:fraction),y=r.top+r.height/2;return document.elementFromPoint(x,y)===e?{x,y,width:innerWidth,height:innerHeight}:null;})())'));
