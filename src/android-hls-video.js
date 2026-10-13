@@ -100,7 +100,7 @@ function makePlayerAdapter(video, stage, getHls, readyPromise) {
   return adapter;
 }
 
-async function getAndroidHlsSource(apiBase, videoId) {
+export async function getAndroidHlsSource(apiBase, videoId) {
   const lookup = async retry => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10000);
