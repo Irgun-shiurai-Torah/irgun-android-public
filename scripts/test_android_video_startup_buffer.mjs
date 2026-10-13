@@ -12,6 +12,17 @@ test('one- and two-second buffers do not release startup until real six-second b
     delay:async()=>{clock+=150;video.setAhead(clock<300?2:7);}});
   assert.deepEqual(observed,[1,2,7]);assert.equal(result.ahead,7);assert.equal(video.currentTime,30);
 });
+test('Android HLS waits for 16s of real buffer rather than beginning with a 12s runway',async()=>{
+  const video=media(12);let now=0,readings=[];
+  const value=await waitForInitialVideoBuffer(video,{seconds:16,now:()=>now,
+    onSample:s=>readings.push(s.ahead),delay:async()=>{now+=150;video.setAhead(now>=300?18:12);}});
+  assert.deepEqual(readings,[12,12,18]);
+  assert.equal(value.required,16);
+  assert.equal(video.currentTime,30,'Buffering must not fake playback progression');
+  video.playbackRate=1.5;video.setAhead(24);
+  assert.equal((await waitForInitialVideoBuffer(video,{seconds:16})).required,24,
+    'HLS at 1.5x must secure a full 16 seconds of wall-clock runway');
+});
 test('2x startup requires twelve seconds of real media, while near-end videos require their remainder',async()=>{
   const video=media(12);video.playbackRate=2;
   assert.equal((await waitForInitialVideoBuffer(video)).required,12);
