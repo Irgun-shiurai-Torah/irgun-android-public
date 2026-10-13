@@ -3,6 +3,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {safeNativeBackgroundHandoff} from './android-background-handoff-check.mjs';
 import {startMediaRequest,completeMediaRequest,failedDuringOffline} from './android-network-evidence.mjs';
 import {fullscreenEducationTapPoint,mediaNotificationClock,mediaNotificationControlPoint} from './android-system-ui-observation.mjs';
 
@@ -426,8 +427,8 @@ try{
     adb('shell','input','keyevent','KEYCODE_HOME');
     // Native Media3 must actually become audible after the asynchronous Home
     // transfer; an arbitrary fixed sleep can sample VIDEO just before READY.
-    const background=await wait(s=>s.native.mode==='AUDIO'&&s.native.audioIsPlaying&&
-      s.native.audioOutputVolume>0, 'Home did not complete an audible native Audio handoff',6500);
+    const background=await wait(s=>safeNativeBackgroundHandoff(s),
+      'Home did not establish audible native Audio with a simultaneously silent Video source',6500);
     const handoffMs=Date.now()-homeAt;
     assert.ok(handoffMs<=6500,'Home handoff exceeded the bounded background playback deadline');
     report.backgroundHandoffMs=handoffMs;
