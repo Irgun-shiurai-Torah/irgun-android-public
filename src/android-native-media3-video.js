@@ -25,24 +25,54 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
   placeholder.style.visibility='hidden';
   let destroyed=false,mode='video',last=null,lastPlaying=false;
   let ticking=false,layoutRequested=false,observedFrame=null;
+  let framePlacedOnScreen=false;
+  const viewportFrame=()=>{
+    // Query ALL matching nodes: during Audio -> Video the old persistent
+    // iframe can still be connected while transformed 12,000px off-screen.
+    // document.getElementById() or placeholder.isConnected alone is unsafe.
+    return [...document.querySelectorAll('#watchVimeoFrame')].find(element=>{
+      const r=element.getBoundingClientRect();
+      return r.width>40&&r.height>40&&r.left>=-2&&r.top>=-2&&
+        r.right<=innerWidth+2&&r.bottom<=innerHeight+2;
+    })||null;
+  };
   const cleanups=[];
   const positionFrame=async()=>{
     if(destroyed || mode!=='video')return;
-    // Native PlayerView is a separate Android View above the whole WebView.
-    // Without this, the physical picture blocks the Save dialog's Watch Later
-    // button and even its Close button. Hide ONLY the surface during the
-    // modal; the SAME Media3 audio stream and timeline continue underneath.
+    const nativeBounds={viewportWidth:innerWidth,viewportHeight:innerHeight};
     if(document.querySelector('.playlist-picker-backdrop')){
-      await native.frame({width:0,height:0,
-        viewportWidth:innerWidth,viewportHeight:innerHeight}).catch(()=>{});
+      // Hide the native view without stopping the SAME Media3 playback clock.
+      framePlacedOnScreen=false;
+      await native.frame({width:0,height:0,...nativeBounds});
       return;
     }
-    const current=placeholder.isConnected?placeholder:document.getElementById('watchVimeoFrame');
-    if(!current)return;
+    const host=document.getElementById('persistentVideoMount');
+    if(host?.classList.contains('watch-audio-parked') &&
+       document.querySelector('.media-switch [data-watch-mode="video"].active')){
+      // Previous iframe parking is for Vimeo/WebView, not native PlayerView.
+      // The emulator showed frames increasing with frame.x=-12000 after a
+      // real Audio -> Video tap. Restore the visible host BEFORE measuring it.
+      host.classList.remove('watch-audio-parked');
+      host.classList.add('watch-full-host');
+      document.body.classList.remove('irgun-watch-mini-hosted');
+    }
+    const current=viewportFrame();
+    if(!current){
+      // Never place a native surface beyond the actual Android viewport:
+      // a playing ExoPlayer with an offscreen PlayerView is BLACK video.
+      framePlacedOnScreen=false;
+      await native.frame({width:0,height:0,...nativeBounds});
+      return;
+    }
     const rect=current.getBoundingClientRect();
-    if(rect.width<=0||rect.height<=0)return;
-    await native.frame({x:rect.x,y:rect.y,width:rect.width,height:rect.height,
-      viewportWidth:innerWidth,viewportHeight:innerHeight}).catch(()=>{});
+    try{
+      await native.frame({x:rect.x,y:rect.y,width:rect.width,height:rect.height,
+        ...nativeBounds});
+      framePlacedOnScreen=true;
+    }catch(error){
+      framePlacedOnScreen=false;
+      if(!destroyed)console.warn('[Media3] unable to position visible native frame',error);
+    }
   };
   const scheduleFrame=()=>{
     if(layoutRequested||destroyed)return;
@@ -50,7 +80,7 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     requestAnimationFrame(()=>{layoutRequested=false;void positionFrame();});
   };
   const trackFrame=()=>{
-    const current=document.getElementById('watchVimeoFrame');
+    const current=viewportFrame()||document.getElementById('watchVimeoFrame');
     if(current!==observedFrame){
       observer.disconnect();observedFrame=current;
       if(current)observer.observe(current);
@@ -69,6 +99,7 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     try{
       const s=await refresh();
       if(!s.active)return;
+      if(mode==='video'&&!framePlacedOnScreen)scheduleFrame();
       const playing=s.videoSelected && s.playing;
       if(playing!==lastPlaying){lastPlaying=playing;emit(playing?'play':'pause',{seconds:s.positionMs/1000,duration:s.durationMs/1000});}
       emit('timeupdate',{seconds:s.positionMs/1000,duration:s.durationMs/1000,frames:s.frames});
@@ -105,7 +136,8 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
       if(!['audio','video'].includes(next))throw new Error('Invalid Media3 mode');
       await native.mode({mode:next});
       mode=next;
-      if(next==='video'){trackFrame();await positionFrame();}
+      if(next==='video'){framePlacedOnScreen=false;trackFrame();await positionFrame();}
+      else framePlacedOnScreen=false;
       return next;
     },
     updateFrame:trackFrame,
