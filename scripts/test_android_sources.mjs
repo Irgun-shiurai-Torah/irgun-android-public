@@ -1383,14 +1383,27 @@ for(const buffered of [true,false])test('observed HLS 4x catch-up clock stall us
   buffered:{length:buffered?1:0,start:()=>600.066666,end:()=>678.018666},
   getVideoPlaybackQuality:()=>({totalVideoFrames:Date.now()<8000?318:318+Math.floor((Date.now()-8000)/30)})};
  const player={getSourceType:()=> 'hls',getVideoElement:()=>element,getPaused:async()=>false,getCurrentTime:async()=>position(),
-  setCurrentTime:async value=>{seeks.push(value);recoveredAt=Date.now();recoveredPosition=value;}};
+  setCurrentTime:async value=>{seeks.push({target:value,at:Date.now()});recoveredAt=Date.now();recoveredPosition=value;}};
  const context={state,Date,setTimeout,usesNativeUnifiedAudio:()=>true,playbackPositionSeconds:()=>605.58+Date.now()/1000,console:{warn(){}}};
  const start=mainSource.indexOf('async function waitForVimeoHandoffReady(');
  runInNewContext(mainSource.slice(start,mainSource.indexOf('function videoAudioPlaybackItem(',start))+'\nthis.wait=waitForVimeoHandoffReady;',context);
  let done=false,result;const pending=context.wait(player,'lecture',15000).then(r=>{done=true;result=r;});
  for(let i=0;i<180&&!done;i++){t.mock.timers.tick(100);for(let j=0;j<15;j++)await Promise.resolve();}
  await pending;assert.equal(seeks.length,buffered?1:0,'No repeated keyframe seek or seek to unavailable bytes');
- if(buffered){assert.ok(result>617);assert.ok(Math.abs(result-(605.58+Date.now()/1000))<=1,'The original one-second clock requirement stays active');}
+ if(buffered){
+  const seek=seeks[0];
+  assert.ok(seek.at>=8000 && seek.at<15000,
+    'A recovery seek must wait until decoded frames have actually moved, not abort a pending keyframe');
+  assert.ok(Math.abs(seek.target-(605.58+seek.at/1000))<=.25,
+    'The one verified cached seek must use Media3 Audio\'s actual advancing clock');
+  assert.ok(Number.isFinite(result) && result>seek.target+.08,
+    'After correcting its clock, Video must advance again with real decoded frames');
+  // The faster buffered correction may succeed BEFORE the old hard-coded 617s
+  // deadline. Actual synchronization, not an arbitrary lecture timestamp,
+  // decides whether the handoff passed.
+  assert.ok(Math.abs(result-(605.58+Date.now()/1000))<=1,
+    'The one-second Audio/Video synchronization requirement stays active');
+ }
  else assert.equal(result,null,'A stalled decoder without cached recovery media must remain a failed handoff');
  assert.equal(element.playbackRate,1,'Internal recovery must restore the chosen rate');
 });
