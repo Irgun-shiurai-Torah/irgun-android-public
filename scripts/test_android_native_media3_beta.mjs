@@ -37,7 +37,15 @@ test('native Video to Audio retains its media item and exact playback position',
   assert.ok(start>=0&&end>start);
   const fn=service.slice(start,end);
   assert.match(fn,/setTrackTypeDisabled\(C\.TRACK_TYPE_VIDEO, !showVideo\)/);
-  assert.doesNotMatch(fn,/seekTo\(|setMediaItem\(|clearMediaItems\(|\.pause\(|\.prepare\(/);
+  const unchanged=fn.slice(fn.indexOf('// No file swap when the user'),fn.indexOf('nativeVideoSelected = showVideo;'));
+  assert.ok(unchanged.length>60,'Normal Media3 presentation must have its own no-file-swap path');
+  assert.doesNotMatch(unchanged,/seekTo\(|setMediaItem\(|clearMediaItems\(|\.pause\(|\.prepare\(/,
+    'Normal Audio/Video switching must NEVER replace/restart the native stream');
+  assert.match(fn,/if \(restoreVideoSource \|\| useLocalAudio\)/,
+    'Only explicitly saved offline MP3s may trigger a one-player source swap');
+  assert.match(fn,/setMediaItem\(source, position\)/);
+  assert.match(fn,/setPlayWhenReady\(playIntent\)/,
+    'An offline file swap must retain actual playback intent');
   assert.match(service,/if \(nativeVideoSourceActive\) return;/,'Legacy Vimeo clock must not overwrite native source');
   assert.match(service,/nativeVideoRenderedFrames\+\+/,'Actual video frames, not only clock, must be tracked');
 });
@@ -157,4 +165,23 @@ test('expanded Android tests observe actual Media3 and physical Android network 
   assert.match(ext,/if\(start\.videoEngine==='native-media3'\)/);
   assert.match(ext,/assert\.equal\(s\.webViewVideo,null/);
   assert.match(ext,/nativeHierarchy\(/,'Real Android native UI remains instrumented');
+});
+
+test('offline Audio chooses a verified private MP3, then restores HLS in the SAME Media3 engine',()=>{
+  assert.match(bridge,/getFilesDir\(\).*"irgun-offline"/,
+    'Native file source must be restricted to app-private offline directory');
+  assert.match(bridge,/getCanonicalFile\(\)/,'Canonical path must prevent traversal');
+  assert.match(bridge,/audio\.isFile\(\)/,'Offline copy must exist on actual Android storage');
+  assert.match(bridge,/IrgunPlaybackService\.nativeVideoPresentation\(video, approved\)/);
+  assert.match(service,/nativeVideoOfflineAudioActive = true/);
+  assert.match(service,/MimeTypes\.AUDIO_MPEG/,'Real Media3 MP3 decoder must be selected');
+  assert.match(service,/source = nativeVideoMediaItem\(url, nativeVideoUsingHls\)/,
+    'Same Media3 player must restore original video source at the live clock');
+  assert.match(service,/nativeVideoOfflineAudioActive \&\& !s\.nativeVideoSelected/,
+    'Read-only native snapshot must distinguish real MP3 from HLS');
+  assert.match(app,/player\.setMode\(mode,\{offlineUri\}\)/);
+  assert.match(app,/offline:true, offlineKey:offlineRecord\.key/);
+  assert.match(adapter,/offlineUri:next==='audio'/,'Only Audio is allowed to use downloaded file');
+  const ext=readFileSync('scripts/android-regression-extensions.mjs','utf8');
+  assert.match(ext,/Audio playback must select the offline file/);
 });
