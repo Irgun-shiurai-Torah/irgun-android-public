@@ -409,7 +409,40 @@ try{
   });
 
   await section('True video fullscreen and Android Back exit retain moving picture',async()=>{
-    await videoReady();
+    const selected=await videoReady();
+    if(selected.videoEngine==='native-media3'){
+      for(let i=0;i<2;i++){
+        const before=await videoReady();
+        const sourceId=before.native.lectureId;
+        await tap('[data-native-video-fullscreen]');
+        const full=await wait(s=>s.media3?.fullscreen&&s.media3.surfaceVisible&&
+          s.media3.active&&s.media3.videoSelected&&s.media3.playing&&
+          s.media3.surfaceWidth>=s.media3.rootWidth-8&&
+          s.media3.surfaceHeight>=s.media3.rootHeight-8&&
+          s.media3.rootWidth>100&&s.media3.rootHeight>100,
+          'Native PlayerView must really fill its Android root in immersive fullscreen',22000);
+        await delay(2300);const moved=await read();
+        audibleVideo(moved);
+        assert.ok(moved.media3.positionMs>full.media3.positionMs+1100&&
+          moved.media3.frames>=full.media3.frames+5,
+          'Fullscreen must retain moving decoded native frames and clock');
+        assert.equal(moved.native.lectureId,sourceId,'Fullscreen changed lecture');
+        screenshot('media3-native-fullscreen-'+i);
+        adb('shell','input','keyevent','KEYCODE_BACK');
+        const exit=await wait(s=>!s.media3?.fullscreen&&!!s.watchId&&s.media3.active&&
+          s.native.mode==='VIDEO'&&s.media3.videoSelected,
+          'Physical Android Back must exit native fullscreen without closing lecture',22000);
+        assert.ok(exit.media3.positionMs>=moved.media3.positionMs-1250,
+          'Back from native fullscreen rewound the lecture');
+        const continued=await sampleMovingVideo();
+        assert.ok(continued.after.media3.frames>continued.before.media3.frames,
+          'Media3 frames must keep moving after exiting real fullscreen');
+        checks('Native fullscreen '+(i+1)+' enters actual Android root and Back preserves one moving ExoPlayer',
+          {fullscreenWidth:full.media3.surfaceWidth,fullscreenHeight:full.media3.surfaceHeight,
+            exitedPositionMs:exit.media3.positionMs});
+      }
+      return;
+    }
     for(let i=0;i<2;i++) {
       const before=await read();await tap('[data-hls-fullscreen]');
       const full=await wait(s=>s.fullscreen,'Fullscreen button must enter actual Android WebView fullscreen');
