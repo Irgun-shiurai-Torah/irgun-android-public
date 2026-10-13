@@ -182,6 +182,10 @@ async function section(name,fn){
 }
 function noDuplicatePlayback(s){
   if(s.videoEngine==='native-media3'){
+    if(s.watchMode==='video'){
+      assert.equal(s.overlays,1,'Native Video must have exactly one Watch overlay; a duplicate blocks physical mini-player buttons');
+      assert.equal(s.iframes,1,'Native Video must keep exactly one about:blank anchor for its physical PlayerView');
+    }
     assert.equal(s.videos,0,'Native Media3 must not use an HTML video decoder');
     assert.ok(s.media3?.active,'Exactly one active native Media3 playback session required');
     assert.ok(s.iframeSources?.every(src=>!src||src==='about:blank'),
@@ -494,7 +498,13 @@ try{
       await tap('[data-minimize-watch]');
       const mini=await wait(s=>s.minimized&&s.hostClass.includes('watch-mini-host'),'Video mini player did not open');
       noDuplicatePlayback(mini);await delay(2100);
-      const miniNext=await read();assert.ok(miniNext.video.time>mini.video.time+0.7,'Mini player video stopped on cycle '+attempt);
+      const miniNext=await read();
+      assert.ok(miniNext.minimized&&miniNext.hostClass.includes('watch-mini-host'),
+        'Mini player unexpectedly expanded or moved before the physical Expand tap');
+      assert.ok(miniNext.video.time>mini.video.time+0.7,'Mini player video stopped on cycle '+attempt);
+      noDuplicatePlayback(miniNext);
+      assert.ok(await hit('[data-expand-watch]'),
+        'Mini Expand is not physically hit-testable; inspect overlapping Watch overlays and native PlayerView');
       await tap('[data-expand-watch]');
       const expanded=await wait(s=>!s.minimized&&s.hostClass.includes('watch-full-host'),'Fullscreen view did not restore');
       noDuplicatePlayback(expanded);
