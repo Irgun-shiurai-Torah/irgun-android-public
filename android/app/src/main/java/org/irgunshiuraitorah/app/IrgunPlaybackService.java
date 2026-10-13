@@ -1174,7 +1174,16 @@ public class IrgunPlaybackService extends MediaSessionService {
         backgroundPauseRequested = false;
         backgroundWebViewStopped = false;
         backgroundHandoffId += 1L;
-        pendingBackgroundPositionMs = Math.max(0L, externalVideoPositionMs);
+        // Real API-35 evidence: WebView's last VIDEO timeupdate was 746844ms,
+        // but its already-decoding, advancing native shadow was 748605ms.
+        // Seeking the native source BACK to the stale WebView timestamp here
+        // caused a visible ~1.5 second rewind and disturbed audio focus.
+        // Use the native clock ONLY if it is ready, genuinely playing, and
+        // within a short bounded event-delivery delay of the Video clock.
+        pendingBackgroundPositionMs = BackgroundHandoffPosition.choose(
+            externalVideoPositionMs, player.getCurrentPosition(),
+            player.getPlaybackState() == Player.STATE_READY && player.isPlaying(),
+            logicalSpeed);
         backgroundHandoffStartedMs = android.os.SystemClock.elapsedRealtime();
         pendingBackgroundWasPlaying = externalVideoPlaying || player.getPlayWhenReady();
         Log.d(TAG, "[Playback] Home VIDEO -> AUDIO requested at " + pendingBackgroundPositionMs + "ms");
