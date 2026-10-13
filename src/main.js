@@ -5063,6 +5063,7 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
   let catchupElement = null;
   let lastDecodedMotionAt = startedAt;
   let recoveredCatchupStall = false;
+  let resynchronizedBufferedHlsOnce = false;
   try {
   while (Date.now() < deadline) {
     if (!state.watchAudioToVideoHandoff || String(state.watchAudioToVideoHandoffId || '') !== String(videoKey || '')) {
@@ -5078,7 +5079,7 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
       Promise.resolve(player?.getCurrentTime?.()).catch(()=>null)
     ]);
     const videoNow = Number(current);
-    if (paused && player?.getSourceType?.() === 'hls' &&
+    if (paused && ['hls', 'mp4'].includes(player?.getSourceType?.()) &&
         state.nativePlayback?.mode === 'AUDIO' &&
         (state.nativePlayback?.audioIsPlaying || state.nativePlayback?.audioPlayWhenReady) &&
         typeof player.resumeStalledHandoff === 'function') {
@@ -5159,6 +5160,35 @@ async function waitForVimeoHandoffReady(player, videoKey, timeoutMs = 8000) {
       }
       if (Number.isFinite(again) && again > videoNow + 0.05 && movingPicture && bufferedAhead) {
         if (synchronized(again, stillSource, 1.0)) return again;
+        // When live Audio is faster than an older Android HLS decoder, 4x
+        // catch-up cannot guarantee convergence. After genuinely moving
+        // frames have proved the decoder works, seek ONCE to a live clock
+        // position already fully buffered in this SAME HLS media element.
+        // Never cancel the first pending keyframe, request an absent range,
+        // or replace the native Audio owner before verifying new frames.
+        const rate = Math.max(.25, Number(state.playbackSpeed) || 1);
+        const lag = stillSource - again;
+        const elapsed = Date.now() - startedAt;
+        const cachedLiveHls = player?.getSourceType?.() === 'hls' && element &&
+          !element.seeking && elapsed >= 5000 &&
+          deadline - Date.now() <= 10000 &&
+          lag > Math.max(3, rate * 2) &&
+          !resynchronizedBufferedHlsOnce &&
+          Array.from({length:element.buffered?.length || 0}, (_, i) => i).some(i =>
+            element.buffered.start(i) <= stillSource &&
+            element.buffered.end(i) >= stillSource + Math.max(2, rate * 1.5));
+        if (cachedLiveHls) {
+          resynchronizedBufferedHlsOnce = true;
+          lastSeekCorrectionAt = Date.now();
+          catchupElement = null;
+          element.playbackRate = rate;
+          await Promise.race([
+            Promise.resolve(player.setCurrentTime(stillSource)).catch(() => null),
+            new Promise(resolve => setTimeout(() => resolve(null), 900))
+          ]);
+          lastDecodedMotionAt = Date.now();
+          continue;
+        }
         // Let the first seek decode and actually play before chasing Audio's
         // advancing clock. Seeking as soon as metadata/currentTime resolve
         // repeatedly discards the destination's pending keyframe on API 35.
