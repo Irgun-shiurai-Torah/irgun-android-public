@@ -5321,6 +5321,22 @@ function restoreParkedHostedVideo() {
 async function switchVideoToAudioSeamlessly(video, id) {
   const player = state.watchVimeo;
   if (usesNativeUnifiedAudio()) {
+    // Home can commit the prebuffered native Audio session while WebView is
+    // suspended. A late user/visibility Audio callback must NOT loadLecture
+    // or call startAudioAt(shouldPlay=false) from the now-paused VIDEO object:
+    // that would pause the ALREADY-playing Media3 owner after Home.
+    const committed = await Promise.resolve(nativeMediaPlugin()?.getState()).catch(() => null);
+    if (committed?.mode === 'AUDIO' && committed?.audioAuthorityCommitted === true &&
+        String(committed.lectureId || '') === String(id)) {
+      console.debug('[Playback] reuse already-committed native Audio; no second handoff or pause');
+      state.nativePlayback = { ...state.nativePlayback, ...committed, connected:true };
+      state.watchVideoToAudioHandoff = false;
+      state.watchAudioToVideoHandoff = false;
+      state.watchAudioToVideoHandoffId = '';
+      state.watchAudioToVideoTargetSeconds = 0;
+      reconcileNativeWatchAudio(committed);
+      return true;
+    }
     const previousCurrent = state.current;
     let exact = await quickVimeoTime(state.watchResumeSeconds || 0, 350);
     let wasPlaying = Boolean(state.watchVideoPlaying);
