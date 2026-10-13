@@ -253,6 +253,101 @@ try {
   assert.equal(resumed.video,null,'No second WebView video player may be created during mode switches');
   report.checks.push({label:'Audio to Video resumes moving decoded frames in the same Media3 engine',snapshot:resumed.media3});
   writeFileSync('emulator-report/media3-video-restored.png',execFileSync('adb',['exec-out','screencap','-p']));
+
+  if (process.env.IRGUN_NATIVE_MEDIA3_SOAK === '1') {
+    // A REAL wall-clock 15-minute Media3 HLS soak, not a mock clock or a
+    // WebView/HLS.js precondition. Keep checking one ExoPlayer and its decoded
+    // frames, native Audio position, media notification and Android lifecycle.
+    const soakStart=Date.now(),initialPid=adb('shell','pidof','org.irgunshiuraitorah.app').trim();
+    const memory=()=>{
+      const raw=adb('shell','dumpsys','meminfo','org.irgunshiuraitorah.app');
+      const value=raw.match(/TOTAL PSS:\s*(\d+)/)?.[1]||raw.match(/^\s*TOTAL\s+(\d+)\s/m)?.[1];
+      assert.ok(value,'Android must expose native app memory during Media3 soak');
+      return Number(value);
+    };
+    report.soak={requiredMinutes:15,startedAt:new Date(soakStart).toISOString(),samples:[],events:[]};
+    await tapVisible('[data-watch-mode="audio"]');
+    let last=await waitNative(s=>s.media3.active && s.media3.playing &&
+      !s.media3.videoSelected && s.native.mode==='AUDIO',
+      'Soak must start with audible Media3 Audio in the same HLS source');
+    assert.equal(last.media3.sourceType,'hls','Native soak must not use MP4 fallback');
+    const baselinePss=memory();
+    report.soak.samples.push({minute:0,positionMs:last.media3.positionMs,pssKb:baselinePss});
+    for(let minute=1;minute<=15;minute++) {
+      // Start time is the FIRST native Audio snapshot; waits use actual time.
+      await delay(Math.max(0,soakStart+minute*60000-Date.now()));
+      if ([4,9,13].includes(minute)) {
+        adb('shell','input','keyevent','KEYCODE_POWER');
+        await delay(2500);
+        assert.ok(adb('shell','dumpsys','media_session').includes('org.irgunshiuraitorah.app'),
+          'Native MediaSession must remain registered with the screen locked');
+        adb('shell','input','keyevent','KEYCODE_POWER');
+        adb('shell','input','keyevent','KEYCODE_MENU');
+        await delay(1200);
+        report.soak.events.push({minute,action:'screen lock/unlock and native MediaSession'});
+      }
+      if ([6,12].includes(minute)) {
+        adb('shell','input','keyevent','KEYCODE_HOME');
+        await delay(2600);
+        assert.ok(adb('shell','dumpsys','notification','--noredact').includes('org.irgunshiuraitorah.app'),
+          'Native Media3 notification must remain posted during Home');
+        assert.ok(adb('shell','dumpsys','media_session').includes('org.irgunshiuraitorah.app'),
+          'Media3 session must survive Home');
+        adb('shell','am','start','-W','-n','org.irgunshiuraitorah.app/.MainActivity');
+        await delay(1600);
+        report.soak.events.push({minute,action:'Home, media notification, reopen'});
+      }
+      if ([2,7,11].includes(minute)) {
+        const beforeVideo=await sample();
+        assert.ok(beforeVideo.media3.active && beforeVideo.media3.playing,
+          'Native Audio must still be playing before Video presentation change');
+        await tapVisible('[data-watch-mode="video"]');
+        const video=await waitNative(s=>s.media3.active&&s.media3.videoSelected&&s.media3.playing&&
+          s.media3.sourceType==='hls'&&s.media3.frames>beforeVideo.media3.frames+12,
+          'Soak Video must resume with freshly decoded native HLS frames');
+        assert.ok(video.media3.positionMs>=beforeVideo.media3.positionMs-1250,
+          'Native video track enable must never rewind the same Media3 clock');
+        await delay(1400);
+        const frames=await sample();
+        assert.ok(frames.media3.frames>video.media3.frames+3&&
+          frames.media3.positionMs>video.media3.positionMs+650,
+          'Soak needs real moving native frames, not only Media3 READY state');
+        await tapVisible('[data-watch-mode="audio"]');
+        const audio=await waitNative(s=>s.media3.active&&!s.media3.videoSelected&&s.media3.playing&&
+          s.native.mode==='AUDIO'&&s.media3.sourceType==='hls',
+          'Soak Video-to-Audio must keep the SAME native HLS stream playing');
+        assert.ok(audio.media3.positionMs>=frames.media3.positionMs-1250,
+          'Changing to Audio must preserve the original Media3 position');
+        report.soak.events.push({minute,action:'physical Video to Audio with native decoded frames'});
+      }
+      assert.equal(adb('shell','pidof','org.irgunshiuraitorah.app').trim(),initialPid,
+        'Android process must not crash or restart during the true 15-minute soak');
+      const current=await sample();
+      assert.ok(current.media3.active && current.media3.playing &&
+        !current.media3.videoSelected && current.native.mode==='AUDIO',
+        'Audible native HLS Audio must remain playing after minute '+minute);
+      assert.equal(current.media3.sourceType,'hls',
+        '15-minute soak must never fall back to MP4 or WebView video');
+      assert.equal(current.video,null,'No HTML video decoder may appear during native soak');
+      assert.ok(current.media3.positionMs>last.media3.positionMs+22000,
+        'Native Media3 playback position froze or rewound at minute '+minute);
+      const pss=memory();
+      report.soak.samples.push({minute,positionMs:current.media3.positionMs,pssKb:pss,
+        source:current.media3.sourceType});
+      last=current;
+      console.log('Native Media3 soak minute '+minute+' OK, HLS seconds '+(current.media3.positionMs/1000).toFixed(1));
+    }
+    assert.ok(Date.now()-soakStart>=15*60*1000,
+      'This must be at least 15 minutes of genuine wall-clock playback');
+    const peak=Math.max(...report.soak.samples.map(s=>s.pssKb));
+    report.soak.memoryBudget={baselineKb:baselinePss,peakKb:peak,
+      maxGrowthKb:131072,maxPssKb:393216};
+    assert.ok(peak<=393216&&peak-baselinePss<=131072,
+      '15-minute native Media3 player must stay within app memory limits');
+    report.soak.actualElapsedMs=Date.now()-soakStart;
+    report.checks.push({label:'Real 15-minute native Media3 HLS, lock/Home/reopen, Audio/Video and memory',
+      minutes:15,samples:report.soak.samples.length,events:report.soak.events.length});
+  }
   report.result='passed';
 
 } catch (error) {
