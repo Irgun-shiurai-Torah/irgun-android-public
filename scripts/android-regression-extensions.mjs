@@ -452,6 +452,9 @@ try{
         // tutorial on first use. The OS consumes Back while that dialog owns
         // focus; pretending Back reached the app caused every later test to fail.
         // Dismiss it with a real physical tap, verify app focus, THEN send Back.
+        // SystemUI can show its first-use education just after PlayerView
+        // reports fullscreen; let that real OS window appear before inspecting.
+        await delay(700);
         await dismissFullscreenEducation();
         await delay(2300);const moved=await read();
         audibleVideo(moved);
