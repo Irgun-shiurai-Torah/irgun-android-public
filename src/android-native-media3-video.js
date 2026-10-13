@@ -132,9 +132,12 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     setVolume:async volume=>{await native.playback({operation:'volume',volume});return volume;},
     play:async()=>native.playback({operation:'play'}),
     pause:async()=>native.playback({operation:'pause'}),
-    setMode:async next=>{
+    setMode:async (next, options={})=>{
       if(!['audio','video'].includes(next))throw new Error('Invalid Media3 mode');
-      await native.mode({mode:next});
+      // The downloaded local MP3 may replace HLS only in AUDIO, using the same
+      // native ExoPlayer and validated private file path. VIDEO reopens its
+      // original HLS/MP4 source at the shared live clock.
+      await native.mode({mode:next,offlineUri:next==='audio'?String(options.offlineUri||''):''});
       mode=next;
       if(next==='video'){framePlacedOnScreen=false;trackFrame();await positionFrame();}
       else framePlacedOnScreen=false;
