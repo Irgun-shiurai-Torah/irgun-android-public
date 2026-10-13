@@ -15,6 +15,7 @@ import androidx.media3.common.C;
 import androidx.media3.common.ForwardingPlayer;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MediaMetadata;
+import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
@@ -139,6 +140,17 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private ExoPlayer player;
+    // Opt-in single-engine video: this SAME Media3 ExoPlayer renders HLS video
+    // and continues its audio track when the picture is hidden. No second WebView
+    // decoder, shadow MP3, seek chase or audio-focus ownership transfer exists.
+    private boolean nativeVideoSourceActive = false;
+    private boolean nativeVideoSelected = false;
+    private boolean nativeVideoUsingHls = false;
+    private boolean nativeVideoMp4FallbackAttempted = false;
+    private String nativeVideoHlsUrl = "";
+    private String nativeVideoMp4Url = "";
+    private volatile long nativeVideoRenderedFrames = 0L;
+    private volatile boolean nativeVideoFirstFrameRendered = false;
     private Player sessionPlayer;
     private PlaybackMode sessionPlayerMode = PlaybackMode.AUDIO;
     private MediaSession mediaSession;
@@ -374,6 +386,12 @@ public class IrgunPlaybackService extends MediaSessionService {
                 .setHandleAudioBecomingNoisy(true)
                 .build();
             player.setWakeMode(C.WAKE_MODE_LOCAL);
+            // Count actual frames submitted to the native renderer. A READY
+            // player or advancing clock alone is not proof of moving picture.
+            player.setVideoFrameMetadataListener((presentationTimeUs, releaseTimeNs, format, mediaFormat) -> {
+                nativeVideoRenderedFrames++;
+                nativeVideoFirstFrameRendered = true;
+            });
             
             player.addListener(new Player.Listener() {
                 @Override
@@ -558,6 +576,8 @@ public class IrgunPlaybackService extends MediaSessionService {
             player.release();
             player = null;
         }
+        nativeVideoSourceActive = false;
+        nativeVideoSelected = false;
         if (activeInstance == this) activeInstance = null;
         super.onDestroy();
     }
@@ -582,7 +602,12 @@ public class IrgunPlaybackService extends MediaSessionService {
         long position;
         long duration;
         boolean playing;
-        if (playbackMode == PlaybackMode.VIDEO) {
+        if (playbackMode == PlaybackMode.VIDEO && nativeVideoSourceActive && player != null) {
+            position = Math.max(0L, player.getCurrentPosition());
+            long d = player.getDuration();
+            duration = d == C.TIME_UNSET ? 0L : Math.max(0L, d);
+            playing = player.isPlaying();
+        } else if (playbackMode == PlaybackMode.VIDEO) {
             position = externalVideoPositionMs;
             duration = externalVideoDurationMs;
             playing = externalVideoPlaying;
@@ -641,6 +666,21 @@ public class IrgunPlaybackService extends MediaSessionService {
     ) {
         boolean sameLecture = cleanStatic(lectureId).equals(this.lectureId);
         boolean sameAudio = cleanStatic(audioUrl).equals(this.audioUrl);
+        // The opt-in native Video source owns the SAME ExoPlayer. Repeated JS
+        // metadata/prewarm updates must never replace its HLS MediaItem with
+        // the old muted MP3 shadow; a genuinely new lecture releases the mode.
+        if (nativeVideoSourceActive && sameLecture) {
+            this.title = cleanStatic(title).isEmpty() ? this.title : cleanStatic(title);
+            this.speaker = cleanStatic(speaker).isEmpty() ? this.speaker : cleanStatic(speaker);
+            this.image = cleanStatic(image);
+            if (!cleanStatic(audioUrl).isEmpty()) this.audioUrl = cleanStatic(audioUrl);
+            publishNativeState();
+            return;
+        }
+        if (!sameLecture) {
+            nativeVideoSourceActive = false;
+            nativeVideoSelected = false;
+        }
         if (!sameLecture || !sameAudio) {
             cancelNetworkRecovery();
             audioSeekGuard.clear();
@@ -828,6 +868,9 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private void setVideoStateInternal(long positionMs, long durationMs, boolean playing, float speed, float volume, boolean authoritative) {
+        // A stale WebView callback must never turn native HLS back into a muted
+        // shadow player, or overwrite the one authoritative Media3 clock.
+        if (nativeVideoSourceActive) return;
         long incomingPositionMs = Math.max(0L, positionMs);
         long previousExternalPositionMs = Math.max(0L, externalVideoPositionMs);
         long previousExternalDurationMs = Math.max(0L, externalVideoDurationMs);
@@ -940,6 +983,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private void switchAuthorityToVideoInternal(String requestedLectureId, long positionMs, long durationMs, boolean playing, float speed, float volume) {
+        if (nativeVideoSourceActive) return;
         String requestedId = cleanStatic(requestedLectureId);
         if (!requestedId.isEmpty() && !requestedId.equals(cleanStatic(lectureId))) {
             Log.w(TAG, "[Playback] ignored stale AUDIO -> VIDEO authority request for " + requestedId + "; active=" + lectureId);
@@ -1113,6 +1157,12 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private void beginBackgroundVideoHandoffInternal() {
+        if (nativeVideoSourceActive) {
+            // Home is just a presentation change. Disable the video track;
+            // the EXACT SAME Media3 audio and clock keep playing uninterrupted.
+            switchNativeVideoPresentationInternal(false);
+            return;
+        }
         if (pendingBackgroundHandoff) return;
         if (playbackMode != PlaybackMode.VIDEO || player == null || audioUrl.isEmpty()
                 || (!externalVideoPlaying && !player.getPlayWhenReady())) return;
