@@ -281,11 +281,32 @@ try {
     }
     assert.ok(Math.abs(seeked.media3.positionMs-600000)<8000,
       'Physical seek must reach ten minutes in real Media3 audio');
-    await delay(1500);const sought=await sample();
-    assert.ok(sought.media3.positionMs>seeked.media3.positionMs+500,
-      'Audio must keep playing after physical seek');
-    report.checks.push({label:'Physical native seek to ten minutes keeps advancing',
-      start:seeked.media3.positionMs,end:sought.media3.positionMs});
+    // Seeking to an unbuffered HLS segment legitimately enters Media3 BUFFERING
+    // with playWhenReady=true. Observed API 30/34/35 traces resumed in about
+    // two seconds; an immediate 1.5-second assertion mistook this for a stall.
+    // Require ACTUAL resumed audio and advancing media time within 25 seconds.
+    // No test clock is synthesized and a persistent stall remains a failure.
+    const seekRecoveryStart=Date.now();
+    let sought,seekLast;
+    while(Date.now()-seekRecoveryStart<25000) {
+      seekLast=await sample();
+      if(seekLast.native.mode==='AUDIO' && seekLast.native.audioIsPlaying &&
+        seekLast.native.audioOutputVolume>0 && seekLast.media3.active &&
+        seekLast.media3.playing &&
+        seekLast.media3.positionMs>seeked.media3.positionMs+1100) {
+        sought=seekLast;
+        break;
+      }
+      await delay(450);
+    }
+    assert.ok(sought,'Unbuffered physical HLS seek did not recover audible moving Audio within 25 seconds; last='+JSON.stringify({
+      native:seekLast?.native,media3:seekLast?.media3
+    }));
+    assert.ok(sought.media3.positionMs<seeked.media3.positionMs+26000,
+      'Physical seek unexpectedly jumped ahead of the playing HLS clock');
+    report.checks.push({label:'Unbuffered physical seek to ten minutes recovers audible advancing native Audio',
+      start:seeked.media3.positionMs,end:sought.media3.positionMs,
+      actualRecoveryMs:Date.now()-seekRecoveryStart});
     await tapVisible('[data-watch-mode="video"]');
     const videoAgain=await waitMedia3(s=>s.activeMode==='video'&&s.native.mode==='VIDEO'&&
       s.media3.active&&s.media3.videoSelected&&s.media3.playing&&s.media3.firstFrame&&
