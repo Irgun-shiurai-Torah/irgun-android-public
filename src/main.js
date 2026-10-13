@@ -8,6 +8,7 @@ import { FileTransfer } from '@capacitor/file-transfer';
 import { Share } from '@capacitor/share';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { createAndroidHlsPlayer } from './android-hls-video.js';
+import { createNativeMedia3VideoPlayer, nativeMedia3BetaEnabled } from './android-native-media3-video.js';
 import {rememberCachedAccount,readCachedAccount,clearCachedAccount} from './android-offline-account.js';
 import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } from './offline-validation.js';
 import { downloadOfflineAudio } from './offline-download.js';
@@ -8897,7 +8898,23 @@ async function initWatchVimeoOnce(userInitiated = false) {
   try {
     if (state.watchVideoForceVimeoId !== videoKey) {
       try {
-        player = await createAndroidHlsPlayer({
+        if (Capacitor.getPlatform() === 'android' && nativeMedia3BetaEnabled()) {
+          try {
+            player = await createNativeMedia3VideoPlayer({
+              apiBase:API,videoId:videoKey,iframe:frame,
+              resumeSeconds:Math.max(0,Number(state.watchResumeSeconds)||0),
+              title:displayShiurTitle(video.title,'Shiur'),
+              speaker:video._speakerLabel||video.speaker||'Irgun Shiurai Torah',
+              image:video.thumbnail||video.image||'',
+              audioUrl:video.hasAudio?audioUrl(mediaApiId(video,videoKey)):'',
+              speed:Number(state.playbackSpeed)||1,
+              onError:error=>console.warn('[Media3 beta] native Video failed',error)
+            });
+          } catch (nativeError) {
+            console.warn('[Media3 beta] falling back to the existing WebView player',nativeError);
+          }
+        }
+        if (!player) player = await createAndroidHlsPlayer({
           apiBase: API,
           platform: Capacitor.getPlatform(),
           videoId: videoKey,
@@ -8972,7 +8989,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
       if (state.systemPipActive && state.watchResumeSeconds > 0 && (state.systemPipLastSeconds < 3 || state.watchResumeSeconds >= state.systemPipLastSeconds - 3)) {
         state.systemPipLastSeconds = state.watchResumeSeconds;
       }
-      syncNativeMediaSession(videoMediaItem, true, data.seconds || 0, data.duration || video.duration || 0, 'video');
+      if (!player.isIrgunNativeVideoPlayer) syncNativeMediaSession(videoMediaItem, true, data.seconds || 0, data.duration || video.duration || 0, 'video');
       if (!usesNativeUnifiedAudio() && 'mediaSession' in navigator && Number(data.duration) > 0) {
         try { navigator.mediaSession.setPositionState({duration:Number(data.duration), playbackRate:1, position:Math.min(Number(data.seconds)||0, Number(data.duration))}); } catch (_) {}
       }
@@ -8996,7 +9013,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
       usageAnalytics.setMedia({isPlaying:true,mediaType:'video',playerState:'playing',shiurId:String(videoKey)});
       usageAnalytics.event('video_start',{shiurId:String(videoKey),mediaType:'video',dedupeKey:`video-start:${videoKey}`,cooldownMs:10000});
       refreshPersistentMiniVideoChrome();
-      prewarmVideoAudioMetadata(video, videoKey);
+      if (!player.isIrgunNativeVideoPlayer) prewarmVideoAudioMetadata(video, videoKey);
       let t = await player.getCurrentTime().catch(()=>state.watchResumeSeconds || 0);
       const d = await player.getDuration().catch(()=>Number(video.duration)||0);
       // Rescue a handoff if Vimeo's first play attempt was delayed. Never stop the
@@ -9015,7 +9032,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
         });
       }
       state.watchResumeSeconds = Math.max(0, Number(t) || state.watchResumeSeconds || 0);
-      syncNativeMediaSession(videoMediaItem, true, t, d, 'video');
+      if (!player.isIrgunNativeVideoPlayer) syncNativeMediaSession(videoMediaItem, true, t, d, 'video');
     });
     player.on('pause', async () => {
       if (generation !== state.watchVimeoGeneration) return;
@@ -9024,14 +9041,14 @@ async function initWatchVimeoOnce(userInitiated = false) {
       refreshPersistentMiniVideoChrome();
       const t = await player.getCurrentTime().catch(()=>state.watchResumeSeconds || 0);
       const d = await player.getDuration().catch(()=>Number(video.duration)||0);
-      syncNativeMediaSession(videoMediaItem, false, t, d, 'video');
+      if (!player.isIrgunNativeVideoPlayer) syncNativeMediaSession(videoMediaItem, false, t, d, 'video');
     });
     player.on('ended', data => {
       if (generation!==state.watchVimeoGeneration) return;
       state.watchVideoPlaying = false;
       usageAnalytics.setMedia({isPlaying:false,mediaType:'video',playerState:'paused',shiurId:String(videoKey)});
       refreshPersistentMiniVideoChrome();
-      syncNativeMediaSession(videoMediaItem, false, data.duration || video.duration || 0, data.duration || video.duration || 0, 'video');
+      if (!player.isIrgunNativeVideoPlayer) syncNativeMediaSession(videoMediaItem, false, data.duration || video.duration || 0, data.duration || video.duration || 0, 'video');
       saveHistory(videoId(video), 'video', data.duration || video.duration || 0, data.duration || video.duration || 0, true);
     });
     if (player.on) {
@@ -9043,7 +9060,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
     // Publish the media URL immediately so Android can pre-warm the background
     // audio engine while Vimeo is loading/playing. This makes Home-button handoff
     // much closer to continuous playback.
-    syncNativeMediaSession(videoMediaItem, false, requestedResume, Number(video.duration) || 0, 'video');
+    if (!player.isIrgunNativeVideoPlayer) syncNativeMediaSession(videoMediaItem, false, requestedResume, Number(video.duration) || 0, 'video');
 
     // The iframe itself already contains #t=<seconds>s, so Vimeo requests the
     // middle of the video from the beginning instead of loading 0:00 and then
@@ -9057,9 +9074,9 @@ async function initWatchVimeoOnce(userInitiated = false) {
     }
     state.watchVimeoReady = true;
     if (typeof player.setPlaybackRate === 'function') await player.setPlaybackRate(Number(state.playbackSpeed)||1).catch(()=>{});
-    prewarmVideoAudioMetadata(video, videoKey);
+    if (!player.isIrgunNativeVideoPlayer) prewarmVideoAudioMetadata(video, videoKey);
 
-    if (requestedResume > 1) {
+    if (!player.isIrgunNativeVideoPlayer && requestedResume > 1) {
       // Usually the timestamp fragment already put Vimeo at the right place. Verify
       // quickly and use the SDK seek only as a fallback, avoiding the old multi-second
       // ready -> seek -> buffer cycle.
@@ -9086,7 +9103,15 @@ async function initWatchVimeoOnce(userInitiated = false) {
     }
 
     if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video') return;
-    if (audioToVideoHandoff && state.watchAudioToVideoHandoff && state.watchAudioToVideoHandoffId === videoKey && !playbackIsPaused() && usesNativeUnifiedAudio()) {
+    if (player.isIrgunNativeVideoPlayer) {
+      // The same Media3 service already owns BOTH picture and sound. There is
+      // no separate WebView decoder to synchronize or commit as a shadow source.
+      state.watchAudioToVideoHandoff = false;
+      state.watchAudioToVideoHandoffId = '';
+      state.watchAudioToVideoTargetSeconds = 0;
+      state.watchVideoPlaying = !(await player.getPaused().catch(()=>true));
+      player.updateFrame?.();
+    } else if (audioToVideoHandoff && state.watchAudioToVideoHandoff && state.watchAudioToVideoHandoffId === videoKey && !playbackIsPaused() && usesNativeUnifiedAudio()) {
       if (!await finishInitializedNativeVideoHandoff(player, video, videoKey)) return;
     } else if (audioToVideoHandoff && state.watchAudioToVideoHandoff && state.watchAudioToVideoHandoffId === videoKey && !playbackIsPaused()) {
       // Vimeo is now initialized. Chase the live audio clock once, while muted,
