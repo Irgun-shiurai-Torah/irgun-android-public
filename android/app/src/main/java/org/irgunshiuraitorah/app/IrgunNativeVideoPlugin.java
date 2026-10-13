@@ -22,6 +22,8 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.PluginMethod;
 
 import java.net.URI;
+import java.io.File;
+import java.io.IOException;
 
 /**
  * Opt-in, Android-only native video. A PlayerView is attached to the existing
@@ -187,12 +189,37 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         });
     }
 
+    // Capacitor Filesystem returns a file:// URI for private offline MP3s.
+    // Never let an untrusted WebView argument turn Media3 into an arbitrary
+    // Android file reader. Canonicalize and confine it to this app's offline
+    // folder; the downloader has already validated its length.
+    private String approvedOfflineAudio(String supplied) throws IOException {
+        if (supplied == null || supplied.trim().isEmpty()) return "";
+        Uri uri = Uri.parse(supplied);
+        if (!"file".equalsIgnoreCase(uri.getScheme()) || uri.getPath() == null)
+            throw new IllegalArgumentException("Offline Media3 requires a private file URI");
+        File dir = new File(getContext().getFilesDir(), "irgun-offline").getCanonicalFile();
+        File audio = new File(uri.getPath()).getCanonicalFile();
+        if (!audio.getPath().startsWith(dir.getPath() + File.separator)
+                || !audio.getName().endsWith(".mp3") || !audio.isFile()
+                || !audio.canRead() || audio.length() < 65536L)
+            throw new IllegalArgumentException("Offline file is missing or outside Irgun private storage");
+        return Uri.fromFile(audio).toString();
+    }
+
     @PluginMethod
     public void mode(PluginCall call) {
         boolean video = "video".equals(call.getString("mode", ""));
+        String requestedOffline = video ? "" : call.getString("offlineUri", "");
+        final String approved;
+        try { approved = approvedOfflineAudio(requestedOffline); }
+        catch (Exception error) {
+            call.reject("Offline audio source is not a verified private MP3", error);
+            return;
+        }
         visible = video;
         if (!video) fullscreen = false;
-        IrgunPlaybackService.nativeVideoPresentation(video);
+        IrgunPlaybackService.nativeVideoPresentation(video, approved);
         getActivity().runOnUiThread(() -> {
             if (video) {
                 ensureSurface();
