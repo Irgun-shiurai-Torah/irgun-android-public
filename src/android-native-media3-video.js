@@ -28,6 +28,15 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
   const cleanups=[];
   const positionFrame=async()=>{
     if(destroyed || mode!=='video')return;
+    // Native PlayerView is a separate Android View above the whole WebView.
+    // Without this, the physical picture blocks the Save dialog's Watch Later
+    // button and even its Close button. Hide ONLY the surface during the
+    // modal; the SAME Media3 audio stream and timeline continue underneath.
+    if(document.querySelector('.playlist-picker-backdrop')){
+      await native.frame({width:0,height:0,
+        viewportWidth:innerWidth,viewportHeight:innerHeight}).catch(()=>{});
+      return;
+    }
     const current=placeholder.isConnected?placeholder:document.getElementById('watchVimeoFrame');
     if(!current)return;
     const rect=current.getBoundingClientRect();
