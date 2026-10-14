@@ -2630,3 +2630,30 @@ body.irgun-android .watch-audio-controls .skip-control {
   background: #e5edf5 !important;
   opacity: 1;
 }
+
+/* Android 11 WebViews predate dvh. Inside an env()/calc() declaration an
+   unsupported dvh can resolve height to auto, leaving Watch content clipped
+   by its fixed overlay with no scrollable viewport. */
+@supports not (height: 100dvh) {
+  body.irgun-android:not(.irgun-system-pip) #persistentVideoMount.watch-full-host .watch-overlay {
+    max-height: 100vh !important;
+  }
+  body.irgun-android:not(.irgun-system-pip) #persistentVideoMount.watch-full-host .watch-scroll {
+    height: calc(100vh - 56px - env(safe-area-inset-top)) !important;
+  }
+  @media (orientation: landscape) and (max-height: 480px) {
+    body.irgun-android:not(.irgun-system-pip) #persistentVideoMount.watch-full-host .watch-scroll {
+      height: calc(100vh - 44px - env(safe-area-inset-top)) !important;
+    }
+    body.irgun-android:not(.irgun-system-pip) #persistentVideoMount.watch-full-host .watch-frame {
+      height: clamp(96px, calc(100vh - 118px), 360px) !important;
+    }
+  }
+}
+
+/* Mirror the Android native thumbnail into the RTL grid's reserved first
+   column, so Hebrew Mini Pause does not sit over the moving picture. */
+html[dir="rtl"] body.irgun-android #persistentVideoMount.watch-mini-host .watch-player-card {
+  left: auto !important;
+  right: 4px !important;
+}

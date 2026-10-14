@@ -405,7 +405,12 @@ try {
 
   // Scroll from below the video to avoid the separate downward-to-mini gesture.
   const beforeScroll=(await sample()).media3;
-  const scrollX=Math.round(beforeScroll.surfaceX+beforeScroll.surfaceVisibleWidth*.5);
+  const scrollViewport=JSON.parse(await evaluate('JSON.stringify((()=>{const e=document.querySelector("#persistentVideoMount.watch-full-host .watch-scroll"),r=e?.getBoundingClientRect();return e&&r?{height:e.clientHeight,contentHeight:e.scrollHeight,top:r.top,bottom:r.bottom,viewport:innerHeight,scrollTop:e.scrollTop,dvh:CSS.supports("height","100dvh")}:null;})())'));
+  assert.ok(scrollViewport&&scrollViewport.height>100&&scrollViewport.height<=scrollViewport.viewport&&
+    scrollViewport.contentHeight>scrollViewport.height,
+    'Watch must have a bounded scrollable viewport on old and current Android WebViews');
+  report.scrollViewport=scrollViewport;
+  const scrollX=Math.round(beforeScroll.surfaceX+beforeScroll.surfaceVisibleWidth*.95);
   const scrollY=Math.round(beforeScroll.surfaceY+beforeScroll.surfaceVisibleHeight+90);
   adb('shell','input','swipe',String(scrollX),String(scrollY),String(scrollX),
     String(scrollY-Math.round(beforeScroll.surfaceVisibleHeight*.65)),'700');
@@ -442,10 +447,17 @@ try {
       for(let n=0;n<30&&(await evaluate('document.documentElement.lang'))===originalLang;n++)await delay(150);
       assert.notEqual(await evaluate('document.documentElement.lang'),originalLang,'Physical language toggle must change real layout direction');
     }
+    const rtl=await evaluate('document.documentElement.dir === "rtl"');
+    await waitNative(s=>s.media3.mini&&s.media3.miniExpandRect&&s.media3.miniPlayPauseRect&&
+      (rtl ? s.media3.miniExpandRect.x>s.media3.miniPlayPauseRect.x+s.media3.miniPlayPauseRect.width :
+        s.media3.miniExpandRect.x+s.media3.miniExpandRect.width<s.media3.miniPlayPauseRect.x),
+      'Actual English/Hebrew native thumbnail and Pause must occupy separate visible grid columns');
     for(let cycle=0;cycle<2;cycle++) {
       const before=(await sample()).media3,started=Date.now();
       assert.ok(before.miniPlayPauseRect,'Mini must expose a visible native Pause button');
       assert.equal(before.miniPlayPauseLabel,'Pause mini video');
+      assert.ok(before.miniPlayPauseZ>before.miniExpandZ,
+        'Native Pause must remain above the thumbnail hit target, including RTL overlap');
       await tapNativeLabel('Pause mini video');
       const paused=await waitNative(s=>s.media3.mini&&!s.media3.playWhenReady&&!s.media3.playing&&
         s.media3.miniPlayPauseLabel==='Play mini video','Physical Mini Pause must stop real Media3 playback without expanding');
