@@ -288,14 +288,24 @@ async function nativeNotificationTap(pattern,name) {
 async function verifyOfflineServerHistory(id) {
   const expected=(await read()).native.audioPositionMs/1000;
   const headers={Origin:'https://localhost','X-Irgun-App':'1','Content-Type':'application/json'};
-  const response=await fetch('https://api.irgunshiuraitorah.com/login',{method:'POST',headers,body:JSON.stringify({email:process.env.IRGUN_TEST_EMAIL,password:process.env.IRGUN_TEST_PASSWORD}),signal:AbortSignal.timeout(20000)});
+  const response=await fetch('https://api.irgunshiuraitorah.com/login',{method:'POST',headers,body:JSON.stringify({email:process.env.IRGUN_TEST_EMAIL,password:process.env.IRGUN_TEST_PASSWORD}),signal:AbortSignal.timeout(30000)})
+    .catch(error=>{throw new Error('Independent offline-history login transport failed: '+error.message,{cause:error});});
   assert.equal(response.status,200,'Independent QA session required to verify offline history reached server');
   const session=await response.json();assert.ok(session.sessionToken&&!session.user?.isAdmin,'Dedicated non-admin session required');
   const authenticated={...headers,Authorization:'Bearer '+session.sessionToken};
   try {
     let match;const deadline=Date.now()+45000;
     while(Date.now()<deadline) {
-      const response=await fetch('https://api.irgunshiuraitorah.com/history',{headers:authenticated,signal:AbortSignal.timeout(12000)});
+      let response;
+      try { response=await fetch('https://api.irgunshiuraitorah.com/history',{headers:authenticated,
+        signal:AbortSignal.timeout(Math.max(1,Math.min(12000,deadline-Date.now())))}); }
+      catch(error) {
+        if(error.name!=='TimeoutError'&&!(error instanceof TypeError&&error.message==='fetch failed')) throw error;
+        // Retry only this read within the original overall history-sync deadline.
+        // Login/mutations and every real server position assertion remain strict.
+        (report.historyReadTransportFailures||=[]).push({error:error.name,at:new Date().toISOString()});
+        await delay(1000);continue;
+      }
       assert.equal(response.status,200,'Real server history must be readable after reconnect');
       const data=await response.json(),actualPosition=(await read()).native.audioPositionMs/1000;
       match=(data.items||[]).find(x=>String(x.videoId||x.rawAudioId||x.id||'').replace(/^audio:/,'')===String(id)&&String(x.mediaType||'').toLowerCase()==='audio'&&Number(x.progressSeconds||x.positionSeconds||0)>=Math.floor(expected)&&Number(x.progressSeconds||x.positionSeconds||0)<=actualPosition+3);

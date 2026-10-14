@@ -5,4 +5,7 @@
     <instrumentation android:name=".WindowObserver"
         android:targetPackage="org.irgunshiuraitorah.qa"
         android:functionalTest="true" />
+    <instrumentation android:name=".NativeTouch"
+        android:targetPackage="org.irgunshiuraitorah.qa"
+        android:functionalTest="true" />
 </manifest>
