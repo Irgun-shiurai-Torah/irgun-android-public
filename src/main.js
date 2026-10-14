@@ -498,6 +498,25 @@ function refreshOfflineButtonsForKey(key = '') {
   });
 }
 
+async function prepareNativeVideoBufferForOfflineTransfer() {
+  // Concurrent 60MB MP3 transfer briefly starved ExoPlayer's ~6s HLS buffer
+  // on Android 16. Allow the existing Media3 decoder to prefetch the next
+  // segments BEFORE the native FileTransfer consumes network bandwidth.
+  // This never pauses, seeks, replaces or starts a second player.
+  if (Capacitor.getPlatform() !== 'android' ||
+      !state.watchVimeo?.isIrgunNativeVideoPlayer || state.watchMode !== 'video') return;
+  const until=Date.now()+16000;
+  while (Date.now()<until) {
+    const s=await IrgunNativeVideo.snapshot().catch(()=>null);
+    if (!s?.active || !s.videoSelected || !s.playWhenReady || !s.playing) return;
+    if (Number(s.bufferedPositionMs)-Number(s.positionMs)>=18000) return;
+    await new Promise(resolve=>setTimeout(resolve,500));
+  }
+  // Bounded wait: never permanently block an offline download on a slow
+  // connection. The next test still detects a real VIDEO playback freeze.
+  console.warn('[Offline] Media3 prebuffer headroom remained low; starting download after bounded wait');
+}
+
 async function saveOffline(kind, id) {
   state.offlineSaveLastError = '';
   const normalizedKind = kind === 'audio' ? 'audio' : 'video';
@@ -555,6 +574,7 @@ async function saveOffline(kind, id) {
     const headers = { 'X-Irgun-App':'1' };
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
     const transferOptions = { url, path:fileInfo.uri, headers, progress:true };
+    if (normalizedKind==='video') await prepareNativeVideoBufferForOfflineTransfer();
     const transfer = Capacitor.getPlatform() === 'android'
       ? await downloadOfflineAudio(transferOptions, {
           download:options => FileTransfer.downloadFile(options),
