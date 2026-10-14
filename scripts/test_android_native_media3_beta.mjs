@@ -225,3 +225,50 @@ test('real mini thumbnail taps expand native PlayerView and rotation restores ph
   assert.equal(requests[0].height,63);
   assert.equal(requests[0].x,12);
 });
+
+
+test('Android landscape reserves a genuinely visible PlayerView rectangle',()=>{
+  const css=readFileSync('src/style.css','utf8');
+  assert.match(css,/@media \(orientation: landscape\) and \(max-height: 480px\)/);
+  assert.match(css,/#persistentVideoMount\.watch-full-host \.watch-frame/);
+  assert.match(css,/height: clamp\(96px, calc\(100dvh - 118px\), 360px\) !important/);
+  assert.match(css,/aspect-ratio: auto !important/);
+  assert.match(adapter,/r\.bottom<=innerHeight\+2/,
+    'Never claim a VIDEO pass if the real frame extends beyond Android window');
+  const landscapeHeight=296,top=44+33,frame=Math.max(96,Math.min(landscapeHeight-118,360));
+  assert.ok(top+frame<landscapeHeight,
+    'The landscape frame must physically fit in a 640x296 Android WebView');
+});
+
+test('logged-out Android Library exposes offline files before unavailable account sections',()=>{
+  assert.match(app,/if \(!state\.user\) \{\s*const index=tabs\.findIndex/,
+    'Offline downloads should be first on the signed-out Library strip');
+  assert.match(app,/tabs\.unshift\(\.\.\.tabs\.splice\(index,1\)\)/);
+  assert.match(app,/state\.screen === 'library' && !state\.user/);
+  assert.match(app,/state\.librarySection='downloads'/);
+  assert.match(app,/data-offline-play=/,
+    'Offline downloads must expose physical Play buttons in local Library');
+});
+
+test('MP3 download leaves active native Video playing and gives HLS buffer headroom',async()=>{
+  const start=app.indexOf('async function prepareNativeVideoBufferForOfflineTransfer()');
+  const end=app.indexOf('\nasync function saveOffline',start);
+  assert.ok(start>=0&&end>start,'Prebuffer logic must be tied to actual offline transfer');
+  assert.match(app,/if \(normalizedKind==='video'\) await prepareNativeVideoBufferForOfflineTransfer\(\)/);
+  const script=app.slice(start,end);
+  assert.doesNotMatch(script,/\.pause\(|\.seekTo\(|setMode\(|\.prepare\(|\.setMediaItem\(/,
+    'The downloader may not pause/seek/replace video while preparing HLS');
+  let snapshots=0;
+  const context={
+    Capacitor:{getPlatform:()=> 'android'},
+    state:{watchVimeo:{isIrgunNativeVideoPlayer:true},watchMode:'video'},
+    IrgunNativeVideo:{snapshot:async()=>{snapshots++;return {
+      active:true,videoSelected:true,playing:true,playWhenReady:true,
+      positionMs:200000,bufferedPositionMs:226000
+    };}},
+    Date,console,setTimeout
+  };
+  runInNewContext(script+'\nthis.prepareBuffer=prepareNativeVideoBufferForOfflineTransfer',context);
+  await context.prepareBuffer();
+  assert.equal(snapshots,1,'Enough genuinely buffered HLS must start the download immediately');
+});
