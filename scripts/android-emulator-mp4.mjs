@@ -221,9 +221,9 @@ try {
   if(firstNative.active) {
     const sample=async()=>({...(await read()),
       media3:await evaluate("window.Capacitor.nativePromise('IrgunNativeVideo','snapshot',{})")});
-    const waitMedia3=async(test,message)=>{
-      let last;
-      for(let n=0;n<150;n++){last=await sample();if(test(last))return last;await delay(400);}
+    const waitMedia3=async(test,message,timeoutMs=60000)=>{
+      const deadline=Date.now()+timeoutMs;let last;
+      while(Date.now()<deadline){last=await sample();if(test(last))return last;await delay(400);}
       throw new Error(message+'; actual native state='+JSON.stringify(last));
     };
     const ready=await waitMedia3(s=>s.activeMode==='video'&&s.native.mode==='VIDEO'&&
@@ -328,12 +328,19 @@ try {
       'Audio to Video must restore visibly moving native decoded frames');
     assert.ok(videoAgain.media3.positionMs>=sought.media3.positionMs-1800,
       'Native Audio to Video must not rewind the ten-minute lecture');
-    await delay(10000);const ten=await sample();
+    const restoredAt=Date.now();
+    await delay(10000);
+    const ten=await waitMedia3(s=>s.media3.playing&&s.media3.videoSelected&&
+      s.media3.positionMs>videoAgain.media3.positionMs+7000&&
+      s.media3.frames>videoAgain.media3.frames+10,
+      'Native Video must resume its advancing clock and decoded frames after buffering',15000);
     assert.ok(ten.media3.positionMs>videoAgain.media3.positionMs+7000&&
       ten.media3.frames>videoAgain.media3.frames+10,
-      'Ten seconds of native Video must advance decoded frames and clock');
-    report.checks.push({label:'Ten-minute Audio to Video restores moving frames for ten seconds',
-      start:videoAgain.media3,end:ten.media3});
+      'Restored native Video must advance decoded frames and clock');
+    assert.equal(ten.media3.playerIdentity,videoAgain.media3.playerIdentity,'Video buffering must not replace ExoPlayer');
+    assert.equal(ten.media3.mediaItemIdentity,videoAgain.media3.mediaItemIdentity,'Video buffering must not replace its MediaItem');
+    report.checks.push({label:'Ten-minute Audio to Video restores moving frames and advancing clock',
+      recoveryMs:Date.now()-restoredAt,start:videoAgain.media3,end:ten.media3});
     await tapVisible('[data-watch-mode="audio"]');
     const audioAgain=await waitMedia3(s=>s.activeMode==='audio'&&s.native.mode==='AUDIO'&&
       s.native.audioIsPlaying&&!s.media3.videoSelected&&s.media3.playing,

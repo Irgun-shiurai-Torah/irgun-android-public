@@ -261,12 +261,16 @@ try {
   assert.ok(audioStart>=moved.media3.positionMs-1250,
     'Changing presentation must not restart the lecture or rewind the shared clock');
   await delay(4500);
-  const audioProgress=await sample();
+  const audioProgress=await waitNative(s=>s.media3.playing&&!s.media3.videoSelected&&
+    s.media3.positionMs>audioStart+2500,
+    'The same HLS Audio clock must advance after a bounded buffering interval',20000);
   assert.ok(audioProgress.media3.playing&&!audioProgress.media3.videoSelected,
     'Native Audio must continue without pressing Play again');
   assert.ok(audioProgress.media3.positionMs>audioStart+2500,
     'The same Media3 HLS audio clock must keep moving after Video is hidden');
   assert.equal(audioProgress.media3.sourceType,'hls','Switching to Audio must not replace the HLS MediaItem');
+  assert.equal(audioProgress.media3.playerIdentity,audio.media3.playerIdentity,'Audio buffering must retain the same ExoPlayer');
+  assert.equal(audioProgress.media3.mediaItemIdentity,audio.media3.mediaItemIdentity,'Audio buffering must retain the same MediaItem');
   report.checks.push({label:'Video to Audio switches only the video track, no new decoder/clock',before:audio.media3,after:audioProgress.media3});
   await tapVisible('[data-watch-mode="video"]');
   const resumed=await waitNative(s=>s.activeMode==='video'&&s.media3.active&&

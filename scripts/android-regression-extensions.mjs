@@ -5,7 +5,7 @@ import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
 import {safeNativeBackgroundHandoff} from './android-background-handoff-check.mjs';
 import {startMediaRequest,completeMediaRequest,failedDuringOffline} from './android-network-evidence.mjs';
-import {fullscreenEducationTapPoint,mediaNotificationClock,mediaNotificationControlPoint} from './android-system-ui-observation.mjs';
+import {fullscreenEducationTapPoint,mediaNotificationClock,settledMediaNotificationControlPoint} from './android-system-ui-observation.mjs';
 
 // Run after android-emulator-mp4.mjs: the actual reported shiur is already
 // playing in native AUDIO mode. All UI actions below are physical ADB events.
@@ -280,8 +280,12 @@ async function seekAudio(seconds) {
   return wait(s=>Math.abs(Number(s.native.audioPositionMs)/1000-seconds)<8,'Native seek did not reach '+seconds+' seconds');
 }
 async function nativeNotificationTap(pattern,name) {
-  const xml=nativeHierarchy('emulator-report/notification-'+name+'.xml');
-  const point=mediaNotificationControlPoint(xml,name,pattern);
+  // SystemUI can briefly show Connecting while the same player buffers.
+  // Observe the requested real action twice before issuing exactly one tap.
+  const point=await settledMediaNotificationControlPoint({
+    readHierarchy:()=>nativeHierarchy('emulator-report/notification-'+name+'.xml'),
+    action:name,pattern,delay
+  });
   adb('shell','input','tap',...point.map(String));
   await delay(800);
 }
@@ -866,6 +870,8 @@ try{
       report.nativeNetworkSource=initialTransport;save();
       const originalPid=adb('shell','pidof',pkg);
       const originalSource=start.native.lectureId;
+      const originalPlayer=start.media3.playerIdentity;
+      const originalMediaItem=start.media3.mediaItemIdentity;
       let throttled=false;
       const genuineSeek=async(bufferEnd)=>{
         let before=await read(),last=before;
@@ -966,12 +972,19 @@ try{
           s.media3.bufferedPositionMs>s.media3.positionMs&&
           s.media3.positionMs>=lost.media3.positionMs-2000,
           'Native HLS did not resume from the unbuffered failed seek after real network restoration',95000);
-        await delay(2500);const again=await read();audibleVideo(again);
+        const again=await wait(s=>s.media3?.playing&&s.media3.videoSelected&&
+          s.media3.positionMs>recovered.media3.positionMs+900&&
+          s.media3.frames>recovered.media3.frames+3,
+          'Recovered native transport must resume its clock and decoded frames',25000);
+        audibleVideo(again);
         assert.ok(again.media3.positionMs>recovered.media3.positionMs+900&&
           again.media3.frames>recovered.media3.frames+3,
           'Native HLS failed to render new frames after transport recovery');
         assert.equal(adb('shell','pidof',pkg),originalPid,'Actual app process changed during network recovery');
         assert.equal(again.native.lectureId,originalSource,'Network recovery changed to a different shiur');
+        assert.equal(again.media3.playerIdentity,originalPlayer,'Network recovery must retain the same ExoPlayer');
+        if(again.media3.sourceType===initialTransport)assert.equal(again.media3.mediaItemIdentity,
+          originalMediaItem,'Transport retry must retain the same MediaItem');
         checks('Native ExoPlayer resumed moving '+initialTransport.toUpperCase()+' at original lecture and position after genuine unbuffered network loss',
           {fromMs:lost.media3.positionMs,toMs:again.media3.positionMs});
       }finally{
