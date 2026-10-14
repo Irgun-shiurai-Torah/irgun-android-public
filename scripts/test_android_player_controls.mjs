@@ -52,6 +52,26 @@ test('background renders coalesce and keep a real sheet touch alive through poin
  f.handlers.pointerup({pointerId:1});f.render();assert.equal(f.renders,0);
  await f.flush();assert.equal(f.renders,1);
 });
+test('closing Audio renders Video immediately before its persistent host consumes the overlay',()=>{
+ const renderStart=app.indexOf('function render() {');
+ const renderEnd=app.indexOf('\n\nfunction syncOpenFilterChecks',renderStart);
+ const state={playerOpen:true,screen:'shiurim',current:{kind:'video-audio',id:'one'},watchVideo:{id:'one'},watchMode:'audio'};
+ const target={innerHTML:'audio sheet'};let binds=0,deferrals=0;
+ const context={state,app:target,tabSwipeRenderGate:{shouldDefer:()=>false},
+  androidPlayerSheetRenderGate:{shouldDefer:()=>{deferrals++;return true;}},
+  document:{activeElement:null},usageAnalytics:{setScreen:()=>{}},analyticsScreenLabel:()=>'',
+  shiurimHtml:()=>'',preserveAuthFormDraft:()=>()=>{},preserveHomeSearchDraft:()=>()=>{},
+  preserveAndroidPlayerSheetScroll:()=>()=>{},Capacitor:{getPlatform:()=> 'android'},
+  shell:()=>state.watchMode==='video'?'video overlay with native anchor':'audio sheet',
+  playlistPickerHtml:()=>'',bind:()=>{binds++;},syncLivePlaybackAnalytics:()=>{},
+  updatePlayerUi:()=>{},refreshOfflineButtonsForKey:()=>{},initWatchVimeo:()=>{},setTimeout:()=>{}};
+ runInNewContext(app.slice(renderStart,renderEnd)+'\nrender();',context);
+ assert.equal(binds,0);assert.equal(deferrals,1);assert.equal(target.innerHTML,'audio sheet');
+ state.playerOpen=false;state.watchMode='video';
+ runInNewContext('render();',context);
+ assert.equal(binds,1);assert.equal(deferrals,1);
+ assert.equal(target.innerHTML,'video overlay with native anchor','Video host must receive Video markup synchronously');
+});
 test('an unrelated pointer cannot release a sheet touch and a new touch cancels pending release',async()=>{
  const f=gateFixture();f.down(1);f.render();f.handlers.pointerup({pointerId:2});
  assert.equal(f.timers.size,0);

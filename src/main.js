@@ -6460,7 +6460,9 @@ function preserveAuthFormDraft() {
 
 function render() {
   if (tabSwipeRenderGate.shouldDefer()) return;
-  if (androidPlayerSheetRenderGate.shouldDefer()) return;
+  // Closing Audio or opening Video must replace the sheet immediately: the
+  // persistent Video host consumes the newly rendered overlay synchronously.
+  if (state.playerOpen && androidPlayerSheetRenderGate.shouldDefer()) return;
   // Keep the actual focused input/Android IME connection alive. Copying the
   // value into a replacement field still drops native keys queued for the old one.
   if (state.screen === 'home' && !state.loading && !state.error && document.activeElement?.id === 'homeLibrarySearch') {
