@@ -57,7 +57,7 @@ test('closing Audio renders Video immediately before its persistent host consume
  const renderEnd=app.indexOf('\n\nfunction syncOpenFilterChecks',renderStart);
  const state={playerOpen:true,screen:'shiurim',current:{kind:'video-audio',id:'one'},watchVideo:{id:'one'},watchMode:'audio'};
  const target={innerHTML:'audio sheet'};let binds=0,deferrals=0;
- const context={state,app:target,syncAndroidVideoDisplay(){},tabSwipeRenderGate:{shouldDefer:()=>false},
+ const context={state,app:target,syncAndroidBottomNavigation(){},syncAndroidVideoDisplay(){},tabSwipeRenderGate:{shouldDefer:()=>false},
   androidPlayerSheetRenderGate:{shouldDefer:()=>{deferrals++;return true;}},
   document:{activeElement:null},usageAnalytics:{setScreen:()=>{}},analyticsScreenLabel:()=>'',
   shiurimHtml:()=>'',preserveAuthFormDraft:()=>()=>{},preserveHomeSearchDraft:()=>()=>{},

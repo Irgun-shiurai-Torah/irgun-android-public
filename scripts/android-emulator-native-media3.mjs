@@ -129,21 +129,21 @@ try {
   let [left,top,right,bottom]=measuredBounds;
   report.nativeBounds=measuredBounds;
   const nativePoint=p=>[Math.round(left+p.x*(right-left)/p.width),Math.round(top+p.y*(bottom-top)/p.height)];
-  const visiblePoint=async (selector,allowHeader=false)=>JSON.parse(await evaluate(`JSON.stringify((()=>{
+  const visiblePoint=async (selector,allowHeader=false,allowFooter=false)=>JSON.parse(await evaluate(`JSON.stringify((()=>{
     // A card has several Watch targets. Its cover center can be obscured by
     // sibling Watch/Listen buttons; choose a genuinely visible target instead.
     for(const b of document.querySelectorAll(${JSON.stringify(selector)})) {
       const r=b.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
       const hit=document.elementFromPoint(x,y);
-      if(y>${allowHeader?0:70} && y<innerHeight-75 && (hit===b || b.contains(hit)))
+      if(y>${allowHeader?0:70} && y<innerHeight-${allowFooter?0:75} && (hit===b || b.contains(hit)))
         return {x,y,width:innerWidth,height:innerHeight};
     }
     return null;
   })())`));
-  const tapVisible=async (selector,allowHeader=false)=>{
+  const tapVisible=async (selector,allowHeader=false,allowFooter=false)=>{
     const measured=await settledNativeTapPoint({
       readBounds:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),
-      readPoint:()=>visiblePoint(selector,allowHeader),delay
+      readPoint:()=>visiblePoint(selector,allowHeader,allowFooter),delay
     });
     [left,top,right,bottom]=measured.bounds;
     adb('shell','input','tap',...measured.point.map(String));report.gestures.push({selector,...measured});
@@ -387,6 +387,36 @@ try {
   };
   await verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,delay,report,
     showControls:()=>showNativeControls(),tapExit:()=>tapNativeLabel('Exit video fullscreen')});
+  // Real footer taps navigate while the SAME video continues in Mini. DOM
+  // protocol node IDs prove feed/page renders do not replace the navigation.
+  const navDocument=await command('DOM.getDocument',{depth:0});
+  const navIdentity=async()=> (await command('DOM.querySelector',{
+    nodeId:navDocument.root.nodeId,selector:'.bottom-nav'})).nodeId;
+  const navState=()=>evaluate(`(()=>{
+    const nav=document.querySelector('.bottom-nav'),r=nav?.getBoundingClientRect();
+    const b=nav?.querySelector('[aria-current="page"]'),p=b?.getBoundingClientRect();
+    const hit=p?document.elementFromPoint(p.left+p.width/2,p.top+p.height/2):null;
+    const mini=document.querySelector('#persistentVideoMount.watch-mini-host .watch-overlay')?.getBoundingClientRect();
+    return {screen:window.ISTReleaseQA.snapshot().screen,active:b?.dataset.nav,
+      visible:!!r&&r.width>0&&r.height>0,unobscured:!!hit&&(hit===b||b.contains(hit)),
+      count:document.querySelectorAll('.bottom-nav').length,top:r?.top,miniBottom:mini?.bottom};
+  })()`);
+  const originalNav=await navIdentity();assert.ok(originalNav,'A real persistent navigation node is required');
+  const navBefore=(await sample()).media3,navStarted=Date.now();
+  for(const tab of ['library','home']){
+    await tapVisible('.bottom-nav [data-nav="'+tab+'"]',false,true);
+    const continued=await waitNative(s=>s.media3.mini&&s.media3.playing&&s.media3.frames>navBefore.frames+5,
+      'A real bottom-tab tap must keep moving video in the existing Mini player');
+    const page=await navState();assert.equal(page.screen,tab);assert.equal(page.active,tab);
+    assert.equal(page.count,1);assert.equal(page.unobscured,true);assert.equal(page.visible,true);
+    assert.ok(page.miniBottom<=page.top-4,'Mini video and its controls must sit above the floating navigation');
+    assert.equal(await navIdentity(),originalNav,'Page rendering must preserve the actual navigation element');
+    samePlayback(navBefore,continued.media3,'Persistent navigation to '+tab,Date.now()-navStarted);
+    report.checks.push({label:'Physical floating navigation to '+tab+' highlights the active tab and preserves same-player Mini',page});
+  }
+  writeFileSync('emulator-report/floating-navigation-mini.png',execFileSync('adb',['exec-out','screencap','-p']));
+  await tapNativeLabel('Expand mini video');
+  await waitNative(s=>!s.media3.mini&&s.media3.playing,'The same Mini player must expand after bottom-tab navigation');
   let controls=await showNativeControls();
   assert.ok(controls.media3.availableResolutions.length>=2,
     'Quality integration fixture must contain at least two actual HLS resolutions');
