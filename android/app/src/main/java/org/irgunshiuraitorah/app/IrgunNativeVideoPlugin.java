@@ -425,6 +425,11 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             miniPlayPauseTarget.setMinWidth(0); miniPlayPauseTarget.setMinimumWidth(0);
             // Native thumbnail/Expand can overlap a WebView button in RTL or on
             // narrow phones. Own the actual Pause rectangle ABOVE that surface.
+            // Material Button's default StateListAnimator lowers elevation to
+            // 2dp when released. That put RTL Pause BELOW the 16px thumbnail
+            // Expand overlay, so the physical Pause touch expanded Video.
+            miniPlayPauseTarget.setStateListAnimator(null);
+            miniPlayPauseTarget.setTranslationZ(0f);
             miniPlayPauseTarget.setElevation(20f);
             miniPlayPauseTarget.setVisibility(View.GONE);
             miniPlayPauseTarget.setOnClickListener(view -> {
@@ -658,6 +663,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("sizeButtonRect", controlRect(sizeButton));
             response.put("miniExpandRect", controlRect(miniExpandTarget));
             response.put("miniPlayPauseRect", controlRect(miniPlayPauseTarget));
+            response.put("miniPlayPauseZ", miniPlayPauseTarget == null ? 0f : miniPlayPauseTarget.getZ());
+            response.put("miniExpandZ", miniExpandTarget == null ? 0f : miniExpandTarget.getZ());
             response.put("miniPlayPauseLabel", miniPlayPauseTarget == null ? "" : miniPlayPauseTarget.getContentDescription());
             ExoPlayer player = IrgunPlaybackService.nativeVideoPlayer();
             response.put("playerIdentity", player == null ? 0 : System.identityHashCode(player));
