@@ -1,0 +1,9 @@
+{
+  "release": "android-pr37-real-device",
+  "date": "2026-10-14",
+  "base_commit": "2f529d212f388987ba2a4d0ae137d35c3057b2c5",
+  "source_pr": 37,
+  "google_play_track": "internal",
+  "native_media3_video": true,
+  "purpose": "Physical device validation of native video, Audio-Video handoffs, downloads, background playback, mini-player and 15-minute reliability. Not for production."
+}
