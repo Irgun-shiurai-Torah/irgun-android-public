@@ -477,6 +477,16 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         call.resolve();
     }
 
+    private JSObject controlRect(View control) {
+        android.graphics.Rect rect = new android.graphics.Rect();
+        if (control == null || !control.isShown() || !control.getGlobalVisibleRect(rect)
+                || rect.width() <= 0 || rect.height() <= 0) return null;
+        JSObject result = new JSObject();
+        result.put("x", rect.left); result.put("y", rect.top);
+        result.put("width", rect.width()); result.put("height", rect.height());
+        return result;
+    }
+
     @PluginMethod
     public void snapshot(PluginCall call) {
         getActivity().runOnUiThread(() -> {
@@ -501,6 +511,11 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("pipButtonVisible", pipButton != null && pipButton.isShown());
             response.put("qualityButtonVisible", qualityButton != null && qualityButton.isShown());
             response.put("qualityHeight", requestedQualityHeight);
+            // Read-only actual Android geometry. No UI/controller state mutation.
+            response.put("pipButtonRect", controlRect(pipButton));
+            response.put("qualityButtonRect", controlRect(qualityButton));
+            response.put("sizeButtonRect", controlRect(sizeButton));
+            response.put("miniExpandRect", controlRect(miniExpandTarget));
             ExoPlayer player = IrgunPlaybackService.nativeVideoPlayer();
             response.put("playerIdentity", player == null ? 0 : System.identityHashCode(player));
             response.put("mediaItemIdentity", player == null || player.getCurrentMediaItem() == null

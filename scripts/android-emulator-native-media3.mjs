@@ -285,6 +285,33 @@ try {
 
   // Every action below is a physical Android touch. CDP only observes state.
   const tapNativeLabel=async (description, text) => {
+    const controlKey={
+      'Choose video quality':'qualityButtonRect',
+      'Enter Picture-in-Picture':'pipButtonRect',
+      'Enter video fullscreen':'sizeButtonRect',
+      'Exit video fullscreen':'sizeButtonRect',
+      'Expand mini video':'miniExpandRect'
+    }[description];
+    if (controlKey) {
+      for (let attempt=0;attempt<12;attempt++) {
+        // Two fresh native geometry reads replace the expensive whole-window
+        // hierarchy scan for app-owned buttons. That scan could return a stale
+        // visible node just as the 8-second native controller timer expired.
+        const first=(await sample()).media3[controlKey];
+        await delay(80);
+        const state=(await sample()).media3, second=state[controlKey];
+        if (first && second && Math.abs(first.x-second.x)<=1 &&
+            Math.abs(first.y-second.y)<=1 && second.width>0 && second.height>0) {
+          const point=[Math.round(second.x+second.width/2),Math.round(second.y+second.height/2)];
+          adb('shell','input','tap',...point.map(String));
+          report.gestures.push({nativeDescription:description,point,nativeRect:second});
+          return;
+        }
+        if (description!=='Expand mini video') await showNativeControls();
+        else await delay(200);
+      }
+      throw new Error('Actual native control has no stable visible rectangle: '+description);
+    }
     let xml;
     for (let attempt=0; attempt<12; attempt++) {
       xml=nativeHierarchy();
