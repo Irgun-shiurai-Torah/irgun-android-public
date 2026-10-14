@@ -154,6 +154,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             labels[i+1]=choices.get(i).height+"p";
             if (requestedQualityHeight==choices.get(i).height) checked=i+1;
         }
+        surface.setControllerShowTimeoutMs(0);
         qualityDialog=new AlertDialog.Builder(getActivity()).setTitle("Video quality")
             .setSingleChoiceItems(labels, checked, (dialog, which) -> {
                 // Dialog may outlive a source switch. Never apply a stale TrackGroup.
@@ -171,6 +172,12 @@ public final class IrgunNativeVideoPlugin extends Plugin {
                 qualityButton.setText(requestedQualityHeight==0 ? "Auto" : requestedQualityHeight+"p");
                 dialog.dismiss();
             }).setNegativeButton("Cancel", null).create();
+        qualityDialog.setOnDismissListener(dialog -> {
+            if (surface != null) {
+                surface.setControllerShowTimeoutMs(8000);
+                surface.showController();
+            }
+        });
         qualityDialog.show();
     }
 

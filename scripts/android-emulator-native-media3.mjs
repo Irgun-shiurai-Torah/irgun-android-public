@@ -299,6 +299,13 @@ try {
         report.gestures.push({nativeDescription:description,text,point:[x,y]});
         return;
       }
+      if (['Choose video quality','Enter video fullscreen','Exit video fullscreen',
+          'Enter Picture-in-Picture'].includes(description)) {
+        // The hierarchy observer may take longer than Media3's control timeout.
+        // Reopen the actual controls with a physical video tap when observation
+        // confirms they disappeared; never inject a controller visibility setter.
+        await showNativeControls();
+      }
       await delay(300);
     }
     throw new Error('Actual native control not visible: '+description+' / '+text+'; '+xml);
