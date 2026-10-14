@@ -1,11 +1,13 @@
 {
   "sourceBranch": "fix/android-postmerge-like-home-20261013",
-  "sourceCommit": "0c03df8cf9979c7c522079dd41de170573c3c1a3",
+  "sourceCommit": "2efd5b2eed351d6eed43def39f28abd1bf9d95ca",
   "track": "internal",
-  "requestedAt": "2026-10-14T21:29:57.192Z",
+  "requestedAt": "2026-10-14T22:37:46.789Z",
   "pullRequest": 37,
   "mergeIntoMain": false,
   "features": [
+    "Keep Android screen awake for playing/buffering video, release for Pause/Audio/Home",
+    "Physical sensor enters landscape fullscreen with system auto-rotate OFF; upright restores regular player; manual exit honored",
     "Vimeo-only catalog lectures use Vimeo; stop native playback before starting one Vimeo player; no false Audio availability",
     "Compact native PiP, Auto/resolution, speed, fullscreen exit and Mini controls; hide previous/next buttons",
     "System PiP button visible with device support/settings explanation",
@@ -15,12 +17,11 @@
     "Account tests pin a descriptor-verified native-video/audio lecture; Vimeo-only playback tested separately"
   ],
   "verification": {
-    "localTests": 233,
+    "localTests": 237,
     "androidPackaging": "npm run test:player passed",
-    "status": "Rebuilt after correcting Android PiP settings intent compile error; emulator matrix runs separately for concurrent phone testing.",
-    "limitations": [
-      "External session revocation unverified; QA no longer reads the application session credential"
-    ]
+    "status": "Physical emulator regression matrix running separately; user-authorized concurrent Internal testing.",
+    "fullMatrixRun": 38648924060,
+    "startupRun": 38648924014
   },
-  "releaseAttempt": 11
+  "releaseAttempt": 12
 }
