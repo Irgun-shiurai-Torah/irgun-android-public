@@ -3,7 +3,7 @@ import {writeFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
-import {accountSwipeDirection} from './android-account-native-scroll.mjs';
+import {accountSwipeDirection, watchPlayerReturnGesture} from './android-account-native-scroll.mjs';
 import {observedAdb} from './android-adb-observer.mjs';
 const email=process.env.IRGUN_TEST_EMAIL,password=process.env.IRGUN_TEST_PASSWORD;
 assert.ok(email&&password,'Configure dedicated verified account secrets IRGUN_TEST_EMAIL and IRGUN_TEST_PASSWORD');
@@ -100,6 +100,25 @@ async function tap(key) {
    await delay(500);
    continue;
   }
+  // Watch playback controls sit above the details, Follow and related items.
+  // On tall Watch pages return to the actual player with a physical swipe,
+  // verifying that the real scroll offset moved rather than looping blindly.
+  if (['audioMode','videoMode','audioPlay'].includes(key) && s.watchId && s.watchScroll) {
+    const sc=s.watchScroll;
+    if (sc.top>4) {
+      const gesture=watchPlayerReturnGesture(sc);
+      const from=native(gesture.from,s),to=native(gesture.to,s);
+      adb('shell','input','swipe',...from.map(String),...to.map(String),'460');
+      await delay(550);
+      const after=await read();
+      assert.equal(after.watchId,s.watchId,'Returning to player changed the selected shiur');
+      report.watchPlayerReturnSwipes=report.watchPlayerReturnSwipes||[];
+      report.watchPlayerReturnSwipes.push({key,beforeTop:sc.top,afterTop:Number(after.watchScroll?.top||0)});
+      if (!(after.watchScroll && after.watchScroll.top<sc.top-1))
+        throw new Error('Native player return swipe did not move Watch scroll towards Audio/Video controls');
+      continue;
+    }
+  }
   const commentAction=['commentText','postComment','editQaComment','editedQaText','saveQaComment','deleteQaComment'].includes(key);
   if(commentAction && s.watchScroll) {
     const sc=s.watchScroll;
@@ -127,7 +146,8 @@ async function tap(key) {
   else adb('shell','input','swipe',String(x),String(yStart),String(x),String(yEnd),'480');
   await delay(500);
  }
- throw new Error(`Visible control missing: ${key}`);
+ const final=await read();
+ throw new Error(`Visible control missing: ${key}; watchId=${final.watchId||'none'}; scrollTop=${final.watchScroll?.top??'n/a'}; mode=${final.watchMode||'none'}`);
 }
 async function type(key,value){assert.match(value,/^[a-zA-Z0-9@._+!-]+$/,'Dedicated credentials must use characters supported by native adb text input');await tap(key);
  if(key==='email'||key==='password') {
