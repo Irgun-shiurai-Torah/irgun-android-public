@@ -360,12 +360,18 @@ try {
       // whose process startup must not consume that remaining timeout.
       adb('shell','input','tap',...point);
       await waitNative(s=>!s.media3.qualityButtonVisible,'Physical tap must hide controls',10000);
+      // Separate these controller taps beyond Android's double-tap window.
+      // The same right-edge pair must not become a +15-second user gesture.
+      await delay(500);
     }
     if (fresh||!m.qualityButtonVisible) {
       adb('shell','input','tap',...point);
     }
-    return waitNative(s=>s.media3.pipButtonVisible&&s.media3.qualityButtonVisible,
+    const shown=await waitNative(s=>s.media3.pipButtonVisible&&s.media3.qualityButtonVisible,
       'Native PiP and quality buttons must be visible on the actual video',10000);
+    if(fresh)assert.equal(shown.media3.doubleTapSeekCount,m.doubleTapSeekCount,
+      'Physically refreshing controls must not trigger a double-tap seek');
+    return shown;
   };
   const samePlayback=(before,after,label,elapsed)=>{
     assert.equal(after.playerIdentity,before.playerIdentity,label+' created/replaced ExoPlayer');
