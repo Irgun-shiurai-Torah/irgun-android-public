@@ -171,7 +171,7 @@ jobs:
         if: ${{ github.ref == 'refs/heads/internal/play-pr37-20261014' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          IRGUN_TESTED_HEAD: '5e404a4040661e2894d74b06efe2f08efc815452'
+          IRGUN_TESTED_HEAD: '91207dc5108086cb48948504a224322a8aed82a3'
         run: |
           python3 - <<'PY'
           import json, os, time, urllib.request

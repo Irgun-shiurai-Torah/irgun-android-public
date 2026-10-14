@@ -23,6 +23,14 @@ public class NativeTouch extends Instrumentation {
             float x=Float.parseFloat(arguments.getString("x")), y=Float.parseFloat(arguments.getString("y"));
             UiAutomation ui=getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES);
             long first=SystemClock.uptimeMillis();
+            if ("hold".equals(arguments.getString("gesture"))) {
+                long hold=Long.parseLong(arguments.getString("holdMs"));
+                if (hold < 0 || hold > 10000) throw new IllegalArgumentException("Touch hold outside bounded test interval");
+                event(ui,first,MotionEvent.ACTION_DOWN,x,y); SystemClock.sleep(hold);
+                event(ui,first,MotionEvent.ACTION_UP,x,y);
+                result.putLong("holdMs",SystemClock.uptimeMillis()-first);
+                result.putString("gesture","hold");finish(-1,result);return;
+            }
             event(ui,first,MotionEvent.ACTION_DOWN,x,y); SystemClock.sleep(25);
             event(ui,first,MotionEvent.ACTION_UP,x,y); SystemClock.sleep(80);
             long second=SystemClock.uptimeMillis();
