@@ -91,6 +91,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     private final class NativePlayerView extends PlayerView {
         private float downX, downY;
         private boolean canSwipe, canDoubleTap;
+        private boolean holdingActionBar;
         private long downTime;
         private final NativeVideoDoubleTap doubleTap = new NativeVideoDoubleTap();
         NativePlayerView() { super(getActivity()); }
@@ -117,6 +118,11 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             }
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 downX = event.getX(); downY = event.getY(); downTime=event.getEventTime();
+                holdingActionBar = videoActions != null && videoActions.isShown()
+                    && !mini && !systemPip && downY >= 0 && downY < dp(44);
+                // These custom buttons sit outside Media3's controller. Hold
+                // its hide timer through DOWN/UP so it cannot cancel a click.
+                if (holdingActionBar) setControllerShowTimeoutMs(0);
                 canSwipe = visible && !mini && !systemPip
                     && downY > dp(44) && downY < getHeight() - dp(40);
                 canDoubleTap=canSwipe && !interactiveAt(this,downX,downY);
@@ -133,6 +139,11 @@ public final class IrgunNativeVideoPlugin extends Plugin {
                 cancel.recycle();
                 minimizeNativeVideo();
                 return true;
+            }
+            if (holdingActionBar && (event.getActionMasked() == MotionEvent.ACTION_UP
+                    || event.getActionMasked() == MotionEvent.ACTION_CANCEL)) {
+                holdingActionBar=false;
+                if (qualityDialog == null || !qualityDialog.isShowing()) setControllerShowTimeoutMs(8000);
             }
             if (event.getActionMasked() == MotionEvent.ACTION_UP) {
                 float slop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
@@ -169,6 +180,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         button.setAllCaps(false);
         button.setTextColor(Color.WHITE);
         button.setBackgroundColor(Color.TRANSPARENT);
+        button.setStateListAnimator(null);
+        button.setElevation(0); button.setTranslationZ(0);
         button.setMinWidth(0); button.setMinimumWidth(0);
         button.setPadding(0,0,0,0);
         button.setContentDescription(description);
@@ -368,6 +381,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             root.addView(surface, params);
             videoActions = new LinearLayout(getActivity());
             videoActions.setOrientation(LinearLayout.HORIZONTAL);
+            videoActions.setElevation(dp(8));
             videoActions.setBackgroundColor(0x99000000);
             FrameLayout.LayoutParams actionParams = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(44), Gravity.TOP);
@@ -657,6 +671,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("pipButtonVisible", pipButton != null && pipButton.isShown());
             response.put("qualityButtonVisible", qualityButton != null && qualityButton.isShown());
             response.put("qualityHeight", requestedQualityHeight);
+            response.put("qualityMenuVisible", qualityDialog != null && qualityDialog.isShowing());
             // Read-only actual Android geometry. No UI/controller state mutation.
             response.put("pipButtonRect", controlRect(pipButton));
             response.put("qualityButtonRect", controlRect(qualityButton));

@@ -288,7 +288,7 @@ try {
     surfaceX:resumed.media3.surfaceX,surfaceY:resumed.media3.surfaceY};
 
   // Every action below is a physical Android touch. CDP only observes state.
-  const tapNativeLabel=async (description, text) => {
+  const tapNativeLabel=async (description, text, {holdMs=0}={}) => {
     const controlKey={
       'Choose video quality':'qualityButtonRect',
       'Enter Picture-in-Picture':'pipButtonRect',
@@ -309,8 +309,15 @@ try {
         if (first && second && Math.abs(first.x-second.x)<=1 &&
             Math.abs(first.y-second.y)<=1 && second.width>0 && second.height>0) {
           const point=[Math.round(second.x+second.width/2),Math.round(second.y+second.height/2)];
-          adb('shell','input','tap',...point.map(String));
-          report.gestures.push({nativeDescription:description,point,nativeRect:second});
+          if(holdMs){
+            const touch=adb('shell','am','instrument','-w','-r','-e','gesture','hold',
+              '-e','holdMs',String(holdMs),'-e','x',String(point[0]),'-e','y',String(point[1]),
+              'org.irgunshiuraitorah.qa/.NativeTouch');
+            assert.match(touch,/INSTRUMENTATION_CODE: -1/,'Actual held touchscreen event must succeed');
+          }else adb('shell','input','tap',...point.map(String));
+          report.gestures.push({nativeDescription:description,point,nativeRect:second,holdMs});
+          if(description==='Choose video quality')await waitNative(s=>s.media3.qualityMenuVisible,
+            'Physical quality button must open its actual native menu',10000);
           return;
         }
         if (!['Expand mini video','Pause mini video','Play mini video'].includes(description)) await showNativeControls();
@@ -375,9 +382,14 @@ try {
       before,after:selected.media3});
   }
   controls=await showNativeControls();
-  await tapNativeLabel('Choose video quality');
+  const autoStarted=Date.now();
+  // Hold the real button beyond the eight-second hide timeout. It must still
+  // receive UP and open the quality menu, without a visibility setter.
+  await tapNativeLabel('Choose video quality',null,{holdMs:8500});
   await tapNativeLabel('','Auto');
-  await waitNative(s=>s.media3.qualityHeight===0&&s.media3.playing,'Auto must restore adaptive Media3 selection');
+  const auto=await waitNative(s=>s.media3.qualityHeight===0&&s.media3.playing,'Auto must restore adaptive Media3 selection');
+  samePlayback(controls.media3,auto.media3,'Auto after held quality control',Date.now()-autoStarted);
+  report.checks.push({label:'Held physical quality control survives its hide timeout and Auto preserves same player/item/clock',holdMs:8500,after:auto.media3});
 
   // Two actual native taps on each side must seek exactly once on the same engine.
   for(const direction of [1,-1]) {
