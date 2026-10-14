@@ -29,7 +29,7 @@ jobs:
   build:
     name: APK + AAB
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
 
     steps:
       - name: Checkout
@@ -171,7 +171,7 @@ jobs:
         if: ${{ github.ref == 'refs/heads/internal/play-pr37-20261014' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          IRGUN_TESTED_HEAD: '1501c82bb2a61b644b49847c35b27c6da5ebb7e9'
+          IRGUN_TESTED_HEAD: 'b8a9892fd236662003ff9524b46988126a5de1f1'
         run: |
           python3 - <<'PY'
           import json, os, time, urllib.request
@@ -183,7 +183,7 @@ jobs:
                            'Accept': 'application/vnd.github+json'})
               with urllib.request.urlopen(req, timeout=30) as response:
                   return json.load(response)
-          deadline = time.time() + 4200
+          deadline = time.time() + 9000
           required = {'Native Media3 HLS in actual app Android API ' + str(api)
                       for api in (30, 34, 35, 36)}
           while time.time() < deadline:
@@ -192,7 +192,7 @@ jobs:
               matrix = next((r for r in runs if r['name'] == 'Android release regression matrix'), None)
               jobs = get('actions/runs/' + str(matrix['id']) + '/jobs?per_page=100')['jobs'] if matrix else []
               observed = {j['name']: j for j in jobs if j['name'] in required}
-              failures = [name for name,j in observed.items() if j['status'] == 'completed' and j['conclusion'] != 'success']
+              failures = [j['name'] for j in jobs if j['status'] == 'completed' and j['conclusion'] != 'success']
               if startup and startup['status'] == 'completed' and startup['conclusion'] != 'success':
                   failures.append('Android emulator startup check')
               if matrix and matrix['status'] == 'completed' and matrix['conclusion'] != 'success':

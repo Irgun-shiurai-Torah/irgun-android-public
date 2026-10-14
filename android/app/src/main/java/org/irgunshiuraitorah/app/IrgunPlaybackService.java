@@ -333,7 +333,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private boolean scheduleNetworkRecovery(int errorCode) {
-        if (player == null || lectureId.isEmpty() || !audioUrl.startsWith("https://") ||
+        if (player == null || lectureId.isEmpty() || (!nativeVideoSourceActive && !audioUrl.startsWith("https://")) ||
             (errorCode != PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED &&
              errorCode != PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT)) return false;
         if (!networkRecoveryPending) {
@@ -362,13 +362,13 @@ public class IrgunPlaybackService extends MediaSessionService {
                 !lecture.equals(lectureId) || !source.equals(audioUrl)) return;
             networkRecoveryRunnable = null;
             networkRecoveryAttempts++;
-            long position = playbackMode == PlaybackMode.VIDEO ? externalVideoPositionMs : networkRecoveryPositionMs;
-            boolean wanted = playbackMode == PlaybackMode.VIDEO ? externalVideoPlaying : networkRecoveryWanted;
+            long position = !nativeVideoSourceActive && playbackMode == PlaybackMode.VIDEO ? externalVideoPositionMs : networkRecoveryPositionMs;
+            boolean wanted = !nativeVideoSourceActive && playbackMode == PlaybackMode.VIDEO ? externalVideoPlaying : networkRecoveryWanted;
             suppressVideoMirrorCallbacks();
             syncingVideoShadow = true;
             try {
-                setCandidateAudioFocus(playbackMode == PlaybackMode.AUDIO);
-                engine.setVolume(playbackMode == PlaybackMode.VIDEO ? 0f : logicalVolume);
+                setCandidateAudioFocus(nativeVideoSourceActive || playbackMode == PlaybackMode.AUDIO);
+                engine.setVolume(!nativeVideoSourceActive && playbackMode == PlaybackMode.VIDEO ? 0f : logicalVolume);
                 engine.seekTo(Math.max(0L, position));
                 engine.prepare();
                 engine.setPlayWhenReady(wanted);
@@ -1543,9 +1543,14 @@ public class IrgunPlaybackService extends MediaSessionService {
             switchNativeVideoPresentationInternal(false, "", true);
             return;
         }
+        // A temporary connection loss retries the SAME MediaItem. Replacing
+        // adaptive HLS with a large MP4 during a timeout made recovery slower
+        // and discarded the native timeline before the connection returned.
+        if (scheduleNetworkRecovery(error.errorCode)) return;
+        cancelNetworkRecovery();
         long position = Math.max(0L, player.getCurrentPosition());
         boolean intent = player.getPlayWhenReady();
-        // Retry HLS once after a genuine Media3 decoder/network failure.
+        // Non-transport HLS failures may try MP4 once on this same player.
         if (nativeVideoUsingHls && !nativeVideoMp4FallbackAttempted) {
             nativeVideoMp4FallbackAttempted = true;
             if (!nativeVideoMp4Url.isEmpty()) {
@@ -1571,6 +1576,7 @@ public class IrgunPlaybackService extends MediaSessionService {
             switchNativeVideoPresentationInternal(false);
             return;
         }
+        cancelNetworkRecovery();
         player.pause();
         player.stop();
         player.clearMediaItems();

@@ -1,15 +1,18 @@
 {
-  "source_branch": "fix/android-postmerge-like-home-20261013",
-  "source_commit": "1501c82bb2a61b644b49847c35b27c6da5ebb7e9",
-  "pull_request": 37,
+  "sourceBranch": "fix/android-postmerge-like-home-20261013",
+  "sourceCommit": "b8a9892fd236662003ff9524b46988126a5de1f1",
   "track": "internal",
-  "date": "2026-10-14",
-  "changes": [
-    "Native Mini Play/Pause",
-    "Video notification return",
-    "Visible partially scrolled video",
-    "Video double tap 15-second seeks",
-    "High-contrast Android Audio seek icons"
+  "requestedAt": "2026-10-14",
+  "pullRequest": 37,
+  "mergeIntoMain": false,
+  "features": [
+    "Native PiP, quality Auto/resolutions and fullscreen exit",
+    "Native Mini Pause/Play, swipe down and expansion",
+    "Video left/right double-tap 15-second seek",
+    "Partially scrolled Video remains visible",
+    "Home/notification returns to chosen Video",
+    "High-contrast Android Audio seek icons",
+    "Identity-bound native transport retry and current Android packaging tests"
   ],
-  "verification": "Full matching Android regression matrix and startup required before Play upload"
+  "verification": "Complete matching Android regression matrix and startup required before Play upload"
 }

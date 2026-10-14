@@ -25,6 +25,7 @@ test('actual native network recovery retains the engine, source, authority and u
    static class Log {static void d(String tag,String text){}}
    static final String TAG="test";ExoPlayer player=new ExoPlayer();Handler mainHandler=new Handler();
    String lectureId="lecture",audioUrl="https://api.example/audio/lecture";PlaybackMode playbackMode=PlaybackMode.VIDEO;
+   boolean nativeVideoSourceActive=false;
    boolean networkRecoveryPending,networkRecoveryWanted,syncingVideoShadow,externalVideoPlaying=true;float logicalVolume=1;long networkRecoveryPositionMs,networkRecoveryGeneration,externalVideoPositionMs=28690;int networkRecoveryAttempts;Runnable networkRecoveryRunnable;
    void suppressVideoMirrorCallbacks(){}void setCandidateAudioFocus(boolean value){}void publishNativeState(){}void refreshMediaNotification(){}
    ${methods}
@@ -44,6 +45,13 @@ test('actual native network recovery retains the engine, source, authority and u
     s.scheduleNetworkRecovery(2001);stale=s.mainHandler.pending;s.audioUrl="https://api.example/audio/another";stale.run();require(s.player.prepares==before,"Stale callbacks cannot restart another source");s.cancelNetworkRecovery();
     require(!s.scheduleNetworkRecovery(2004)&&!s.scheduleNetworkRecovery(2005),"HTTP/file failures are not fabricated network successes");
     s.audioUrl="file:///private/lecture.mp3";require(!s.scheduleNetworkRecovery(2001),"File corruption cannot be retried as transport failure");
+    s.nativeVideoSourceActive=true;s.playbackMode=PlaybackMode.VIDEO;s.player.position=91000;s.player.wanted=true;
+    s.scheduleNetworkRecovery(2002);s.networkRecoveryWanted=false;s.run();
+    require(s.player==engine&&s.player.position==91000&&!s.player.wanted&&s.player.volume==1,
+      "Native Video transport retries the exact engine/clock with audible volume and respects user Pause");
+    s.cancelNetworkRecovery();s.player.wanted=true;s.player.position=120000;s.scheduleNetworkRecovery(2001);s.run();
+    require(s.player.position==120000&&s.player.wanted&&s.player.volume==1,
+      "Native Video recovery must not use stale external Vimeo position or silence native audio");
     System.out.println("passed");
    }
   }`);

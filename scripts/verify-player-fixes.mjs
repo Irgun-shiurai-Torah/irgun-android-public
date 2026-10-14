@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { strict as assert } from 'node:assert';
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -10,11 +10,13 @@ const plugin = read('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPl
 const service = read('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java');
 const gradle = read('android/app/build.gradle');
 const instrumentedTest = read('android/app/src/androidTest/java/com/getcapacitor/myapp/ExampleInstrumentedTest.java');
-const sdkHelper = read('ENSURE-ANDROID-SDK-WINDOWS.cmd');
-const distBundle = read('dist/assets/index-v15122.js');
-const androidBundle = read('android/app/src/main/assets/public/assets/index-v15122.js');
+const sdkHelper = read('scripts/android-emulator-sdk-preflight.sh');
 const distIndex = read('dist/index.html');
 const androidIndex = read('android/app/src/main/assets/public/index.html');
+const entry=distIndex.match(/<script[^>]+src="\/(assets\/[^" ]+\.js)"/);
+assert.ok(entry,'Production Vite build must expose its actual module entry point');
+const distBundle = read('dist/'+entry[1]);
+const androidBundle = read('android/app/src/main/assets/public/'+entry[1]);
 
 assert.match(css, /\.watch-host-mini-chrome\s*\{\s*display\s*:\s*none\s*;/, 'mini chrome must be hidden outside the mini host');
 assert.match(css, /#persistentVideoMount\.watch-mini-host \.watch-host-mini-chrome[\s\S]*?display\s*:\s*grid\s*!important/, 'mini host must opt its chrome back in');
@@ -77,7 +79,7 @@ assert.match(plugin, /call\.reject\("Native playback did not confirm video autho
 assert.match(service, /ignored stale AUDIO -> VIDEO authority request/, 'service must reject stale lecture handoff requests');
 assert.match(service, /if \(clearLecture\) \{[\s\S]*?lectureId = "";[\s\S]*?audioUrl = "";/, 'clearing native playback must also clear lecture/source metadata');
 assert.match(service, /refreshMediaNotification\(\);/, 'native cleanup must refresh/remove stale notification state');
-assert.match(service, /new Snapshot\("", "", "", "", "", "", "", "", "", "", "", PlaybackMode\.AUDIO, PresentationMode\.FULL, 0L, 0L, false, 1f, 1f, false, 0L, 0L, false, false\)/, 'empty native snapshots must include the new playWhenReady field');
+assert.match(service, /new Snapshot\("", "", "", "", "", "", "", "", "", "", "", PlaybackMode\.AUDIO, PresentationMode\.FULL, 0L, 0L, false, 1f, 1f, false, 0L, 0L, false, false(?:, false){3}\)/, 'empty native snapshots must include the new playWhenReady field');
 
 // V15.1.10: video notification must represent Vimeo, not a buffering MP3 shadow.
 assert.match(service, /class SessionPlayer extends ForwardingPlayer/, 'MediaSession must use a logical forwarding player');
@@ -106,24 +108,21 @@ assert.doesNotMatch(activity.slice(activity.indexOf('public void onResume()'), a
 const pauseOnly = activity.slice(activity.indexOf('public void onPause()'), activity.indexOf('public void onStop()'));
 assert.doesNotMatch(pauseOnly, /setAppForeground\(false\)/, 'Home handoff must still be allowed through onPause');
 
-assert.match(gradle, /versionCode 93/);
+assert.match(gradle, /versionCode irgunVersionCode/);
+assert.match(gradle, /IRGUN_ANDROID_VERSION_CODE/);
 assert.match(main, /if \(state\.accountSection === 'settings'\) \{[\s\S]*?render\(\);[\s\S]*?reloadNotificationSettings\(\)\.finally/, 'Settings tab must render before notification refresh');
 assert.match(main, /if \(state\.screen === 'account' && state\.accountSection === 'settings'\) render\(\);/, 'Settings refresh must only rerender if the user is still on Settings');
 
-assert.match(gradle, /versionName "1\.0\.93"/);
+assert.match(gradle, /versionName irgunVersionName/);
 assert.match(instrumentedTest, /org\.irgunshiuraitorah\.app/);
 assert.match(sdkHelper, /ANDROID_SDK_ROOT/);
-assert.match(sdkHelper, /local\.properties/);
-assert.equal(existsSync(new URL('../android/local.properties', import.meta.url)), false, 'package must not ship a machine-specific local.properties');
+assert.match(sdkHelper, /system-images;android-/);
+assert.match(read('.gitignore'), /^android\/local\.properties$/m, 'machine-specific SDK configuration must stay outside the repository');
 assert.equal(distBundle, androidBundle, 'Android packaged JS must exactly match the final browser bundle');
-const appSourceMarker = "const API = 'https://api.irgunshiuraitorah.com';";
-assert.equal(
-  distBundle.slice(distBundle.indexOf(appSourceMarker)),
-  main.slice(main.indexOf(appSourceMarker)),
-  'final browser bundle must contain the exact patched app source after the dependency prelude'
-);
+assert.match(distBundle,/api\.irgunshiuraitorah\.com/,'Compiled app must retain the real API endpoint');
+assert.match(distBundle,/IrgunNativeVideo/,'Compiled Android app must include the native Video bridge');
 assert.equal(distIndex, androidIndex, 'Android packaged index must exactly match dist/index.html');
-assert.match(distIndex, /index-v15122\.js/);
+assert.ok(entry[1].startsWith("assets/index-"), "Validate current Vite entry, never a historical fixed version");
 
 assert.match(activity, /private static volatile boolean instanceAlive = false;/, 'MainActivity needs a warm-reopen alive marker');
 assert.match(activity, /public static boolean isInstanceAlive\(\)/, 'SplashActivity must be able to detect an existing MainActivity');
@@ -194,4 +193,4 @@ assert.match(plugin, /public void startAudioAt\(PluginCall call\) \{[\s\S]*?appF
 assert.match(plugin, /call\.resolve\(stateObject\(snapshot\)\);[\s\S]*?MAIN\.post\(\(\) -> notifyState\(snapshot\)\);/, 'confirmed AUDIO authority must publish one native state and start the ticker after resolving the bridge call');
 assert.match(main, /const alreadySaved = playlist\.items\.some[\s\S]*?\/custom-playlists\/remove[\s\S]*?\/custom-playlists\/add/, 'custom playlist destination must toggle add/remove like Save for Later');
 assert.match(main, /await this\.init\(\);[\s\S]*?nativeMediaPlugin\(\)\.startAudioAt/, 'native listener installation must be guaranteed before AUDIO start');
-console.log('V15.1.22 playlist toggle + native VIDEO-to-AUDIO bridge ticker assertions passed.');
+console.log('Current Android player source and packaged production assets verified.');

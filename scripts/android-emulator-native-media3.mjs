@@ -381,11 +381,23 @@ try {
     const before=(await sample()).media3,started=Date.now();
     const x=Math.round(before.surfaceX+before.surfaceVisibleWidth*(direction>0?.90:.10));
     const y=Math.round(before.surfaceY+before.surfaceVisibleHeight*.50);
-    adb('shell','input tap '+x+' '+y+'; input tap '+x+' '+y);
-    const target=Math.max(0,before.positionMs+direction*15000);
-    const sought=await waitNative(s=>s.media3.playing&&s.media3.frames>before.frames+3&&
-      Math.abs(s.media3.positionMs-target)<Date.now()-started+2500,
-      'Physical Video double tap must seek '+direction*15+' seconds once',25000);
+    const pid=adb('shell','pidof','org.irgunshiuraitorah.app');
+    const touch=adb('shell','am','instrument','-w','-r','-e','x',String(x),'-e','y',String(y),
+      'org.irgunshiuraitorah.qa/.NativeTouch');
+    assert.match(touch,/INSTRUMENTATION_CODE: -1/,'Actual touchscreen injection must succeed');
+    const interval=Number(touch.match(/tapIntervalMs=(\d+)/)?.[1]);
+    assert.ok(interval>0&&interval<=250,'Both real Android taps must fit the actual double-tap interval');
+    assert.equal(adb('shell','pidof','org.irgunshiuraitorah.app'),pid,'Touch test may not restart Irgun');
+    report.gestures.push({nativeDoubleTap:[x,y],tapIntervalMs:interval});
+    const sought=await waitNative(s=>s.media3.doubleTapSeekCount===before.doubleTapSeekCount+1&&
+      s.media3.playing&&s.media3.frames>before.frames+3&&
+      s.media3.positionMs>=s.media3.doubleTapSeekTargetMs-1250&&
+      s.media3.positionMs<=s.media3.doubleTapSeekTargetMs+s.media3.doubleTapSeekAgeMs+2000,
+      'Physical Video double tap must seek '+direction*15+' seconds once',12000);
+    const expected=Math.max(0,before.positionMs+direction*15000);
+    assert.ok(sought.media3.doubleTapSeekTargetMs>=expected-1250&&
+      sought.media3.doubleTapSeekTargetMs<=expected+Date.now()-started+1250,
+      'Touch must request the actual current position plus exactly 15 seconds once');
     assert.equal(sought.media3.playerIdentity,before.playerIdentity,'Double tap must keep ExoPlayer');
     assert.equal(sought.media3.mediaItemIdentity,before.mediaItemIdentity,'Double tap must keep MediaItem');
     report.checks.push({label:'Physical Video double tap seeks '+direction*15+' seconds on same player',before,after:sought.media3});

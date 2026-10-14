@@ -62,6 +62,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     private boolean systemPip;
     private int requestedQualityHeight;
     private boolean controllerVisible;
+    private long doubleTapSeekCount, doubleTapSeekTargetMs, doubleTapSeekAtMs;
 
     public static void systemPipChanged(boolean active) {
         IrgunNativeVideoPlugin plugin = current.get();
@@ -95,7 +96,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         NativePlayerView() { super(getActivity()); }
         private boolean interactiveAt(View view, float x, float y) {
             if (!view.isShown() || x < 0 || y < 0 || x >= view.getWidth() || y >= view.getHeight()) return false;
-            if (view != this && view.isEnabled() && view.isClickable()) return true;
+            if (view != this && !(view instanceof ViewGroup) && view.isEnabled() && view.isClickable()) return true;
             if (view instanceof ViewGroup) {
                 ViewGroup group=(ViewGroup)view;
                 for(int i=group.getChildCount()-1;i>=0;i--) {
@@ -107,6 +108,13 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             return false;
         }
         @Override public boolean dispatchTouchEvent(MotionEvent event) {
+            Rect clip=getClipBounds();
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN && clip != null
+                    && !clip.contains((int)event.getX(),(int)event.getY())) {
+                canSwipe=false; canDoubleTap=false; doubleTap.cancel();
+                // Covered header/content remains owned by the WebView below.
+                return false;
+            }
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 downX = event.getX(); downY = event.getY(); downTime=event.getEventTime();
                 canSwipe = visible && !mini && !systemPip
@@ -136,8 +144,11 @@ public final class IrgunNativeVideoPlugin extends Plugin {
                 if (direction != 0) {
                     ExoPlayer player = IrgunPlaybackService.nativeVideoPlayer();
                     if (player != null) {
-                        IrgunPlaybackService.seekTo(NativeVideoDoubleTap.seekTarget(
-                            player.getCurrentPosition(),player.getDuration(),direction));
+                        doubleTapSeekTargetMs=NativeVideoDoubleTap.seekTarget(
+                            player.getCurrentPosition(),player.getDuration(),direction);
+                        doubleTapSeekCount++;
+                        doubleTapSeekAtMs=android.os.SystemClock.elapsedRealtime();
+                        IrgunPlaybackService.seekTo(doubleTapSeekTargetMs);
                         Toast.makeText(getContext(),direction < 0 ? "−15 seconds" : "+15 seconds",
                             Toast.LENGTH_SHORT).show();
                     }
@@ -625,6 +636,10 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("firstFrame", state.firstFrame);
             response.put("frames", state.frameCount);
             response.put("positionMs", state.positionMs);
+            response.put("doubleTapSeekCount", doubleTapSeekCount);
+            response.put("doubleTapSeekTargetMs", doubleTapSeekTargetMs);
+            response.put("doubleTapSeekAgeMs", doubleTapSeekAtMs == 0 ? 0
+                : Math.max(0,android.os.SystemClock.elapsedRealtime()-doubleTapSeekAtMs));
             response.put("durationMs", state.durationMs);
             response.put("bufferedPositionMs", state.bufferedPositionMs);
             response.put("width", state.width);
@@ -661,6 +676,12 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             boolean visibleOnScreen = surface != null && surface.isShown()
                 && surface.getGlobalVisibleRect(onScreen)
                 && onScreen.width() > 0 && onScreen.height() > 0;
+            if (visibleOnScreen && surface.getClipBounds() != null) {
+                Rect clip = new Rect(surface.getClipBounds());
+                int[] location = new int[2]; surface.getLocationOnScreen(location);
+                clip.offset(location[0],location[1]);
+                visibleOnScreen = onScreen.intersect(clip) && onScreen.width()>0 && onScreen.height()>0;
+            }
             response.put("surfaceVisibleOnScreen", visibleOnScreen);
             response.put("surfaceX", visibleOnScreen ? onScreen.left : -1);
             response.put("surfaceY", visibleOnScreen ? onScreen.top : -1);
