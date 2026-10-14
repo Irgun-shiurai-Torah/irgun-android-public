@@ -39,7 +39,8 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
   const cleanups=[];
   const positionFrame=async()=>{
     if(destroyed || mode!=='video')return;
-    const nativeBounds={viewportWidth:innerWidth,viewportHeight:innerHeight};
+    const nativeBounds={viewportWidth:innerWidth,viewportHeight:innerHeight,
+      mini:document.body.classList.contains('irgun-watch-mini-hosted')};
     if(document.querySelector('.playlist-picker-backdrop')){
       // Hide the native view without stopping the SAME Media3 playback clock.
       framePlacedOnScreen=false;
@@ -99,7 +100,11 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     try{
       const s=await refresh();
       if(!s.active)return;
-      if(mode==='video'&&!framePlacedOnScreen)scheduleFrame();
+      // A native root can resize/rotate after the WebView has laid out. The
+      // DOM placeholder may look visible while Android's REAL PlayerView is
+      // still offscreen. Keep remeasuring until native visibility recovers.
+      if(mode==='video'&&s.videoSelected&&
+          (!framePlacedOnScreen||!s.surfaceVisibleOnScreen))scheduleFrame();
       const playing=s.videoSelected && s.playing;
       if(playing!==lastPlaying){lastPlaying=playing;emit(playing?'play':'pause',{seconds:s.positionMs/1000,duration:s.durationMs/1000});}
       emit('timeupdate',{seconds:s.positionMs/1000,duration:s.durationMs/1000,frames:s.frames});
