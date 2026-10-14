@@ -90,7 +90,7 @@ test('actual native Home readiness accepts an advancing shadow and rebinds only 
    static class IrgunPlaybackPlugin {static int requests;static void requestPauseVimeoForBackground(long id){requests++;}}
    static class Handler {Runnable pending;void postDelayed(Runnable run,long delay){pending=run;}}
    final String TAG="QA";final long DRIFT_LIMIT_MS=750;final Handler mainHandler=new Handler();
-   boolean pendingBackgroundHandoff=true,backgroundPauseRequested=false,backgroundWebViewStopped=false;long pendingBackgroundPositionMs=734122,backgroundHandoffStartedMs=0,backgroundHandoffId=11;
+   boolean taskRemoved=false,pendingBackgroundHandoff=true,backgroundPauseRequested=false,backgroundWebViewStopped=false;long pendingBackgroundPositionMs=734122,backgroundHandoffStartedMs=0,backgroundHandoffId=11;
    boolean pendingBackgroundWasPlaying=true;float logicalSpeed=1;Player player=new Player(),sessionPlayer;MediaSession mediaSession=new MediaSession();
    PlaybackMode playbackMode=PlaybackMode.VIDEO,sessionPlayerMode=PlaybackMode.VIDEO;int notifications;
    boolean isSessionAdded(MediaSession s){return true;}void addSession(MediaSession s){}void triggerNotificationUpdate(){notifications++;}
@@ -119,6 +119,8 @@ test('actual native Home readiness accepts an advancing shadow and rebinds only 
       "Ready native Audio must take over immediately after the Video surface stops");
     s.backgroundWebViewStopped=false;s.onBackgroundWebViewStoppedInternal();
     require(!s.backgroundWebViewStopped,"Unrelated lifecycle stop cannot restart an already completed handoff");
+    int notifications=s.notifications;s.taskRemoved=true;s.refreshMediaNotification();
+    require(s.notifications==notifications,"Dismissed task cannot recreate its media notification");
     System.out.println("passed");
    }
   }`);

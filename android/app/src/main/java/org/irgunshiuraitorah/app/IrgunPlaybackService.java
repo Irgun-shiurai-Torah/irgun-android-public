@@ -142,6 +142,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     private static final List<Runnable> pendingBridgeCommands = new ArrayList<>();
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private boolean taskRemoved = false;
     private ExoPlayer player;
     // Opt-in single-engine video: this SAME Media3 ExoPlayer renders HLS video
     // and continues its audio track when the picture is hidden. No second WebView
@@ -290,7 +291,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         // than through an Activity MediaController. Registering the session with the
         // service and explicitly nudging notification updates keeps Media3's own
         // foreground/media notification lifecycle active on every supported Android.
-        if (mediaSession == null) return;
+        if (taskRemoved || mediaSession == null) return;
         try {
             if (sessionPlayerMode != playbackMode && player != null) {
                 // The forwarding view changed authority while the underlying
@@ -1301,10 +1302,14 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
-        // Swiping the app away or leaving the task must not tear down an active
-        // lecture. Media3 remains the single owner until the user actually pauses/stops.
-        if (snapshot().isPlaying) return;
-        super.onTaskRemoved(rootIntent);
+        // Home only backgrounds the Activity. Dismissing its card from Recents
+        // explicitly closes the lecture, including buffering or paused playback.
+        // Cancel queued handoffs/retries before they can restart the same player.
+        taskRemoved = true;
+        mainHandler.removeCallbacksAndMessages(null);
+        clearPendingBridgeCommands();
+        stopAudioInternal(true);
+        pauseAllPlayersAndStopSelf();
     }
 
 
@@ -1622,7 +1627,9 @@ public class IrgunPlaybackService extends MediaSessionService {
             }
             return;
         }
+        if (service.taskRemoved) return;
         service.mainHandler.post(() -> {
+            if (service.taskRemoved || active() != service) return;
             try {
                 runnable.run();
             } catch (Throwable error) {

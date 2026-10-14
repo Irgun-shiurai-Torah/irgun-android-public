@@ -1,11 +1,12 @@
 {
   "sourceBranch": "fix/android-postmerge-like-home-20261013",
-  "sourceCommit": "00a8bf44fac2bf2421f63a42b5930d3c4f235f01",
+  "sourceCommit": "f0d512e3b3e0182247b38150fce52643b3e357b2",
   "track": "internal",
-  "requestedAt": "2026-10-14T23:17:25.882Z",
+  "requestedAt": "2026-10-14T23:38:23.224Z",
   "pullRequest": 37,
   "mergeIntoMain": false,
   "features": [
+    "Home continues playback; swiping the app card away from Recents stops playing/paused/buffering lecture, clears media item and notification, cancels retries/handoffs and blocks stale bridge commands",
     "Persistent floating Android bottom navigation outside page/player renders; sliding active-tab highlight; English/Hebrew support",
     "Physical tab taps minimize the same Video player and open the selected page; Audio continues; native view stays clear of navigation",
     "Keep Android screen awake for playing/buffering video, release for Pause/Audio/Home",
@@ -19,11 +20,11 @@
     "Account tests pin a descriptor-verified native-video/audio lecture; Vimeo-only playback tested separately"
   ],
   "verification": {
-    "localTests": 243,
+    "localTests": 246,
     "androidPackaging": "npm run test:player passed",
-    "status": "Physical emulator tests queued/running separately; user-authorized concurrent Internal testing.",
-    "fullMatrixRun": 38653123224,
-    "startupRun": 38653123234
+    "status": "Physical emulator regression matrix runs separately; user-authorized concurrent Internal testing.",
+    "fullMatrixRun": 38655303849,
+    "startupRun": 38655303891
   },
-  "releaseAttempt": 14
+  "releaseAttempt": 15
 }

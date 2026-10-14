@@ -1,0 +1,71 @@
+import assert from 'node:assert/strict';
+import {writeFileSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
+import {nativeHierarchy} from './android-native-hierarchy.mjs';
+
+const pkg='org.irgunshiuraitorah.app';
+
+export function recentsDismissGesture(xml,{width,height}) {
+  const nodes=xml.match(/<node\b[^>]*>/g)||[];
+  const card=nodes.find(node=>/visible="true"/.test(node)&&
+    /content-desc="[^"]*Irgun Shiurai Torah[^"]*"/.test(node)&&
+    /resource-id="[^"]*:(?:id\/)(?:snapshot|thumbnail)"/.test(node)&&
+    /bounds="\[\d+,\d+\]\[\d+,\d+\]"/.test(node));
+  const rect=card?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
+  assert.ok(rect&&rect[0]>=0&&rect[1]>=0&&rect[2]<=width&&rect[3]<=height&&
+    rect[2]>rect[0]&&rect[3]>rect[1],'Actual Recents must expose the visible Irgun screenshot card before swiping');
+  const x=Math.round((rect[0]+rect[2])/2);
+  return [x,Math.round(rect[1]+(rect[3]-rect[1])*.65),x,Math.max(1,Math.round(height*.05))];
+}
+
+export function hasActivePlaybackNotification(dump) {
+  const active=dump.split(/Historical notifications:|Historical Notification List:|Notification History:/i)[0];
+  return active.split(/(?=NotificationRecord\()/).some(record=>
+    /\bpkg=org\.irgunshiuraitorah\.app\b/.test(record)&&/MediaStyle/.test(record));
+}
+
+// Only actual Android keys/gestures mutate the app. CDP reads its real clock;
+// Android service/session/notification dumps prove teardown even if the process
+// or WebView disappears after the task is removed.
+export async function verifyAndroidTaskDismissal({adb,sample,delay,report}) {
+  const before=await sample();
+  assert.ok(before.media3.active&&before.media3.playing,'Task dismissal starts with actual native playback');
+  adb('shell','input','keyevent','KEYCODE_HOME');
+  await delay(2500);
+  const home=await sample();
+  assert.equal(home.media3.playerIdentity,before.media3.playerIdentity,'Home retains the same player');
+  assert.ok(home.media3.playing&&home.media3.positionMs>before.media3.positionMs+1000,
+    'Pressing Home must keep actual playback and its clock advancing');
+  report.checks.push({label:'Home continues the same native lecture before explicit task dismissal',before:before.media3,after:home.media3});
+  const size=adb('shell','wm','size').match(/(?:Override|Physical) size: (\d+)x(\d+)/g)?.at(-1)?.match(/(\d+)x(\d+)/);
+  assert.ok(size,'Android must report its current display size');
+  adb('shell','input','keyevent','KEYCODE_APP_SWITCH');
+  await delay(1200);
+  const hierarchy=nativeHierarchy('emulator-report/task-dismissal-recents.xml');
+  const gesture=recentsDismissGesture(hierarchy,{width:Number(size[1]),height:Number(size[2])});
+  writeFileSync('emulator-report/task-dismissal-before.png',execFileSync('adb',['exec-out','screencap','-p']));
+  adb('shell','input','swipe',...gesture.map(String),'400');
+  report.gestures.push({recentsSwipeUp:gesture});
+  const stopped=()=>{
+    const logs=adb('shell','logcat','-d','-s','IrgunPlayback:D','*:S');
+    const services=adb('shell','dumpsys','activity','services',pkg);
+    const sessions=adb('shell','dumpsys','media_session');
+    const notifications=adb('shell','dumpsys','notification','--noredact');
+    return {destroyed:logs.includes('Media3 service destroyed'),
+      servicePresent:/ServiceRecord\{[^\n]*IrgunPlaybackService/.test(services),
+      sessionPresent:sessions.includes(pkg),notificationPresent:hasActivePlaybackNotification(notifications)};
+  };
+  let state;
+  for(let n=0;n<30;n++){
+    state=stopped();
+    if(state.destroyed&&!state.servicePresent&&!state.sessionPresent&&!state.notificationPresent)break;
+    await delay(300);
+  }
+  assert.ok(state.destroyed&&!state.servicePresent&&!state.sessionPresent&&!state.notificationPresent,
+    'Actual Recents swipe must destroy playback service, release session, and remove notification: '+JSON.stringify(state));
+  await delay(2200);
+  const later=stopped();
+  assert.ok(!later.servicePresent&&!later.sessionPresent&&!later.notificationPresent,
+    'A delayed handoff, retry or bridge command must not restart a dismissed lecture');
+  report.checks.push({label:'Physical Recents swipe closes the lecture and removes service/session/notification without a delayed restart',state:later});
+}
