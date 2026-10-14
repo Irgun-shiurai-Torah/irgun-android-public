@@ -61,6 +61,16 @@ async function setAndroidNativeVideoFullscreen(enabled) {
   await IrgunNativeVideo.fullscreen({enabled:Boolean(enabled)});
   await setNativeVideoFullscreen(Boolean(enabled));
 }
+window.__irgunToggleNativeVideoFullscreen = () => {
+  if (Capacitor.getPlatform() === 'android' && state.watchVimeo?.isIrgunNativeVideoPlayer)
+    void setAndroidNativeVideoFullscreen(!nativeVideoFullscreen);
+};
+window.__irgunMinimizeNativeVideo = async () => {
+  if (Capacitor.getPlatform() !== 'android' || !state.watchVimeo?.isIrgunNativeVideoPlayer) return;
+  await window.__irgunExitNativeVideoFullscreen();
+  await minimizeWatchToPersistent();
+  state.watchVimeo?.updateFrame?.();
+};
 window.__irgunExitNativeVideoFullscreen = async () => {
   if (nativeVideoFullscreen && state.watchVimeo?.isIrgunNativeVideoPlayer)
     await setAndroidNativeVideoFullscreen(false);
@@ -3841,7 +3851,7 @@ async function minimizeWatchToPersistent() {
 // expansion still uses the existing DOM listener. No new playback instance.
 window.__irgunExpandNativeMiniVideo = () => {
   if (state.watchVideo && state.watchMode === 'video' && state.watchMinimized)
-    void expandPersistentWatch();
+    void expandPersistentWatch().then(() => state.watchVimeo?.updateFrame?.());
 };
 
 async function expandPersistentWatch() {
@@ -7825,6 +7835,13 @@ async function enterSystemPictureInPicture() {
 async function restoreAfterSystemPip() {
   if (!state.watchVideo || state.watchMode !== 'video' || !state.watchVimeo) return;
   const player = state.watchVimeo;
+  if (Capacitor.getPlatform() === 'android' && player.isIrgunNativeVideoPlayer) {
+    // Native PiP never transferred playback. Only restore surface geometry;
+    // legacy saved Vimeo time must not seek the continuously playing ExoPlayer.
+    await setNativeVideoFullscreen(false);
+    player.updateFrame?.();
+    return;
+  }
   const target = Math.max(0, Number(state.systemPipLastSeconds) || Number(state.watchResumeSeconds) || 0);
   try {
     // Give Android one frame to finish restoring the normal Activity size, then

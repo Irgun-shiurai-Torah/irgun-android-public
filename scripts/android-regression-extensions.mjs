@@ -533,11 +533,10 @@ try{
       assert.ok(expanded.video.time>=miniNext.video.time-2,'Mini->full transition restarted video');
     }
     if(before.videoEngine==='native-media3'){
-      assert.equal(await hit('[data-video-pip]'),null,'Android PiP button must remain hidden by user request');
       const actual=await sampleMovingVideo();
       assert.ok(actual.after.video.frames>actual.before.video.frames,
         'Real native mini/full transitions must retain decoded moving frames');
-      checks('Three native mini/full transitions retain Media3 and hide unwanted PiP button');
+      checks('Three native mini/full transitions retain Media3; native PiP, quality and swipe controls are physically covered in the dedicated HLS matrix');
       return;
     }
     await tap('[data-video-pip]');

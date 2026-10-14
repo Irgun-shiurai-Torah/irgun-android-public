@@ -237,6 +237,7 @@ public class MainActivity extends BridgeActivity {
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
         irgunPipActive = isInPictureInPictureMode;
+        IrgunNativeVideoPlugin.systemPipChanged(isInPictureInPictureMode);
         IrgunAnalyticsReporter.get(this).setPictureInPictureActive(isInPictureInPictureMode);
         prepareWebForPip(isInPictureInPictureMode);
         if (!isInPictureInPictureMode) {
