@@ -37,8 +37,17 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     private static final String API_HOST = "api.irgunshiuraitorah.com";
     private final Handler main = new Handler(Looper.getMainLooper());
     private PlayerView surface;
+    // In MINI the Android PlayerView is above the WebView. A DOM hit test
+    // incorrectly reports the thumbnail as clickable while Android routes
+    // the physical touch to this native view instead. Place one transparent,
+    // native, clickable overlay over ONLY the moving mini thumbnail.
+    private View miniExpandTarget;
     private FrameLayout root;
     private boolean visible = false;
+    private boolean mini = false;
+    private final View.OnLayoutChangeListener rootLayoutListener =
+        (view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) ->
+            main.post(this::layoutSurface);
     // Expands the SAME PlayerView/ExoPlayer, never a second video instance.
     private boolean fullscreen = false;
     private int surfaceGeneration = 0;
@@ -110,6 +119,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         if (root != nextRoot) {
             removeSurface();
             root = nextRoot;
+            root.addOnLayoutChangeListener(rootLayoutListener);
         }
         if (surface == null) {
             surface = new PlayerView(getActivity());
@@ -123,6 +133,24 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(1,1);
             params.gravity = Gravity.TOP | Gravity.LEFT;
             root.addView(surface, params);
+            ExoPlayer existing = IrgunPlaybackService.nativeVideoPlayer();
+            if (existing != null) surface.setPlayer(existing);
+        }
+        if (miniExpandTarget == null) {
+            miniExpandTarget = new View(getActivity());
+            miniExpandTarget.setBackgroundColor(Color.TRANSPARENT);
+            miniExpandTarget.setContentDescription("Expand mini video");
+            miniExpandTarget.setElevation(16f);
+            miniExpandTarget.setVisibility(View.GONE);
+            miniExpandTarget.setOnClickListener(v -> {
+                if (!mini || !visible || getBridge() == null) return;
+                WebView web = getBridge().getWebView();
+                if (web != null) web.evaluateJavascript(
+                    "window.__irgunExpandNativeMiniVideo && window.__irgunExpandNativeMiniVideo();", null);
+            });
+            FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(1,1);
+            params.gravity = Gravity.TOP | Gravity.LEFT;
+            root.addView(miniExpandTarget, params);
         }
     }
 
@@ -139,12 +167,15 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             full.leftMargin = 0;
             full.topMargin = 0;
             surface.setLayoutParams(full);
+            surface.setUseController(true);
             surface.setVisibility(View.VISIBLE);
+            if (miniExpandTarget != null) miniExpandTarget.setVisibility(View.GONE);
             return;
         }
         if (web == null || viewportWidth <= 0 || viewportHeight <= 0
                 || width <= 0 || height <= 0 || !visible) {
             surface.setVisibility(View.GONE);
+            if (miniExpandTarget != null) miniExpandTarget.setVisibility(View.GONE);
             return;
         }
         int[] webScreen = new int[2], rootScreen = new int[2];
@@ -161,7 +192,18 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         params.leftMargin = left;
         params.topMargin = top;
         surface.setLayoutParams(params);
+        surface.setUseController(!mini);
         surface.setVisibility(View.VISIBLE);
+        if (miniExpandTarget != null) {
+            if (mini) {
+                FrameLayout.LayoutParams hit = new FrameLayout.LayoutParams(w,h);
+                hit.gravity = Gravity.TOP | Gravity.LEFT;
+                hit.leftMargin = left;
+                hit.topMargin = top;
+                miniExpandTarget.setLayoutParams(hit);
+                miniExpandTarget.setVisibility(View.VISIBLE);
+            } else miniExpandTarget.setVisibility(View.GONE);
+        }
     }
 
     @PluginMethod
@@ -172,8 +214,15 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         height = (float)(double)call.getDouble("height", 0.0);
         viewportWidth = (float)(double)call.getDouble("viewportWidth", 0.0);
         viewportHeight = (float)(double)call.getDouble("viewportHeight", 0.0);
-        getActivity().runOnUiThread(this::layoutSurface);
-        call.resolve();
+        mini = Boolean.TRUE.equals(call.getBoolean("mini", false));
+        getActivity().runOnUiThread(() -> {
+            // Device rotation may have rebuilt the Android root while the
+            // single ExoPlayer service kept playing. Rebind the PlayerView to
+            // the CURRENT Activity/root rather than positioning a stale view.
+            if (visible) ensureSurface();
+            layoutSurface();
+            call.resolve();
+        });
     }
 
     @PluginMethod
@@ -185,6 +234,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
                 return;
             }
             fullscreen = expand;
+            if (expand) mini = false;
             layoutSurface();
             call.resolve();
         });
@@ -219,7 +269,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             return;
         }
         visible = video;
-        if (!video) fullscreen = false;
+        if (!video) { fullscreen = false; mini = false; }
         IrgunPlaybackService.nativeVideoPresentation(video, approved);
         getActivity().runOnUiThread(() -> {
             if (video) {
@@ -267,6 +317,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("sourceType", state.source);
             response.put("error", state.error);
             response.put("fullscreen", fullscreen);
+            response.put("mini", mini);
+            response.put("miniHitTargetVisible", miniExpandTarget != null && miniExpandTarget.isShown());
             response.put("surfaceVisible", surface != null && surface.getVisibility() == View.VISIBLE);
             // Native decoder counters alone cannot prove a visible picture.
             // Check the REAL Android global-visible view rectangle: earlier
@@ -294,6 +346,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         boolean keepAudio = Boolean.TRUE.equals(call.getBoolean("keepAudio", false));
         visible = false;
         fullscreen = false;
+        mini = false;
         ++surfaceGeneration;
         getActivity().runOnUiThread(this::removeSurface);
         IrgunPlaybackService.closeNativeVideo(keepAudio);
@@ -301,11 +354,18 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     }
 
     private void removeSurface() {
-        if (surface == null) return;
-        surface.setPlayer(null);
-        ViewGroup parent = (ViewGroup)surface.getParent();
-        if (parent != null) parent.removeView(surface);
-        surface = null;
+        if (root != null) root.removeOnLayoutChangeListener(rootLayoutListener);
+        if (miniExpandTarget != null) {
+            ViewGroup hitParent = (ViewGroup)miniExpandTarget.getParent();
+            if (hitParent != null) hitParent.removeView(miniExpandTarget);
+            miniExpandTarget = null;
+        }
+        if (surface != null) {
+            surface.setPlayer(null);
+            ViewGroup parent = (ViewGroup)surface.getParent();
+            if (parent != null) parent.removeView(surface);
+            surface = null;
+        }
         root = null;
     }
 
@@ -314,6 +374,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         ++surfaceGeneration;
         visible = false;
         fullscreen = false;
+        mini = false;
         if (getActivity() != null) getActivity().runOnUiThread(this::removeSurface);
         super.handleOnDestroy();
     }
