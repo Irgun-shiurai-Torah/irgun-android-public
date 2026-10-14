@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
-import {accountSwipeDirection} from './android-account-native-scroll.mjs';
+import {accountSwipeDirection, watchPlayerReturnGesture} from './android-account-native-scroll.mjs';
 
 const geometry = height => ({left:0,top:24,right:320,bottom:24+height,focused:true});
 const immediate = async () => {};
@@ -40,5 +40,14 @@ test('a permanently moving viewport remains a failure with a bounded observation
 
 test('IME-obscured Password and Login scroll into view rather than back to Email',()=>{
   for(const key of ['password','login','saveQaComment'])assert.equal(accountSwipeDirection(key),'up');
-  for(const key of ['email','closeWatch','settings'])assert.equal(accountSwipeDirection(key),'down');
+  for(const key of ['email','closeWatch','settings','audioMode','videoMode','audioPlay'])assert.equal(accountSwipeDirection(key),'down');
+});
+
+test('Watch player recovery uses a real downward swipe within the measured scroll viewport',()=>{
+  const scroll={x:0,y:44,width:320,height:550,top:742};
+  const gesture=watchPlayerReturnGesture(scroll);
+  assert.ok(gesture.from.y<gesture.to.y,'A return gesture must physically swipe down to scroll upwards');
+  assert.ok(gesture.from.y>scroll.y&&gesture.to.y<scroll.y+scroll.height,'Keep physical swipes within actual Watch bounds');
+  assert.equal(gesture.from.x,gesture.to.x);
+  assert.throws(()=>watchPlayerReturnGesture({x:0,y:0,width:10,height:20}),/Watch scroll bounds/);
 });
