@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createAndroidHlsPlayer } from '../src/android-hls-video.js';
 import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } from '../src/offline-validation.js';
 import { downloadOfflineAudio } from '../src/offline-download.js';
+import {preserveAndroidPlayerSheetScroll} from '../src/android-player-controls.js';
 
 class Element extends EventTarget {
   constructor(tag) {
@@ -440,7 +441,8 @@ function authRenderFixture({busy=false,mode='login'}={}) {
   const document={activeElement:fields.get('authPassword'),getElementById:id=>id==='authForm'?form():fields.get(id)};
   fields.get('authEmail').value='qa@example.test';fields.get('authPassword').value='typed-in-dom';
   const app={set innerHTML(_){fields=new Map(['authEmail','authPassword'].map(id=>[id,field(id)]));document.activeElement=null;}};
-  const context={state,document,app,homeSearchRenderDeferred:false,tabSwipeRenderGate:{shouldDefer:()=>false},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
+  const context={state,document,app,homeSearchRenderDeferred:false,tabSwipeRenderGate:{shouldDefer:()=>false},
+    androidPlayerSheetRenderGate:{shouldDefer:()=>false},preserveAndroidPlayerSheetScroll,Capacitor:{getPlatform:()=> 'android'},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
     accountHtml:()=>'',shell:x=>x,playlistPickerHtml:()=>'',bind(){},syncLivePlaybackAnalytics(){},updatePlayerUi(){},refreshOfflineButtonsForKey(){}};
   const start=mainSource.indexOf('function preserveHomeSearchDraft(');
   const renderStart=mainSource.indexOf('function render()');
@@ -1147,7 +1149,8 @@ function homeSearchRenderFixture() {
   let input=field();input.value='IST-DL6067';
   const document={activeElement:input,getElementById:id=>id==='homeLibrarySearch'?input:null};
   const app={set innerHTML(_){input=field();document.activeElement=null;}};
-  const context={state,document,app,homeSearchRenderDeferred:false,tabSwipeRenderGate:{shouldDefer:()=>false},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
+  const context={state,document,app,homeSearchRenderDeferred:false,tabSwipeRenderGate:{shouldDefer:()=>false},
+    androidPlayerSheetRenderGate:{shouldDefer:()=>false},preserveAndroidPlayerSheetScroll,Capacitor:{getPlatform:()=> 'android'},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
     homeHtml:()=>'',accountHtml:()=>'',shiurimHtml:()=>'',shell:x=>x,playlistPickerHtml:()=>'',bind(){},
     syncLivePlaybackAnalytics(){},updatePlayerUi(){},refreshOfflineButtonsForKey(){},setTimeout(){}};
   const start=mainSource.indexOf('function preserveHomeSearchDraft('),end=mainSource.indexOf('function syncOpenFilterChecks(',start);
