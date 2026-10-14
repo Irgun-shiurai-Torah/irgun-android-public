@@ -142,7 +142,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             miniExpandTarget.setContentDescription("Expand mini video");
             miniExpandTarget.setElevation(16f);
             miniExpandTarget.setVisibility(View.GONE);
-            miniExpandTarget.setOnClickListener(v -> {
+            miniExpandTarget.setOnClickListener(clickedView -> {
                 if (!mini || !visible || getBridge() == null) return;
                 WebView web = getBridge().getWebView();
                 if (web != null) web.evaluateJavascript(
