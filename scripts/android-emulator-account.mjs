@@ -173,7 +173,17 @@ async function verifyServerPlaylist(name,count,id) {
  try {
   const deadline=Date.now()+20000;let found;
   while(Date.now()<deadline) {
-   const result=await fetch('https://api.irgunshiuraitorah.com/custom-playlists',{headers:authenticated,signal:AbortSignal.timeout(12000)});
+   let result;
+   try { result=await fetch('https://api.irgunshiuraitorah.com/custom-playlists',{
+     headers:authenticated,signal:AbortSignal.timeout(Math.max(1,Math.min(12000,deadline-Date.now())))
+   }); } catch(error) {
+     // Only repeat this independent read, within the original deadline.
+     // Native Save and server mutations are never repeated on an uncertain outcome.
+     if(!((error instanceof TypeError&&error.message==='fetch failed')||error.name==='TimeoutError'))throw error;
+     report.playlistReadTransportFailures=(report.playlistReadTransportFailures||0)+1;
+     if(Date.now()>=deadline)throw error;
+     await delay(500);continue;
+   }
    assert.equal(result.status,200,'Actual server playlists must be readable');
    const data=await result.json();found=(data.items||[]).find(p=>p.name===name&&Array.isArray(p.items)&&p.items.length===count&&(!count||p.items.some(x=>String(x.id||'')===id)));
    if(found)break;await delay(500);

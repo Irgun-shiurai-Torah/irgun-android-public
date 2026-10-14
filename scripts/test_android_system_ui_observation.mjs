@@ -1,5 +1,5 @@
 import {test} from 'node:test';
-import {mediaNotificationControlPoint} from './android-system-ui-observation.mjs';
+import {mediaNotificationControlPoint,settledMediaNotificationControlPoint} from './android-system-ui-observation.mjs';
 import assert from 'node:assert/strict';
 import {fullscreenEducationTapPoint, mediaNotificationClock, offlineConfirmationTapPoint, settledOfflineConfirmationPoint} from './android-system-ui-observation.mjs';
 
@@ -65,4 +65,24 @@ test('the observed Android 14 Play icon must never be tapped as notification Pau
  const pause=play.replace('content-desc="Play"','content-desc="Pause"');
  assert.deepEqual(mediaNotificationControlPoint(pause,'pause',pattern),[264,280]);
  assert.throws(()=>mediaNotificationControlPoint(pause.replace('com.android.systemui" clickable','org.irgunshiuraitorah.app" clickable'),'pause',pattern),/button must be present/);
+});
+
+const mediaButton = (label,x=240) => node('content-desc="'+label+'" resource-id="com.android.systemui:id/actionPlayPause" clickable="true" bounds="['+x+',256]['+(x+48)+',304]"');
+test('buffering notification is observed until the real Pause action and its coordinates settle',async()=>{
+ const observations=[mediaButton('Connecting'),mediaButton('Play'),mediaButton('Pause',230),mediaButton('Pause'),mediaButton('Pause')];
+ const waits=[];
+ const point=await settledMediaNotificationControlPoint({readHierarchy:()=>observations.shift(),action:'pause',pattern:/actionPlayPause/,delay:ms=>waits.push(ms)});
+ assert.deepEqual(point,[264,280]);assert.deepEqual(waits,[250,250,250,250]);
+});
+test('notification observation never accepts Play, Connecting or an absent Pause after the bounded deadline',async()=>{
+ for(const xml of [mediaButton('Play'),mediaButton('Connecting'),mediaButton('Pause').replace('visible="true"','visible="false"')]){
+  let elapsed=0,reads=0;
+  await assert.rejects(settledMediaNotificationControlPoint({readHierarchy:()=>{reads++;return xml;},action:'pause',pattern:/actionPlayPause/,now:()=>elapsed,timeoutMs:500,delay:ms=>{elapsed+=ms;}}),/no tap was performed/);
+  assert.equal(reads,2);assert.equal(elapsed,500);
+ }
+});
+test('notification hierarchy transport failure remains a failure without repeating an input',async()=>{
+ let reads=0;
+ await assert.rejects(settledMediaNotificationControlPoint({readHierarchy:()=>{reads++;throw new Error('ADB disconnected');},action:'pause',pattern:/actionPlayPause/,delay:async()=>{}}),/ADB disconnected/);
+ assert.equal(reads,1);
 });
