@@ -1,8 +1,8 @@
 {
   "sourceBranch": "fix/android-postmerge-like-home-20261013",
-  "sourceCommit": "b7411610f2eba1c0d3dfc7940dbe14cb7c6ba529",
+  "sourceCommit": "0c03df8cf9979c7c522079dd41de170573c3c1a3",
   "track": "internal",
-  "requestedAt": "2026-10-14T21:26:22.989Z",
+  "requestedAt": "2026-10-14T21:29:57.192Z",
   "pullRequest": 37,
   "mergeIntoMain": false,
   "features": [
@@ -17,10 +17,10 @@
   "verification": {
     "localTests": 233,
     "androidPackaging": "npm run test:player passed",
-    "status": "Android emulator matrix running separately; user requested Internal upload for concurrent real-phone testing.",
+    "status": "Rebuilt after correcting Android PiP settings intent compile error; emulator matrix runs separately for concurrent phone testing.",
     "limitations": [
       "External session revocation unverified; QA no longer reads the application session credential"
     ]
   },
-  "releaseAttempt": 10
+  "releaseAttempt": 11
 }

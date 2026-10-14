@@ -185,7 +185,7 @@ public class MainActivity extends BridgeActivity {
             dialog.setMessage("Picture-in-Picture could not open. Check that it is allowed for this app in Android settings.")
                 .setPositiveButton("Open settings",(d,which)->{
                     try {
-                        startActivity(new android.content.Intent(android.provider.Settings.ACTION_PICTURE_IN_PICTURE_SETTINGS,
+                        startActivity(new android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                             android.net.Uri.parse("package:"+getPackageName())));
                     } catch(Exception ignored) {}
                 });
