@@ -3,6 +3,9 @@ import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
 import { usageAnalytics } from './usageAnalytics.js';
 import { Capacitor, registerPlugin } from '@capacitor/core';
+import {bindAndroidPlayerSheetInteractions,preserveAndroidPlayerSheetScroll} from './android-player-controls.js';
+const androidPlayerSheetRenderGate=bindAndroidPlayerSheetInteractions({document,view:window,
+  isAndroid:()=>Capacitor.getPlatform()==='android',render:()=>render()});
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileTransfer } from '@capacitor/file-transfer';
 import { Share } from '@capacitor/share';
@@ -6457,6 +6460,7 @@ function preserveAuthFormDraft() {
 
 function render() {
   if (tabSwipeRenderGate.shouldDefer()) return;
+  if (androidPlayerSheetRenderGate.shouldDefer()) return;
   // Keep the actual focused input/Android IME connection alive. Copying the
   // value into a replacement field still drops native keys queued for the old one.
   if (state.screen === 'home' && !state.loading && !state.error && document.activeElement?.id === 'homeLibrarySearch') {
@@ -6493,6 +6497,9 @@ function render() {
     : accountHtml();
   const restoreAuthDraft = preserveAuthFormDraft();
   const restoreSearchDraft = preserveHomeSearchDraft();
+  const restorePlayerSheetScroll=preserveAndroidPlayerSheetScroll({document,
+    isAndroid:()=>Capacitor.getPlatform()==='android'&&state.playerOpen,
+    playerKey:`${state.current?.kind||''}:${state.current?.id||''}`});
   app.innerHTML = shell(content + playlistPickerHtml());
   bind();
   // Reconcile the native Android Video surface after every modal change.
@@ -6500,6 +6507,7 @@ function render() {
   state.watchVimeo?.updateFrame?.();
   restoreAuthDraft();
   restoreSearchDraft();
+  restorePlayerSheetScroll();
   syncLivePlaybackAnalytics();
   updatePlayerUi();
   refreshOfflineButtonsForKey();
@@ -6624,6 +6632,18 @@ function bindDonationControls(root=document) {
   qsa('[data-donation-back]').forEach(el => el.addEventListener('click', () => closeDonationCheckout(true)));
 }
 
+function refreshAndroidPlayerSpeedChoices() {
+  document.querySelectorAll('[data-speed-choice]').forEach(button=>
+    button.classList.toggle('active',Number(button.dataset.speedChoice)===state.playbackSpeed));
+}
+function bindPlayerSpeedChoices() {
+  document.querySelectorAll('[data-speed-choice]').forEach(el=>el.addEventListener('click',()=>{
+    const refresh=()=>Capacitor.getPlatform()==='android'?refreshAndroidPlayerSpeedChoices():render();
+    // Updating Android's buttons in place keeps the scrolled settings and the
+    // next touch target alive while the same Media3 player applies its speed.
+    return PlaybackController.setSpeed(Number(el.dataset.speedChoice)||1).then(refresh).catch(refresh);
+  }));
+}
 function bind() {
   document.querySelectorAll('[data-retry-library]').forEach(el => el.addEventListener('click', () => bootstrap({ manual:true })));
   document.querySelectorAll('[data-nav]').forEach(el => el.addEventListener('click', () => {
@@ -7048,6 +7068,7 @@ function bind() {
     }
   }));
   document.querySelectorAll('[data-player-sheet]').forEach(el => {
+    if(Capacitor.getPlatform()==='android')el.dataset.irgunPlayerKey=`${state.current?.kind||''}:${state.current?.id||''}`;
     el.addEventListener('click', event => event.stopPropagation());
     bindPlayerSwipeToClose(el);
   });
@@ -7062,9 +7083,7 @@ function bind() {
   if (seek) seek.addEventListener('input', () => {
     PlaybackController.seekTo(Number(seek.value) || 0).catch(()=>{});
   });
-  document.querySelectorAll('[data-speed-choice]').forEach(el => el.addEventListener('click', () => {
-    PlaybackController.setSpeed(Number(el.dataset.speedChoice) || 1).then(()=>render()).catch(()=>render());
-  }));
+  bindPlayerSpeedChoices();
   document.querySelectorAll('[data-sleep-choice]').forEach(el => el.addEventListener('click', () => setSleepTimer(el.dataset.sleepChoice)));
   const watchAudioSeek = document.getElementById('watchAudioSeek');
   if (watchAudioSeek) watchAudioSeek.addEventListener('input', () => {

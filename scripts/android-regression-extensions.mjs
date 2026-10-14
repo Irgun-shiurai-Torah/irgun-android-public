@@ -134,8 +134,15 @@ async function hit(selector){
 async function tap(selector){
   const measured=await settledNativeTapPoint({readBounds:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),readPoint:()=>hit(selector),delay});
   bounds=measured.bounds;const xy=measured.point;
+  const speedScroll=selector.startsWith('[data-speed-choice=')?
+    Number(await evaluate('document.querySelector("[data-player-sheet]")?.scrollTop')):null;
   adb('shell','input','tap',String(xy[0]),String(xy[1]));
   await delay(500);
+  if(speedScroll>0){
+    const after=Number(await evaluate('document.querySelector("[data-player-sheet]")?.scrollTop'));
+    assert.ok(after>=speedScroll-2,'Actual Android speed selection must preserve the settings sheet scroll');
+    report.speedSettingScrolls??=[];report.speedSettingScrolls.push({selector,before:speedScroll,after});
+  }
   return xy;
 }
 async function tapWithScroll(selector) {
