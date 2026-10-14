@@ -143,13 +143,14 @@ public class MainActivity extends BridgeActivity {
 
     /** Enter Android system Picture-in-Picture for the currently playing video. */
     public boolean enterIrgunPictureInPicture() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) { explainUnavailablePip(); return false; }
         try {
             // Mark PiP as active BEFORE Android begins the transition. onPause() can
             // run before onPictureInPictureModeChanged(); without this guard the app
             // may hand video playback to the background-audio service during the PiP
             // transition and the floating video never appears or immediately stops.
             irgunPipActive = true;
+            IrgunNativeVideoPlugin.systemPipChanged(true);
             // Do not resize/reflow the WebView before Android captures the current
             // video frame for PiP. The PiP callback applies the compact layout after
             // entry, which avoids the black-frame regression seen on WebView/Vimeo.
@@ -161,14 +162,35 @@ public class MainActivity extends BridgeActivity {
             boolean entered = enterPictureInPictureMode(builder.build());
             if (!entered) {
                 irgunPipActive = false;
+                IrgunNativeVideoPlugin.systemPipChanged(false);
                 prepareWebForPip(false);
+                explainUnavailablePip();
             }
             return entered;
         } catch (Exception ignored) {
             irgunPipActive = false;
+            IrgunNativeVideoPlugin.systemPipChanged(false);
             prepareWebForPip(false);
+            explainUnavailablePip();
             return false;
         }
+    }
+
+    private void explainUnavailablePip() {
+        boolean supported=Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            && getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE);
+        android.app.AlertDialog.Builder dialog=new android.app.AlertDialog.Builder(this)
+            .setTitle("Picture-in-Picture").setNegativeButton("Close",null);
+        if(supported){
+            dialog.setMessage("Picture-in-Picture could not open. Check that it is allowed for this app in Android settings.")
+                .setPositiveButton("Open settings",(d,which)->{
+                    try {
+                        startActivity(new android.content.Intent(android.provider.Settings.ACTION_PICTURE_IN_PICTURE_SETTINGS,
+                            android.net.Uri.parse("package:"+getPackageName())));
+                    } catch(Exception ignored) {}
+                });
+        }else dialog.setMessage("This device does not report support for Android Picture-in-Picture. You can keep playing with the in-app Mini player or background audio.");
+        dialog.show();
     }
 
     private boolean isIrgunPipVisible() {
@@ -285,6 +307,16 @@ public class MainActivity extends BridgeActivity {
         // Video Activity is no longer visible. A pre-buffered native audio
         // shadow may now complete an already-requested Home handoff.
         IrgunPlaybackService.onBackgroundWebViewStopped();
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        // Begin fetching/decoding the video track as soon as the Activity is
+        // visible. Do not wait for onResume or a later WebView state poll.
+        // The service restores only a Home-backgrounded Video presentation;
+        // it keeps the existing player, MediaItem, clock and Pause choice.
+        IrgunPlaybackService.restoreNativeVideoOnForeground();
     }
 
     @Override

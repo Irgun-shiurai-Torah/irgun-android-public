@@ -14,11 +14,11 @@
 
         <ImageView
             android:id="@+id/irgunSplashImage"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_width="match_parent"
+            android:layout_height="156dp"
             android:adjustViewBounds="true"
             android:contentDescription="@null"
-            android:maxWidth="420dp"
+            android:maxWidth="288dp"
             android:scaleType="fitCenter"
             android:src="@drawable/irgun_elegant_splash" />
 

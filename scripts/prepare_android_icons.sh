@@ -51,7 +51,7 @@ for name in ic_launcher ic_launcher_round; do
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background" />
     <foreground>
-        <inset android:drawable="@drawable/irgun_launcher_foreground" android:inset="16.7%" />
+        <inset android:drawable="@drawable/irgun_launcher_foreground" android:inset="12.5%" />
     </foreground>
 </adaptive-icon>
 ICON_XML

@@ -47,7 +47,7 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
       if(r&&r.width>0&&r.height>0&&r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight)
         nativeBounds.miniPlay={x:r.x,y:r.y,width:r.width,height:r.height};
     }
-    if(document.querySelector('.playlist-picker-backdrop')){
+    if(document.querySelector('.playlist-picker-backdrop')||document.querySelector('[data-native-video-error]')){
       // Hide the native view without stopping the SAME Media3 playback clock.
       framePlacedOnScreen=false;
       await native.frame({width:0,height:0,...nativeBounds});

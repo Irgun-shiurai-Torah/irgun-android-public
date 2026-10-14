@@ -4,6 +4,7 @@ const tabSwipeRenderGate = createSwipeRenderGate(() => render());
 import { usageAnalytics } from './usageAnalytics.js';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import {bindAndroidPlayerSheetInteractions,preserveAndroidPlayerSheetScroll} from './android-player-controls.js';
+import {isAndroidVimeoOnlyVideo,createAndroidVimeoPlayer} from './android-vimeo-playback.js';
 const androidPlayerSheetRenderGate=bindAndroidPlayerSheetInteractions({document,view:window,
   isAndroid:()=>Capacitor.getPlatform()==='android',render:()=>render()});
 import { Filesystem, Directory } from '@capacitor/filesystem';
@@ -59,6 +60,12 @@ async function setNativeVideoFullscreen(enabled) {
 // must expand that same physical view and synchronize system bars together.
 async function setAndroidNativeVideoFullscreen(enabled) {
   if (Capacitor.getPlatform() !== 'android') return;
+  if (state.watchVimeo?.isAndroidVimeoFallback) {
+    if (enabled) await state.watchVimeo.requestFullscreen();
+    else await state.watchVimeo.exitFullscreen();
+    await setNativeVideoFullscreen(Boolean(enabled));
+    return;
+  }
   if (enabled && !state.watchVimeo?.isIrgunNativeVideoPlayer) {
     throw new Error('Native fullscreen requires an active Media3 Video');
   }
@@ -76,7 +83,7 @@ window.__irgunMinimizeNativeVideo = async () => {
   state.watchVimeo?.updateFrame?.();
 };
 window.__irgunExitNativeVideoFullscreen = async () => {
-  if (nativeVideoFullscreen && state.watchVimeo?.isIrgunNativeVideoPlayer)
+  if (nativeVideoFullscreen && (state.watchVimeo?.isIrgunNativeVideoPlayer||state.watchVimeo?.isAndroidVimeoFallback))
     await setAndroidNativeVideoFullscreen(false);
 };
 
@@ -5840,7 +5847,7 @@ function watchHtml() {
       <button class="mini-video-play" data-mini-video-play-toggle="1" aria-label="${state.watchVideoPlaying ? 'Pause' : 'Play'}">${state.watchVideoPlaying ? '<span class="pause-mark">II</span>' : svgIcon('play')}</button>
       <button class="mini-video-close" data-close-mini-video="1" aria-label="Close video">×</button>
     </div>
-    <header class="watch-top"><button data-close-watch="1">${currentLanguage() === 'he' ? 'חזרה' : 'Back'}</button><strong>${esc(displayShiurTitle(v.title, 'Shiur'))}</strong>${state.watchMode === 'video' ? `<div class="watch-top-media-actions"><button class="watch-minimize" data-minimize-watch="1" aria-label="Keep playing at bottom of app" title="Mini player">${svgIcon('minimize')}</button>${Capacitor.getPlatform() === 'android' ? `<button class="watch-minimize" data-native-video-fullscreen="1" aria-label="${currentLanguage() === 'he' ? 'מסך מלא' : 'Fullscreen'}" title="Fullscreen">⛶</button>` : ''}${nativePipPlugin() && Capacitor.getPlatform() !== 'android' ? `<button class="watch-pip" data-video-pip="1" aria-label="Picture in Picture" title="Picture in Picture">${svgIcon('pip')}</button>` : ''}</div>` : ''}</header>
+    <header class="watch-top"><button data-close-watch="1">${currentLanguage() === 'he' ? 'חזרה' : 'Back'}</button><strong>${esc(displayShiurTitle(v.title, 'Shiur'))}</strong>${state.watchMode === 'video' ? `<div class="watch-top-media-actions"><button class="watch-minimize" data-minimize-watch="1" aria-label="Keep playing at bottom of app" title="Mini player">${svgIcon('minimize')}</button>${Capacitor.getPlatform() === 'android' ? `<button class="watch-minimize" data-native-video-fullscreen="1" aria-label="${currentLanguage() === 'he' ? 'מסך מלא' : 'Fullscreen'}" title="Fullscreen">⛶</button>` : ''}${nativePipPlugin() ? `<button class="watch-pip" data-video-pip="1" aria-label="Picture in Picture" title="Picture in Picture">${svgIcon('pip')}</button>` : ''}</div>` : ''}</header>
     <div class="watch-scroll">
       <div class="watch-player-card">
         <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">${currentLanguage() === 'he' ? 'וידאו' : 'Video'}</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">${currentLanguage() === 'he' ? 'אודיו' : 'Audio'}</button>` : ''}</div>
@@ -7845,6 +7852,7 @@ async function enterSystemPictureInPicture() {
     // Keep the live Vimeo frame untouched while Android captures/resizes the
     // Activity. The native PiP callback applies the PiP layout only after entry.
     const result = await plugin.enter();
+    if (result?.nativeMessageShown) return;
     if (!result || !result.entered) {
       if (!state.watchVideoPlaying) setNativePipEligibility(false);
       setToast(currentLanguage() === 'he' ? 'הפעילו את הווידאו ואז נסו שוב.' : 'Start the video, then try Picture in Picture again.');
@@ -8010,7 +8018,7 @@ async function recoverFromNativePlaybackError(event = {}) {
   // or report that a non-existent WebView/Vimeo decoder is still playing.
   if (mode === 'VIDEO') {
     console.warn('[Playback] Native Media3 VIDEO error', message);
-    setToast(currentLanguage()==='he'?'שגיאת וידאו מובנה. לחצו על נסה שוב.':'Native video failed. Tap Retry native Video.');
+    setToast(currentLanguage()==='he'?'לא ניתן להפעיל את הווידאו. נסו שוב.':'Video could not play. Please try again.');
     return;
   }
 
@@ -8366,7 +8374,7 @@ const PlaybackController = {
     if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo) return state.watchVimeo.play();
     if (Capacitor.getPlatform() === 'android' && !usesNativeUnifiedAudio()) {
       if (state.watchVideo && state.watchMode === 'video') {
-        setToast(currentLanguage()==='he'?'נסו שוב להפעיל וידאו מובנה.':'Retry native Video to continue.');
+        setToast(currentLanguage()==='he'?'נסו שוב להפעיל את הווידאו.':'Try the video again to continue.');
         return null;
       }
       if (!state.current) return null;
@@ -9135,10 +9143,12 @@ function showAndroidNativeVideoError(frame, detail) {
   notice.className = 'watch-video-error';
   notice.setAttribute('role','alert');
   const message = document.createElement('p');
-  message.textContent = 'Native Video could not load. Check your connection or try again. Audio remains available.';
+  message.textContent = detail?.code==='VIDEO_NOT_READY'
+    ? (currentLanguage()==='he'?'הווידאו עדיין לא זמין. נסו שוב מאוחר יותר.':'This video is not available yet. Please try again later.')
+    : (currentLanguage()==='he'?'לא ניתן לטעון את הווידאו. בדקו את החיבור ונסו שוב.':'Video could not load. Check your connection and try again.');
   const retry = document.createElement('button');
   retry.type = 'button';
-  retry.textContent = 'Retry native Video';
+  retry.textContent = currentLanguage()==='he'?'נסו שוב':'Try video again';
   retry.addEventListener('click', () => {
     notice.remove();
     state.watchNativeVideoFailedId = '';
@@ -9146,6 +9156,7 @@ function showAndroidNativeVideoError(frame, detail) {
   });
   notice.append(message,retry);
   container.append(notice);
+  state.watchVimeo?.updateFrame?.();
   console.warn('[Media3] Native-only Video failed, no WebView fallback',detail);
 }
 
@@ -9170,13 +9181,14 @@ async function initWatchVimeoOnce(userInitiated = false) {
   const frame = document.getElementById('watchVimeoFrame');
   if (!video || !frame || state.watchMode !== 'video') return;
   const directOnly = video.sourceType === 'drive-library';
+  const androidVimeoOnly = Capacitor.getPlatform()==='android' && isAndroidVimeoOnlyVideo(video);
   // Android HLS must start even if the optional Vimeo SDK is blocked or late.
   if (!directOnly && Capacitor.getPlatform() !== 'android' && !window.Vimeo?.Player) return;
   const generation = state.watchVimeoGeneration;
   const videoKey = videoId(video);
   let player = null;
   try {
-    if (Capacitor.getPlatform() === 'android') {
+    if (Capacitor.getPlatform() === 'android' && !androidVimeoOnly) {
       // Android playback uses native Media3 exclusively. No WebView HLS.js,
       // Vimeo iframe or second audio decoder is allowed, even on an error.
       frame.src = 'about:blank';
@@ -9208,6 +9220,21 @@ async function initWatchVimeoOnce(userInitiated = false) {
         showAndroidNativeVideoError(frame,nativeError);
         return;
       }
+    }
+    if (!player && androidVimeoOnly) {
+      player=await createAndroidVimeoPlayer({video,iframe:frame,
+        resumeSeconds:Math.max(0,Number(state.watchResumeSeconds)||0),
+        nativeVideo:IrgunNativeVideo,playback:IrgunPlayback,
+        isCurrent:()=>generation===state.watchVimeoGeneration&&state.watchMode==='video'&&
+          videoId(state.watchVideo)===videoKey,
+        loadSdk:async()=>{
+          if(!window.Vimeo?.Player)await loadWatchVimeoSdk();
+          return window.Vimeo;
+        }});
+      if(!player)return;
+      state.watchAudioToVideoHandoff=false;
+      state.watchAudioToVideoHandoffId='';
+      state.watchAudioToVideoTargetSeconds=0;
     }
     if (!player) {
       if (Capacitor.getPlatform() === 'android')

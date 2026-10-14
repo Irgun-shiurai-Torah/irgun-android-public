@@ -2620,15 +2620,37 @@ body { min-width:0; }
   }
 }
 
-/* Android audio: solid high-contrast seek icons in both Audio presentations. */
+/* Android audio: crisp icons with a transparent touch target. */
 body.irgun-android .skip-icon-modern { color: #102a43; opacity: 1; }
 body.irgun-android .skip-icon-modern .skip-ring,
-body.irgun-android .skip-icon-modern .skip-arrowhead { stroke-width: 4.5px; }
-body.irgun-android .skip-icon-modern .skip-text { font-weight: 800; }
+body.irgun-android .skip-icon-modern .skip-arrowhead { stroke-width: 3.5px; }
+body.irgun-android .skip-icon-modern .skip-text { font-weight: 700; }
 body.irgun-android .big-controls .skip-control,
 body.irgun-android .watch-audio-controls .skip-control {
-  background: #e5edf5 !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
   opacity: 1;
+}
+body.irgun-android .watch-audio-controls .skip-control .skip-icon-modern {
+  width: 40px; height: 40px; color: #fff;
+}
+body.irgun-android .big-controls .skip-control .skip-icon-modern {
+  width: 40px; height: 40px;
+}
+body.irgun-android .watch-top-media-actions { flex-shrink: 0; gap: 4px; }
+body.irgun-android .watch-player-card { position: relative; }
+body.irgun-android .watch-video-error {
+  position: absolute; left: 0; right: 0; bottom: 0; aspect-ratio: 16 / 9;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; padding: 16px; box-sizing: border-box;
+  background: #0a1728; color: #fff; text-align: center;
+  font-size: 14px; line-height: 1.4;
+}
+body.irgun-android .watch-video-error p { margin: 0; color: #fff; }
+body.irgun-android .watch-video-error button {
+  background: #e4cc8f; color: #102a43; border: 0; border-radius: 8px;
+  padding: 10px 16px; min-height: 44px; font-weight: 700;
 }
 
 /* Android 11 WebViews predate dvh. Inside an env()/calc() declaration an

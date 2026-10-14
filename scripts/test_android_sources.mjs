@@ -1439,15 +1439,13 @@ for(const buffered of [true,false])test('observed HLS 4x catch-up clock stall us
  assert.equal(element.playbackRate,1,'Internal recovery must restore the chosen rate');
 });
 
-test('actual QA session accessor reads the module token without putting it in the account snapshot',()=>{
+test('account QA observations and fixture selection never expose the application session credential',()=>{
  const source=readFileSync('.github/account-tests/observer.js','utf8');
- const start=source.indexOf('sessionToken()'),end=source.indexOf('  snapshot()',start);
- const state={token:'real-session-in-memory'},context={state};
- runInNewContext('this.observer={'+source.slice(start,end)+'};',context);
- assert.equal(context.observer.sessionToken(),state.token);state.token='new-actual-session';assert.equal(context.observer.sessionToken(),state.token);
- assert.doesNotMatch(source.slice(end),/sessionToken:|token:state\.token|return state\.token/);
+ assert.doesNotMatch(source,/sessionToken|return state\.token|token:state\.token/);
+ assert.match(source,/hasStoredSession:!!state\.token/,'Only a session-presence boolean may appear in observations');
  const script=readFileSync('scripts/android-emulator-account.mjs','utf8');
- assert.match(script,/window\.ISTAccountTest\.sessionToken\(\)/);assert.doesNotMatch(script,/JSON\.stringify\(state\.token\)/);
+ assert.doesNotMatch(script,/ISTAccountTest\.sessionToken|JSON\.stringify\(state\.token\)|const actualToken=/);
+ assert.match(script,/external revocation are unverified/,'Do not claim external revocation coverage without exercising it');
 });
 
 test('HLS manifest and fatal-error listeners install before any playlist request',()=>{
