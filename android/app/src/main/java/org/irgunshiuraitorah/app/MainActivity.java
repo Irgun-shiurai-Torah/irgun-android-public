@@ -294,6 +294,7 @@ public class MainActivity extends BridgeActivity {
         // Android may call onResume while Capacitor is still restoring/replacing the
         // WebView after Home or a notification tap. The live JS page proves it is
         // ready by calling IrgunPlayback.getState() from visibilitychange/init.
+        IrgunPlaybackService.restoreNativeVideoOnForeground();
         IrgunPlaybackPlugin.setAppForeground(true);
         IrgunAnalyticsReporter.get(this).setForeground(true);
 

@@ -30,6 +30,7 @@ const SCHEDULE_CITY_FILTER_KEY = 'istScheduleCityFilterV1';
 const SKIP_SECONDS_KEY = 'istSkipSecondsV1';
 const audio = document.getElementById('audioEngine');
 const app = document.getElementById('app');
+if (Capacitor.getPlatform() === 'android') document.body.classList.add('irgun-android');
 const persistentVideoMount = document.getElementById('persistentVideoMount');
 const IrgunDownloader = registerPlugin('IrgunDownloader');
 const IrgunPush = registerPlugin('IrgunPush');
@@ -3730,9 +3731,10 @@ function refreshPersistentMiniVideoChrome() {
 async function togglePersistentMiniVideoPlayback(event) {
   if (event) event.stopPropagation();
   const player = state.watchVimeo;
-  if (!player || !state.watchVimeoReady) return;
+  if (!player || (!player.isIrgunNativeVideoPlayer && !state.watchVimeoReady)) return;
   try {
-    const paused = await player.getPaused();
+    const paused = player.isIrgunNativeVideoPlayer
+      ? !(await player.refresh()).playWhenReady : await player.getPaused();
     if (paused) await PlaybackController.play();
     else await PlaybackController.pause();
   } catch (_) {}
@@ -8092,7 +8094,15 @@ function nativeAudioPositionSeconds() {
 }
 
 function nativeAudioDurationSeconds() {
-  return Math.max(0, Number(state.nativePlayback?.durationMs) || 0) / 1000;
+  const id=String(state.nativePlayback?.lectureId||'');
+  const duration=Math.max(0,Number(state.nativePlayback?.durationMs)||Number(state.nativePlayback?.audioDurationMs)||0)/1000;
+  if(duration>0&&id) { state.nativeKnownDuration={id,seconds:duration}; return duration; }
+  // A network error may temporarily remove Media3's timeline. Keep the last
+  // actual duration for THIS lecture so its physical seek bar stays usable.
+  if(id&&state.nativeKnownDuration?.id===id) return state.nativeKnownDuration.seconds;
+  if(id&&state.watchVideo&&videoId(state.watchVideo)===id) return Math.max(0,Number(state.watchVideo.duration)||0);
+  if(id&&String(state.current?.id||'')===id) return Math.max(0,Number(state.current.duration)||0);
+  return 0;
 }
 
 function playbackPositionSeconds() {
@@ -8193,6 +8203,12 @@ function reconcileNativeWatchAudio(snapshot) {
   // Initial MP3 prewarming publishes AUDIO before Video can decode. That
   // metadata callback is not a user Audio selection or a completed Home handoff.
   if (state.watchMode === 'video' && snapshot.audioAuthorityCommitted !== true && !state.nativeBackgroundHandoff && !document.hidden) return;
+  // Home temporarily disables the video track; it does not change the user's
+  // chosen presentation. The Activity restores that track on foreground return.
+  if (snapshot.resumeVideoOnForeground && state.watchVimeo?.isIrgunNativeVideoPlayer) {
+    state.watchResumeSeconds = Math.max(0,Number(snapshot.currentPositionMs)||0)/1000;
+    return;
+  }
   const wasVideo = state.watchMode === 'video';
   ensureNativeAudioCurrentForWatch(snapshot);
   state.nativeBackgroundHandoff = false;

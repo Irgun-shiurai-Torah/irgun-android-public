@@ -241,7 +241,7 @@ test('Android landscape reserves a genuinely visible PlayerView rectangle',()=>{
   assert.match(css,/#persistentVideoMount\.watch-full-host \.watch-frame/);
   assert.match(css,/height: clamp\(96px, calc\(100dvh - 118px\), 360px\) !important/);
   assert.match(css,/aspect-ratio: auto !important/);
-  assert.match(adapter,/r\.bottom<=innerHeight\+2/,
+  assert.match(adapter,/r\.left<innerWidth&&r\.top<innerHeight/,
     'Never claim a VIDEO pass if the real frame extends beyond Android window');
   const landscapeHeight=296,top=44+33,frame=Math.max(96,Math.min(landscapeHeight-118,360));
   assert.ok(top+frame<landscapeHeight,
@@ -340,4 +340,131 @@ test('native PiP restoration only repositions the same engine and cannot seek a 
   runInNewContext(app.slice(start,end)+'\nthis.restore=restoreAfterSystemPip;',context);
   await context.restore();
   assert.equal(updated,1);assert.equal(bars,1);
+});
+
+
+test('native Mini transports ignore legacy readiness and pause by play intent during buffering',async()=>{
+  const start=app.indexOf('async function togglePersistentMiniVideoPlayback(');
+  const end=app.indexOf('function bindPersistentVideoChrome()',start);
+  const calls=[];
+  const context={state:{watchVimeoReady:false,watchVimeo:{isIrgunNativeVideoPlayer:true,
+      refresh:async()=>({playing:false,playWhenReady:true})}},
+    PlaybackController:{pause:async()=>calls.push('pause'),play:async()=>calls.push('play')}};
+  runInNewContext(app.slice(start,end)+'\nthis.toggle=togglePersistentMiniVideoPlayback;',context);
+  await context.toggle({stopPropagation:()=>{}});
+  assert.deepEqual(calls,['pause'],'Buffering native Video must honor Pause even before the legacy ready flag');
+  context.state.watchVimeo.refresh=async()=>({playing:false,playWhenReady:false});
+  await context.toggle();assert.deepEqual(calls,['pause','play']);
+});
+
+test('duration loss keeps the known same-lecture seek range and cannot reuse another lecture duration',()=>{
+  const start=app.indexOf('function nativeAudioDurationSeconds()');
+  const end=app.indexOf('function playbackPositionSeconds()',start);
+  const context={state:{nativePlayback:{lectureId:'a',durationMs:6177000},watchVideo:{id:'a',duration:6100}},
+    videoId:v=>v.id};
+  runInNewContext(app.slice(start,end)+'\nthis.duration=nativeAudioDurationSeconds;',context);
+  assert.equal(context.duration(),6177);
+  context.state.nativePlayback.durationMs=0;
+  assert.equal(context.duration(),6177,'Transient Media3 timeline loss cannot disable the real seek bar');
+  context.state.nativePlayback.lectureId='b';
+  assert.equal(context.duration(),0,'Another lecture must never inherit this duration');
+  context.state.watchVideo={id:'b',duration:3000};
+  assert.equal(context.duration(),3000,'Known matching catalog duration is a safe fallback');
+});
+
+test('native Mini receives the real Pause rectangle even when RTL places it over the thumbnail',async()=>{
+  const start=adapter.indexOf('  const viewportFrame=()=>{');
+  const end=adapter.indexOf('  const scheduleFrame=',start);
+  const frame={getBoundingClientRect:()=>({x:12,y:493,left:12,top:493,right:124,bottom:556,width:112,height:63})};
+  const button={getBoundingClientRect:()=>({x:24,y:501,left:24,top:501,right:66,bottom:543,width:42,height:42})};
+  const requests=[];
+  const ctx={destroyed:false,mode:'video',framePlacedOnScreen:false,innerWidth:320,innerHeight:640,
+    document:{querySelector:selector=>selector.includes('data-mini-video-play-toggle')?button:null,
+      querySelectorAll:()=>[frame],getElementById:()=>null,body:{classList:{contains:()=>true}}},
+    native:{frame:async value=>requests.push(value)}};
+  runInNewContext(adapter.slice(start,end)+'\nthis.position=positionFrame;',ctx);
+  await ctx.position();
+  assert.deepEqual(JSON.parse(JSON.stringify(requests[0].miniPlay)),{x:24,y:501,width:42,height:42});
+  assert.match(bridge,/miniPlayPauseTarget.setElevation\(20f\)/);
+  assert.match(bridge,/player.getPlayWhenReady\(\)\) IrgunPlaybackService.pause\(\)/);
+});
+
+
+test('native Video double taps require same-side timely taps, cancel drags and clamp the real seek target',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'native-double-tap-'));
+  try {
+    const probe=join(dir,'DoubleTapProbe.java');
+    writeFileSync(probe,`package org.irgunshiuraitorah.app;
+public class DoubleTapProbe {
+ static void check(boolean value) { if(!value) throw new AssertionError(); }
+ public static void main(String[] args) {
+  NativeVideoDoubleTap tap=new NativeVideoDoubleTap();
+  check(tap.tap(1000,10,60,300,300,50)==0);
+  check(tap.tap(1150,12,60,300,300,50)==-1);
+  check(tap.tap(1200,12,60,300,300,50)==0);
+  tap.cancel(); check(tap.tap(1300,12,60,300,300,50)==0);
+  check(tap.tap(1800,12,60,300,300,50)==0);
+  check(tap.tap(1900,290,60,300,300,50)==0);
+  check(tap.tap(2000,290,60,300,300,50)==1);
+  check(tap.tap(2100,150,60,300,300,50)==0);
+  check(tap.tap(2150,150,60,300,300,50)==0);
+  check(NativeVideoDoubleTap.seekTarget(9000,60000,-1)==0);
+  check(NativeVideoDoubleTap.seekTarget(55000,60000,1)==60000);
+  check(NativeVideoDoubleTap.seekTarget(20000,-1,1)==35000);
+ }
+}`);
+    execFileSync('javac',['-d',dir,'android/app/src/main/java/org/irgunshiuraitorah/app/NativeVideoDoubleTap.java',probe]);
+    execFileSync('java',['-cp',dir,'org.irgunshiuraitorah.app.DoubleTapProbe']);
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+test('actual service Play/Pause reaches native Video without affecting a legacy shadow player',()=>{
+  const start=service.indexOf('    private void playInternal()');
+  const end=service.indexOf('    private void seekToInternal',start);
+  const methods=service.slice(start,end);
+  const dir=mkdtempSync(join(tmpdir(),'native-video-transport-'));
+  try {
+    const probe=join(dir,'TransportProbe.java');
+    writeFileSync(probe,`public class TransportProbe {
+ enum PlaybackMode { AUDIO, VIDEO }
+ static class Player { int plays,pauses; void play(){plays++;} void pause(){pauses++;} }
+ Player player=new Player(); PlaybackMode playbackMode=PlaybackMode.VIDEO;
+ boolean nativeVideoSourceActive=true;
+ ${methods}
+ public static void main(String[] args) {
+  TransportProbe p=new TransportProbe();p.pauseInternal();p.playInternal();
+  if(p.player.pauses!=1||p.player.plays!=1)throw new AssertionError("Native VIDEO transport ignored");
+  p.nativeVideoSourceActive=false;p.pauseInternal();p.playInternal();
+  if(p.player.pauses!=1||p.player.plays!=1)throw new AssertionError("Legacy shadow transport changed");
+ }
+}`);
+    execFileSync('javac',['-d',dir,probe]);execFileSync('java',['-cp',dir,'TransportProbe']);
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+test('partially scrolled Video keeps the original native geometry with a clipped visible picture',async()=>{
+  const start=adapter.indexOf('  const viewportFrame=()=>{');
+  const end=adapter.indexOf('  const scheduleFrame=',start);
+  const viewport={left:0,top:44,right:320,bottom:600};
+  const frame={getBoundingClientRect:()=>({x:0,y:-70,left:0,top:-70,right:320,bottom:110,width:320,height:180}),
+    closest:()=>({getBoundingClientRect:()=>viewport})};
+  const requests=[];
+  const context={destroyed:false,mode:'video',framePlacedOnScreen:false,innerWidth:320,innerHeight:640,
+    document:{querySelector:()=>null,querySelectorAll:()=>[frame],getElementById:()=>null,
+      body:{classList:{contains:()=>false}}},native:{frame:async value=>requests.push(value)}};
+  runInNewContext(adapter.slice(start,end)+'\nthis.position=positionFrame;',context);
+  await context.position();
+  assert.equal(requests[0].height,180,'Keep original video framing even while scrolled');
+  assert.equal(requests[0].y,-70);
+  assert.deepEqual(JSON.parse(JSON.stringify(requests[0].clip)),{left:0,top:114,right:320,bottom:180});
+});
+
+test('temporary Home Audio snapshot preserves the selected native Video view and advancing position',()=>{
+  const start=app.indexOf('function reconcileNativeWatchAudio(snapshot)');
+  const end=app.indexOf('const PlaybackController =',start);
+  const context={state:{watchMode:'video',watchVideo:{id:'a'},watchVimeo:{isIrgunNativeVideoPlayer:true}},
+    videoId:v=>v.id,document:{hidden:true},ensureNativeAudioCurrentForWatch:()=>{throw new Error('Home may not select Audio');}};
+  runInNewContext(app.slice(start,end)+'\nthis.reconcile=reconcileNativeWatchAudio;',context);
+  context.reconcile({mode:'AUDIO',lectureId:'a',audioAuthorityCommitted:true,resumeVideoOnForeground:true,currentPositionMs:91000});
+  assert.equal(context.state.watchMode,'video');assert.equal(context.state.watchResumeSeconds,91);
 });

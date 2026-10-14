@@ -141,7 +141,16 @@ async function tap(selector){
 async function tapWithScroll(selector) {
   for(let attempt=0;attempt<8;attempt++) {
     const point=await hit(selector);
-    if(point) return tap(selector);
+    if(point) {
+      try { return await tap(selector); }
+      catch(error) {
+        if(!String(error.message).includes('no tap was performed')) throw error;
+        // An asynchronous render can reset the sheet's scroll between the
+        // first hit test and the two stable geometry samples. Re-measure and
+        // physically scroll again, without replacing the failed tap with JS.
+        await delay(300); continue;
+      }
+    }
     // Physical swipes in the current Android WebView, not synthetic DOM scrolling.
     assert.ok(bounds,'Actual measured native WebView bounds required to scroll');
     const x=Math.round((bounds[0]+bounds[2])/2);
@@ -259,7 +268,7 @@ async function seekAudio(seconds) {
   for(let i=0;i<8;i++) {
     const measured=await settledNativeTapPoint({
       readBounds:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),delay,
-      readPoint:async()=>JSON.parse(await evaluate('JSON.stringify((()=>{const e=document.querySelector("#watchAudioSeek"),r=e?.getBoundingClientRect();if(!r)return null;const max=Number(e.max),usable=r.width-16,rtl=getComputedStyle(e).direction==="rtl",x=r.left+8+usable*(rtl?1-'+seconds+'/max:'+seconds+'/max)+'+offset+',y=r.top+r.height/2;return document.elementFromPoint(x,y)===e?{x,y,width:innerWidth,height:innerHeight,max,usable,rtl}:null;})())'))
+      readPoint:async()=>JSON.parse(await evaluate('JSON.stringify((()=>{const e=document.querySelector("#watchAudioSeek"),r=e?.getBoundingClientRect();if(!r)return null;const max=Number(e.max),usable=r.width-16;if(!Number.isFinite(max)||max<=0||usable<=0||max<'+seconds+')return null;const rtl=getComputedStyle(e).direction==="rtl",x=r.left+8+usable*(rtl?1-'+seconds+'/max:'+seconds+'/max)+'+offset+',y=r.top+r.height/2;return document.elementFromPoint(x,y)===e?{x,y,width:innerWidth,height:innerHeight,max,usable,rtl}:null;})())'))
     });
     bounds=measured.bounds;adb('shell','input','tap',...measured.point.map(String));await delay(450);
     const state=await read(),position=Number(state.native.audioPositionMs)/1000;
@@ -646,13 +655,13 @@ try{
     adb('shell','input','tap',String(Math.round((rect[0]+rect[2])/2)),String(Math.round((rect[1]+rect[3])/2)));
     await delay(1600);
     bounds=await nativeBounds();
-    const back=await wait(s=>s.native.mode==='AUDIO'&&s.native.audioIsPlaying,'Notification did not reopen playing native Audio',50000);
+    const back=await wait(s=>s.videoEngine==='native-media3' ? s.native.mode==='VIDEO'&&s.watchMode==='video'&&s.video&&!s.video.paused : s.native.mode==='AUDIO'&&s.native.audioIsPlaying,'Notification must reopen the previously selected Video with moving playback',50000);
     assert.ok(back.native.audioPositionMs/1000>=beforePosition+1,'Background handoff lost saved Video progress');
     assert.ok(back.native.audioPositionMs>=continuing.native.audioPositionMs-750,
       'Notification reopening must not rewind native Audio to the parked Video clock');
-    audibleAudio(back);
+    if(back.videoEngine==='native-media3') audibleVideo(back); else audibleAudio(back);
     adb('shell','input','keyevent','KEYCODE_MEDIA_PAUSE');
-    await wait(s=>s.native.mode==='AUDIO'&&!s.native.audioIsPlaying,'Media notification/session Pause action not respected',17000);
+    await wait(s=>!s.native.audioIsPlaying,'Media notification/session Pause action not respected',17000);
     adb('shell','input','keyevent','KEYCODE_MEDIA_PLAY');
     const resumed=await wait(s=>s.native.audioIsPlaying,'Media notification/session Play action not respected',17000);
     assert.ok(resumed.native.audioPositionMs/1000>=beforePosition,'Reopening must not reset the timer');
@@ -1054,6 +1063,7 @@ try{
   });
   await section('Small-screen English/Hebrew layouts retain usable navigation',async()=>{
     const originalSize=adb('shell','wm','size');
+    await closePlayer();
     try{
       if((await read()).watchId){
         await tap('[data-close-watch]');

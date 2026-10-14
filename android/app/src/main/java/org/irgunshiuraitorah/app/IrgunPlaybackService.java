@@ -79,6 +79,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         public final boolean audioPlayWhenReady;
         public final boolean audioAuthorityCommitted;
         public final boolean networkRecoveryPending;
+        public final boolean resumeVideoOnForeground;
 
         Snapshot(
             String lectureId,
@@ -105,7 +106,8 @@ public class IrgunPlaybackService extends MediaSessionService {
             boolean audioIsPlaying,
             boolean audioPlayWhenReady,
             boolean audioAuthorityCommitted,
-            boolean networkRecoveryPending
+            boolean networkRecoveryPending,
+            boolean resumeVideoOnForeground
         ) {
             this.lectureId = cleanStatic(lectureId);
             this.vimeoId = cleanStatic(vimeoId);
@@ -132,6 +134,7 @@ public class IrgunPlaybackService extends MediaSessionService {
             this.audioPlayWhenReady = audioPlayWhenReady;
             this.audioAuthorityCommitted = audioAuthorityCommitted;
             this.networkRecoveryPending = networkRecoveryPending;
+            this.resumeVideoOnForeground = resumeVideoOnForeground;
         }
     }
 
@@ -191,6 +194,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     private float logicalSpeed = 1f;
     private float logicalVolume = 1f;
 
+    private boolean resumeVideoOnForeground = false;
     private boolean pendingBackgroundHandoff = false;
     private long pendingBackgroundPositionMs = 0L;
     private long backgroundHandoffStartedMs = 0L;
@@ -587,6 +591,7 @@ public class IrgunPlaybackService extends MediaSessionService {
             player = null;
         }
         nativeVideoSourceActive = false;
+        resumeVideoOnForeground = false;
         nativeVideoSelected = false;
         if (activeInstance == this) activeInstance = null;
         super.onDestroy();
@@ -645,7 +650,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         return new Snapshot(
             lectureId, vimeoId, title, speaker, image, mediaKind, sourceId, paidAudioId, trackId, audioUrl, videoSource,
             playbackMode, presentationMode, position, duration, playing,
-            logicalSpeed, logicalVolume, audioReadyInternal(), audioPosition, audioDuration, audioPlaying, audioPlayWhenReady, authorityGuard.isAudioCommitted(), networkRecoveryPending
+            logicalSpeed, logicalVolume, audioReadyInternal(), audioPosition, audioDuration, audioPlaying, audioPlayWhenReady, authorityGuard.isAudioCommitted(), networkRecoveryPending, resumeVideoOnForeground
         );
     }
 
@@ -691,6 +696,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         }
         if (!sameLecture) {
             nativeVideoSourceActive = false;
+            resumeVideoOnForeground = false;
             nativeVideoSelected = false;
         }
         if (!sameLecture || !sameAudio) {
@@ -1046,16 +1052,16 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private void playInternal() {
-        if (playbackMode == PlaybackMode.AUDIO && player != null) player.play();
+        if ((playbackMode == PlaybackMode.AUDIO || nativeVideoSourceActive) && player != null) player.play();
     }
 
     private void pauseInternal() {
-        if (playbackMode == PlaybackMode.AUDIO && player != null) player.pause();
+        if ((playbackMode == PlaybackMode.AUDIO || nativeVideoSourceActive) && player != null) player.pause();
     }
 
     private void seekToInternal(long positionMs) {
         long target = Math.max(0L, positionMs);
-        if (playbackMode == PlaybackMode.AUDIO && player != null) {
+        if ((playbackMode == PlaybackMode.AUDIO || nativeVideoSourceActive) && player != null) {
             long duration = player.getDuration();
             if (duration != C.TIME_UNSET && duration > 0L) target = Math.min(target, duration);
             if (networkRecoveryPending) networkRecoveryPositionMs = target;
@@ -1170,9 +1176,10 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     private void beginBackgroundVideoHandoffInternal() {
         if (nativeVideoSourceActive) {
-            // Home is just a presentation change. Disable the video track;
-            // the EXACT SAME Media3 audio and clock keep playing uninterrupted.
-            switchNativeVideoPresentationInternal(false);
+            if (nativeVideoSelected) {
+                resumeVideoOnForeground = true;
+                switchNativeVideoPresentationInternal(false);
+            }
             return;
         }
         if (pendingBackgroundHandoff) return;
@@ -1424,6 +1431,15 @@ public class IrgunPlaybackService extends MediaSessionService {
         refreshMediaNotification();
     }
 
+    public static void restoreNativeVideoOnForeground() {
+        onMain(() -> {
+            IrgunPlaybackService s = active();
+            if (s == null || !s.resumeVideoOnForeground) return;
+            s.resumeVideoOnForeground = false;
+            if (s.nativeVideoSourceActive) s.switchNativeVideoPresentationInternal(true);
+        });
+    }
+
     public static void nativeVideoPresentation(boolean showVideo) {
         nativeVideoPresentation(showVideo, "");
     }
@@ -1431,7 +1447,10 @@ public class IrgunPlaybackService extends MediaSessionService {
     public static void nativeVideoPresentation(boolean showVideo, String verifiedOfflineAudioUri) {
         onMain(() -> {
             IrgunPlaybackService s = active();
-            if (s != null) s.switchNativeVideoPresentationInternal(showVideo, verifiedOfflineAudioUri);
+            if (s != null) {
+                s.resumeVideoOnForeground = false;
+                s.switchNativeVideoPresentationInternal(showVideo, verifiedOfflineAudioUri);
+            }
         });
     }
 
@@ -1556,6 +1575,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         player.stop();
         player.clearMediaItems();
         nativeVideoSourceActive = false;
+        resumeVideoOnForeground = false;
         nativeVideoSelected = false;
         nativeVideoOfflineAudioActive = false;
         nativeVideoOfflineAudioUri = "";
@@ -1632,7 +1652,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private static Snapshot emptySnapshot() {
-        return new Snapshot("", "", "", "", "", "", "", "", "", "", "", PlaybackMode.AUDIO, PresentationMode.FULL, 0L, 0L, false, 1f, 1f, false, 0L, 0L, false, false, false, false);
+        return new Snapshot("", "", "", "", "", "", "", "", "", "", "", PlaybackMode.AUDIO, PresentationMode.FULL, 0L, 0L, false, 1f, 1f, false, 0L, 0L, false, false, false, false, false);
     }
 
     /**
