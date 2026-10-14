@@ -2,7 +2,7 @@
   "sourceBranch": "fix/android-postmerge-like-home-20261013",
   "sourceCommit": "1c1128bf8b157c43c1e9742d0fa488a548482174",
   "track": "internal",
-  "requestedAt": "2026-10-14T18:05:56.522Z",
+  "requestedAt": "2026-10-14T18:10:13.234Z",
   "pullRequest": 37,
   "mergeIntoMain": false,
   "features": [
@@ -16,7 +16,9 @@
   ],
   "verification": {
     "localTests": 222,
-    "required": "Full exact-source Android matrix, startup and physical Media3 controls API 30/34/35/36; immediate Audio-to-Video transition plus stable settings."
+    "fullMatrixRun": 38612232128,
+    "startupRun": 38612231672,
+    "status": "Full emulator tests running; user explicitly requested immediate Internal upload for concurrent real-phone testing."
   },
-  "releaseAttempt": 8
+  "releaseAttempt": 9
 }
