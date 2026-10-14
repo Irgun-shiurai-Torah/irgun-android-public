@@ -161,7 +161,12 @@ test('expanded Android tests observe actual Media3 and physical Android network 
   assert.match(ext,/s\.media3=await evaluate\("window\.Capacitor\.nativePromise\('IrgunNativeVideo','snapshot'/);
   assert.match(ext,/s\.media3\.frames>=2/);
   assert.match(ext,/s\.media3\.bufferedPositionMs>s\.media3\.positionMs/);
-  assert.match(ext,/adb\('emu','network','speed','umts'\)/);
+  assert.match(ext,/adb\('emu','network','speed','hsdpa'\)/);
+  assert.match(ext,/adb\('emu','network','delay','edge'\)/);
+  assert.match(ext,/await seekAudio\(target\/1000\)/,
+    'When hardware FF is ignored during a stall, physically seek with the real Watch range instead');
+  assert.match(ext,/Math\.abs\(s\.media3\.positionMs-target\)<8000/,
+    'Physical seek must actually update the Media3 clock');
   assert.match(ext,/adb\('shell','input','keyevent','KEYCODE_MEDIA_FAST_FORWARD'\)/);
   assert.match(ext,/if\(start\.videoEngine==='native-media3'\)/);
   assert.match(ext,/assert\.equal\(s\.webViewVideo,null/);
