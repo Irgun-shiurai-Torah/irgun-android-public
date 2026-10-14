@@ -71,6 +71,7 @@ test('native Video surface yields to Save picker, then restores the SAME player'
   const context={
     destroyed:false,mode:'video',placeholder,framePlacedOnScreen:false,
     document:{
+      body:{classList:{contains:()=>false}},
       querySelector:selector=>selector==='.playlist-picker-backdrop'&&modalVisible?{}:null,
       querySelectorAll:()=>[placeholder],
       getElementById:()=>null
@@ -116,7 +117,7 @@ test('native Media3 refuses an offscreen -12000px iframe after Audio to Video',a
       querySelector:selector=>selector==='.media-switch [data-watch-mode="video"].active'&&activeVideo?{}:null,
       querySelectorAll:()=>[frame],
       getElementById:id=>id==='persistentVideoMount'?host:null,
-      body:{classList:{remove:()=>{}}}
+      body:{classList:{remove:()=>{},contains:()=>false}}
     },
     native:{frame:async args=>{calls.push(args);}},
     innerWidth:320,innerHeight:600
@@ -184,4 +185,43 @@ test('offline Audio chooses a verified private MP3, then restores HLS in the SAM
   assert.match(adapter,/offlineUri:next==='audio'/,'Only Audio is allowed to use downloaded file');
   const ext=readFileSync('scripts/android-regression-extensions.mjs','utf8');
   assert.match(ext,/Audio playback must select the offline file/);
+});
+
+test('real mini thumbnail taps expand native PlayerView and rotation restores physical view',async()=>{
+  assert.match(adapter,/mini:document\.body\.classList\.contains\('irgun-watch-mini-hosted'\)/,
+    'The native renderer must know when the permanent video host becomes mini');
+  assert.match(bridge,/miniExpandTarget\.setOnClickListener\(/,
+    'Thumbnail needs an Android-native click target over PlayerView, not just a WebView hit test');
+  assert.match(bridge,/web\.evaluateJavascript\(/);
+  assert.match(bridge,/__irgunExpandNativeMiniVideo/);
+  assert.match(app,/window\.__irgunExpandNativeMiniVideo\s*=\s*\(\)/);
+  assert.match(app,/void expandPersistentWatch\(\)/);
+  assert.match(bridge,/miniExpandTarget\.setVisibility\(View\.VISIBLE\)/);
+  assert.match(bridge,/surface\.setUseController\(!mini\)/,
+    'Mini thumb must not show native playback controls when tapping Expand');
+  assert.match(bridge,/root\.addOnLayoutChangeListener\(rootLayoutListener\)/,
+    'Android view MUST reflow after root orientation changes');
+  assert.match(bridge,/if \(visible\) ensureSurface\(\)/,
+    'Each physical frame update must rebind to the current Activity/root');
+  assert.match(adapter,/!s\.surfaceVisibleOnScreen/,
+    'A moving decoder must not count as a visible video after Android rotation');
+  const frameCode=adapter.slice(adapter.indexOf('  const viewportFrame=()=>{'),
+    adapter.indexOf('  const scheduleFrame=',adapter.indexOf('  const viewportFrame=()=>{')));
+  const frame={getBoundingClientRect:()=>({x:12,y:493,left:12,top:493,right:124,bottom:556,width:112,height:63})};
+  const requests=[];
+  const ctx={
+    destroyed:false,mode:'video',framePlacedOnScreen:false,
+    document:{
+      querySelector:()=>null,querySelectorAll:()=>[frame],getElementById:()=>null,
+      body:{classList:{contains:name=>name==='irgun-watch-mini-hosted'}}
+    },
+    native:{frame:async payload=>requests.push(payload)},
+    innerWidth:320,innerHeight:640
+  };
+  runInNewContext(frameCode+'\nthis.positionFrame=positionFrame;',ctx);
+  await ctx.positionFrame();
+  assert.equal(requests[0].mini,true,'Mini frames must expose their native tap target');
+  assert.equal(requests[0].width,112);
+  assert.equal(requests[0].height,63);
+  assert.equal(requests[0].x,12);
 });
