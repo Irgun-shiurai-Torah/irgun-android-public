@@ -409,8 +409,14 @@ function offlineSaveFixture({failure,actualBytes=60268750}={}) {
     offlineKeyFor:()=>key,usageAnalytics:{event(){}},videoId:()=>id,mediaApiId:()=>id,
     itemTitle:()=> 'Shiur',itemSubtitle:()=> 'Speaker',document:{querySelector:()=>null},
     refreshOfflineButtonsForKey(){},refreshInteractiveUi(){},persistOfflineDownloads(){},setToast(){},currentLanguage:()=> 'en'};
-  const start=mainSource.indexOf('async function saveOffline(');
-  runInNewContext(mainSource.slice(start,mainSource.indexOf('async function deleteOffline(',start))+'\nthis.save=saveOffline;',context);
+  // Exercise the ACTUAL production prebuffer helper together with Save,
+  // rather than extracting Save without the helper and failing before any
+  // real HTTP retry / incomplete-file assertions run. In this test fixture
+  // video is not actively playing, so the production helper returns normally.
+  const prepare=mainSource.indexOf('async function prepareNativeVideoBufferForOfflineTransfer()');
+  const start=mainSource.indexOf('async function saveOffline(',prepare);
+  assert.ok(prepare>=0&&start>prepare,'Offline Save must include its real HLS prebuffer prerequisite');
+  runInNewContext(mainSource.slice(prepare,mainSource.indexOf('async function deleteOffline(',start))+'\nthis.save=saveOffline;',context);
   return {state,events,key,save:()=>context.save('video',id),calls:()=>calls,removed:()=>removed,bytes:()=>bytes};
 }
 test('the actual Offline Save recovers the observed 4.3MB interruption and records only the complete MP3',async()=>{
