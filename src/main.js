@@ -4440,6 +4440,13 @@ function libraryHtml() {
     ['likes',he?'אהבתי':'My Likes'],['later',he?'לשמירה':'Watch Later'],['history',he?'היסטוריה':'History'],
     ['following',he?'במעקב':'Following'],['downloads',he?'הורדות':'Downloads'],['playlists',he?'רשימות':'Playlists'],['purchased',he?'רכישות':'Purchased']
   ];
+  // Offline files are the only fully usable Library section when signed out.
+  // Put Downloads within physical reach rather than leaving it outside the
+  // horizontal strip after four account-only tabs on narrow Android 11.
+  if (!state.user) {
+    const index=tabs.findIndex(([section])=>section==='downloads');
+    if(index>=0)tabs.unshift(...tabs.splice(index,1));
+  }
   const headerText = state.user ? (he?`מסונכרן עם ${state.user.email||'החשבון שלכם'}.`:`Synced with ${state.user.email || 'your account'}.`) : (he?'הורדות לא מקוונות נשמרות במכשיר. התחברו כדי לסנכרן רשימות, לייקים והיסטוריה.':'Offline downloads stay on this device. Sign in to sync playlists, likes, history and follows.');
   let body = '';
   if (!state.user && !localSection) body = signedOutCard();
@@ -6591,6 +6598,13 @@ function bind() {
     state.screen = el.dataset.nav;
     if (el.dataset.openPurchased) state.librarySection = 'purchased';
     if (el.dataset.openHistory) state.librarySection = 'history';
+    if (state.screen === 'library' && !state.user && !el.dataset.openPurchased &&
+        !el.dataset.openHistory &&
+        ['likes','later','history','following'].includes(state.librarySection)) {
+      // After an offline process restart, show the saved recordings instead
+      // of a Sign In placeholder. My Likes stays reachable by an explicit tab.
+      state.librarySection='downloads';
+    }
     if (state.screen === 'schedule') state.scheduleDataLoaded = false;
     if (state.screen === 'donate') { state.donationProvider = 'stripe'; closeDonationCheckout(false); }
     if (state.screen.startsWith('live')) { state.scheduleDataLoaded = false; state.liveStatusLoaded = false; }
