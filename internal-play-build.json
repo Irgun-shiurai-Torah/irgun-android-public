@@ -1,8 +1,8 @@
 {
   "sourceBranch": "fix/android-postmerge-like-home-20261013",
-  "sourceCommit": "a832a8f9a3381cfed7525c8746cf4f446515335d",
+  "sourceCommit": "00a8bf44fac2bf2421f63a42b5930d3c4f235f01",
   "track": "internal",
-  "requestedAt": "2026-10-14T23:14:28.035Z",
+  "requestedAt": "2026-10-14T23:17:25.882Z",
   "pullRequest": 37,
   "mergeIntoMain": false,
   "features": [
@@ -22,8 +22,8 @@
     "localTests": 243,
     "androidPackaging": "npm run test:player passed",
     "status": "Physical emulator tests queued/running separately; user-authorized concurrent Internal testing.",
-    "fullMatrixRun": 38652822318,
-    "startupRun": 38652822130
+    "fullMatrixRun": 38653123224,
+    "startupRun": 38653123234
   },
-  "releaseAttempt": 13
+  "releaseAttempt": 14
 }

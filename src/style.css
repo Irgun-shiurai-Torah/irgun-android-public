@@ -2762,7 +2762,8 @@ body.irgun-android .android-floating-nav .nav-btn.active .nav-icon { transform: 
 body.irgun-android .android-floating-nav .nav-btn:focus-visible { outline: 2px solid #102a43; outline-offset: -3px; }
 body.irgun-android .app-shell { padding-bottom: 0; }
 body.irgun-android .content { padding-bottom: calc(var(--android-nav-clearance) + 16px); }
-body.irgun-android .app-shell.android-has-mini .content { padding-bottom: calc(var(--android-nav-clearance) + 88px); }
+body.irgun-android .app-shell.android-has-mini .content,
+body.irgun-android.irgun-watch-mini-hosted .content { padding-bottom: calc(var(--android-nav-clearance) + 88px); }
 body.irgun-android .mini-player,
 body.irgun-android .mini-video-player { bottom: var(--android-nav-clearance); }
 body.irgun-android:not(.irgun-system-pip) #persistentVideoMount.watch-mini-host .watch-overlay {
