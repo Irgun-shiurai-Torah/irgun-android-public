@@ -2679,3 +2679,27 @@ html[dir="rtl"] body.irgun-android #persistentVideoMount.watch-mini-host .watch-
   left: auto !important;
   right: 4px !important;
 }
+
+/* Rotation fullscreen keeps the same Vimeo iframe and SDK instance alive. */
+body.irgun-android.irgun-video-rotation-fullscreen #persistentVideoMount #watchVimeoFrame,
+body.irgun-android.irgun-video-rotation-fullscreen #app #watchVimeoFrame {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  aspect-ratio: auto !important;
+  z-index: 10000 !important;
+}
+body.irgun-android .rotation-fullscreen-exit {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  width: 44px;
+  height: 44px;
+  z-index: 10001;
+  border: 0;
+  border-radius: 8px;
+  background: #0008;
+  color: white;
+  font-size: 24px;
+}

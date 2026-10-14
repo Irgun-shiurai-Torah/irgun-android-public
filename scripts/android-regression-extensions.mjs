@@ -525,11 +525,15 @@ try{
   await section('Android portrait/landscape rotation retains moving video and unclipped controls',async()=>{
     const auto=adb('shell','settings','get','system','accelerometer_rotation');
     const rotation=adb('shell','settings','get','system','user_rotation');
+    const acceleration=adb('emu','sensor','get','acceleration').match(/acceleration\s*=\s*([-\d.]+:[-\d.]+:[-\d.]+)/)?.[1];
+    assert.ok(acceleration,'Observe the actual device sensor before the rotation test');
     try {
       adb('shell','settings','put','system','accelerometer_rotation','0');
       const before=await videoReady();
       for(const value of [1,0,1,0]) {
-        adb('shell','settings','put','system','user_rotation',String(value));await delay(1800);
+        // Physical tilt, rather than changing a display preference, exercises
+        // the app's sensor policy while the user's auto-rotate remains OFF.
+        adb('emu','sensor','set','acceleration',value===1?'9.81:0:0':'0:9.81:0');await delay(1800);
         const shapeSelector=before.videoEngine==='native-media3'?'#watchVimeoFrame':'#watchDirectHlsVideo';
         const shape=JSON.parse(await evaluate('JSON.stringify({w:innerWidth,h:innerHeight,rect:(()=>{const r=document.querySelector('+JSON.stringify(shapeSelector)+')?.getBoundingClientRect();return r?{left:r.left,right:r.right,top:r.top,bottom:r.bottom}:null})()})'));
         assert.equal(shape.w>shape.h,value===1,'Actual WebView must rotate with Android, not merely accept a setting');
@@ -538,6 +542,7 @@ try{
         screenshot('video-rotation-'+value);
       }
     }finally {
+      adb('emu','sensor','set','acceleration',acceleration);
       for(const [key,value] of [['accelerometer_rotation',auto],['user_rotation',rotation]])
         if(/^\d+$/.test(value))adb('shell','settings','put','system',key,value);else adb('shell','settings','delete','system',key);
       await delay(900);bounds=await nativeBounds();

@@ -26,6 +26,7 @@ public class MainActivity extends BridgeActivity {
     private boolean videoFullscreen = false;
     private boolean irgunPipActive = false;
     private OnBackPressedCallback fullscreenBackCallback;
+    private IrgunVideoDisplayController videoDisplay;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -39,6 +40,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(IrgunPictureInPicturePlugin.class);
         registerPlugin(IrgunAnalyticsPlugin.class);
         super.onCreate(savedInstanceState);
+        videoDisplay = new IrgunVideoDisplayController(this);
         fullscreenBackCallback = new OnBackPressedCallback(false) {
             @Override public void handleOnBackPressed() {
                 if (!videoFullscreen) {
@@ -86,6 +88,11 @@ public class MainActivity extends BridgeActivity {
      * screen and the exit-fullscreen control stays tappable.
      */
     public void setVideoFullscreen(boolean enabled) {
+        setVideoFullscreen(enabled, false);
+    }
+
+    public void setVideoFullscreen(boolean enabled, boolean fromSensor) {
+        if (videoDisplay != null) videoDisplay.fullscreenChanged(enabled, fromSensor);
         videoFullscreen = enabled;
         if (fullscreenBackCallback != null) fullscreenBackCallback.setEnabled(enabled);
         if (enabled) {
@@ -93,6 +100,17 @@ public class MainActivity extends BridgeActivity {
         } else if (!isIrgunPipVisible()) {
             restoreNormalSystemBars();
         }
+    }
+
+    public void setVideoDisplayPresentation(boolean active, boolean playing, boolean expanded, boolean nativeEngine) {
+        if (videoDisplay != null) videoDisplay.presentation(active, playing, expanded, nativeEngine);
+    }
+
+    public void applySensorVideoFullscreen(boolean enabled) {
+        setVideoFullscreen(enabled, true);
+        if (getBridge() != null && getBridge().getWebView() != null)
+            getBridge().getWebView().evaluateJavascript(
+                "window.__irgunSetVideoFullscreenFromRotation && window.__irgunSetVideoFullscreenFromRotation("+enabled+");", null);
     }
 
     private void hideSystemBarsForVideo() {
@@ -150,6 +168,7 @@ public class MainActivity extends BridgeActivity {
             // may hand video playback to the background-audio service during the PiP
             // transition and the floating video never appears or immediately stops.
             irgunPipActive = true;
+            if (videoDisplay != null) videoDisplay.pip(true);
             IrgunNativeVideoPlugin.systemPipChanged(true);
             // Do not resize/reflow the WebView before Android captures the current
             // video frame for PiP. The PiP callback applies the compact layout after
@@ -162,6 +181,7 @@ public class MainActivity extends BridgeActivity {
             boolean entered = enterPictureInPictureMode(builder.build());
             if (!entered) {
                 irgunPipActive = false;
+                if (videoDisplay != null) videoDisplay.pip(false);
                 IrgunNativeVideoPlugin.systemPipChanged(false);
                 prepareWebForPip(false);
                 explainUnavailablePip();
@@ -169,6 +189,7 @@ public class MainActivity extends BridgeActivity {
             return entered;
         } catch (Exception ignored) {
             irgunPipActive = false;
+            if (videoDisplay != null) videoDisplay.pip(false);
             IrgunNativeVideoPlugin.systemPipChanged(false);
             prepareWebForPip(false);
             explainUnavailablePip();
@@ -259,6 +280,7 @@ public class MainActivity extends BridgeActivity {
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
         irgunPipActive = isInPictureInPictureMode;
+        if (videoDisplay != null) videoDisplay.pip(isInPictureInPictureMode);
         IrgunNativeVideoPlugin.systemPipChanged(isInPictureInPictureMode);
         IrgunAnalyticsReporter.get(this).setPictureInPictureActive(isInPictureInPictureMode);
         prepareWebForPip(isInPictureInPictureMode);
@@ -284,6 +306,7 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onPause() {
+        if (videoDisplay != null) videoDisplay.foreground(false);
         // Stop generic Media3 -> Capacitor events as soon as the Activity pauses.
         // The explicit Home handoff is still allowed to issue its one Vimeo pause
         // command until onStop(), but ticker/state callbacks no longer race WebView
@@ -349,10 +372,12 @@ public class MainActivity extends BridgeActivity {
                 });
             }
         }
+        if (videoDisplay != null) videoDisplay.foreground(true);
     }
 
     @Override
     public void onDestroy() {
+        if (videoDisplay != null) videoDisplay.destroy();
         instanceAlive = false;
         IrgunPlaybackPlugin.setAppForeground(false);
         IrgunAnalyticsReporter.get(this).setForeground(false);

@@ -5,6 +5,7 @@ import { usageAnalytics } from './usageAnalytics.js';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import {bindAndroidPlayerSheetInteractions,preserveAndroidPlayerSheetScroll} from './android-player-controls.js';
 import {isAndroidVimeoOnlyVideo,createAndroidVimeoPlayer} from './android-vimeo-playback.js';
+import {createAndroidVideoDisplaySync} from './android-video-display.js';
 const androidPlayerSheetRenderGate=bindAndroidPlayerSheetInteractions({document,view:window,
   isAndroid:()=>Capacitor.getPlatform()==='android',render:()=>render()});
 import { Filesystem, Directory } from '@capacitor/filesystem';
@@ -42,14 +43,24 @@ const IrgunFullscreen = registerPlugin('IrgunFullscreen');
 const IrgunNativeVideo = registerPlugin('IrgunNativeVideo');
 const IrgunPlayback = registerPlugin('IrgunPlayback');
 let nativeVideoFullscreen = false;
+const syncAndroidVideoDisplay=createAndroidVideoDisplaySync({
+  isAndroid:()=>Capacitor.getPlatform()==='android',read:()=>state,
+  send:value=>{
+    if(!value.active||!value.expanded||value.nativeEngine){
+      document.body.classList.remove('irgun-video-rotation-fullscreen');
+      document.querySelector('[data-rotation-fullscreen-exit]')?.remove();
+    }
+    return IrgunFullscreen.playback(value);
+  }
+});
 
-async function setNativeVideoFullscreen(enabled) {
+async function setNativeVideoFullscreen(enabled, {fromSensor=false}={}) {
   if (Capacitor.getPlatform() !== 'android') return;
   const next = Boolean(enabled);
   if (nativeVideoFullscreen === next) return;
   nativeVideoFullscreen = next;
   try {
-    await IrgunFullscreen.set({ enabled: next });
+    await IrgunFullscreen.set({ enabled: next, fromSensor });
   } catch (error) {
     nativeVideoFullscreen = false;
     console.warn('Android fullscreen system-bar sync failed', error);
@@ -58,20 +69,38 @@ async function setNativeVideoFullscreen(enabled) {
 
 // The native Media3 PlayerView lives outside the WebView. Android fullscreen
 // must expand that same physical view and synchronize system bars together.
-async function setAndroidNativeVideoFullscreen(enabled) {
+async function setAndroidNativeVideoFullscreen(enabled, {fromSensor=false}={}) {
   if (Capacitor.getPlatform() !== 'android') return;
   if (state.watchVimeo?.isAndroidVimeoFallback) {
+    if (fromSensor || document.body.classList.contains('irgun-video-rotation-fullscreen')) {
+      // Device rotation has no browser user activation. Resize the same Vimeo
+      // iframe in the app window instead of requesting browser fullscreen.
+      document.body.classList.toggle('irgun-video-rotation-fullscreen',Boolean(enabled));
+      let exit=document.querySelector('[data-rotation-fullscreen-exit]');
+      if(enabled&&!exit){
+        exit=document.createElement('button');exit.dataset.rotationFullscreenExit='1';
+        exit.className='rotation-fullscreen-exit';exit.setAttribute('aria-label','Exit video fullscreen');
+        exit.textContent='⛶';exit.addEventListener('click',()=>{void setAndroidNativeVideoFullscreen(false);});
+        document.body.appendChild(exit);
+      }else if(!enabled)exit?.remove();
+      await setNativeVideoFullscreen(Boolean(enabled),{fromSensor});
+      return;
+    }
     if (enabled) await state.watchVimeo.requestFullscreen();
     else await state.watchVimeo.exitFullscreen();
-    await setNativeVideoFullscreen(Boolean(enabled));
+    await setNativeVideoFullscreen(Boolean(enabled),{fromSensor});
     return;
   }
   if (enabled && !state.watchVimeo?.isIrgunNativeVideoPlayer) {
     throw new Error('Native fullscreen requires an active Media3 Video');
   }
   await IrgunNativeVideo.fullscreen({enabled:Boolean(enabled)});
-  await setNativeVideoFullscreen(Boolean(enabled));
+  await setNativeVideoFullscreen(Boolean(enabled),{fromSensor});
 }
+window.__irgunSetVideoFullscreenFromRotation = enabled => {
+  if(Capacitor.getPlatform()!=='android'||!state.watchVideo||state.watchMode!=='video'||state.watchMinimized)return;
+  return setAndroidNativeVideoFullscreen(Boolean(enabled),{fromSensor:true}).catch(error=>console.warn('Video rotation failed',error));
+};
 window.__irgunToggleNativeVideoFullscreen = () => {
   if (Capacitor.getPlatform() === 'android' && state.watchVimeo?.isIrgunNativeVideoPlayer)
     void setAndroidNativeVideoFullscreen(!nativeVideoFullscreen);
@@ -3731,6 +3760,7 @@ function clearPersistentVideoMount() {
 }
 
 function refreshPersistentMiniVideoChrome() {
+  syncAndroidVideoDisplay();
   if (!persistentVideoMount) return;
   const button = persistentVideoMount.querySelector('[data-mini-video-play-toggle]');
   if (!button) return;
@@ -6466,6 +6496,7 @@ function preserveAuthFormDraft() {
 }
 
 function render() {
+  syncAndroidVideoDisplay();
   if (tabSwipeRenderGate.shouldDefer()) return;
   // Closing Audio or opening Video must replace the sheet immediately: the
   // persistent Video host consumes the newly rendered overlay synchronously.
@@ -8649,6 +8680,7 @@ function syncLoadedLibraryAudioDuration() {
 }
 
 function updatePlayerUi() {
+  syncAndroidVideoDisplay();
   if (!state.current) return;
   const duration = playbackDurationSeconds();
   const position = playbackPositionSeconds();
@@ -9270,6 +9302,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
     // Audio -> Video handoff without a silent gap or a period of double audio.
     player.on('timeupdate', data => {
       if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video') return;
+      syncAndroidVideoDisplay();
       state.watchResumeSeconds = Number(data.seconds) || 0;
       if (state.systemPipActive && state.watchResumeSeconds > 0 && (state.systemPipLastSeconds < 3 || state.watchResumeSeconds >= state.systemPipLastSeconds - 3)) {
         state.systemPipLastSeconds = state.watchResumeSeconds;

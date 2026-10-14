@@ -6,6 +6,7 @@ import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {fullscreenEducationTapPoint} from './android-system-ui-observation.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
 import {typeObservedNativeText} from './android-native-text-entry.mjs';
+import {verifyAndroidVideoDisplay} from './android-video-display-regression.mjs';
 
 // Read the real WebView through CDP, but perform every navigation gesture with
 // Android input events. No DOM clicks or synthetic touch events stand in for UI.
@@ -384,6 +385,8 @@ try {
     assert.ok(after.positionMs<=before.positionMs+elapsed*rate+5000,label+' jumped playback forward');
     assert.equal(after.sourceType,'hls',label+' changed the source');
   };
+  await verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,delay,report,
+    showControls:()=>showNativeControls(),tapExit:()=>tapNativeLabel('Exit video fullscreen')});
   let controls=await showNativeControls();
   assert.ok(controls.media3.availableResolutions.length>=2,
     'Quality integration fixture must contain at least two actual HLS resolutions');
