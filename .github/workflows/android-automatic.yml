@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+      # One isolated Play Internal test release; does not change production/main.
+      - internal/play-pr37-20261014
     paths-ignore:
       - ".github/**"
       - "README*"
