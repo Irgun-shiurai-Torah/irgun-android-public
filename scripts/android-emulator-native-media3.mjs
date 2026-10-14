@@ -350,11 +350,19 @@ try {
     }
     throw new Error('Actual native control not visible: '+description+' / '+text+'; '+xml);
   };
-  const showNativeControls=async()=>{
+  const showNativeControls=async({fresh=false}={})=>{
     const s=await sample(), m=s.media3;
-    if (!m.qualityButtonVisible) {
-      adb('shell','input','tap',String(Math.round(m.surfaceX+m.surfaceVisibleWidth*.95)),
-        String(Math.round(m.surfaceY+m.surfaceVisibleHeight*.48)));
+    const point=[String(Math.round(m.surfaceX+m.surfaceVisibleWidth*.95)),
+      String(Math.round(m.surfaceY+m.surfaceVisibleHeight*.48))];
+    if(fresh&&m.qualityButtonVisible){
+      // A visible control may have only milliseconds left on its timer.
+      // Physically hide/show it before launching the held-touch instrument,
+      // whose process startup must not consume that remaining timeout.
+      adb('shell','input','tap',...point);
+      await waitNative(s=>!s.media3.qualityButtonVisible,'Physical tap must hide controls',10000);
+    }
+    if (fresh||!m.qualityButtonVisible) {
+      adb('shell','input','tap',...point);
     }
     return waitNative(s=>s.media3.pipButtonVisible&&s.media3.qualityButtonVisible,
       'Native PiP and quality buttons must be visible on the actual video',10000);
@@ -381,7 +389,7 @@ try {
     report.checks.push({label:'Physical quality menu selects real decoded HLS '+height+'p with same player/item/clock',
       before,after:selected.media3});
   }
-  controls=await showNativeControls();
+  controls=await showNativeControls({fresh:true});
   const autoStarted=Date.now();
   // Hold the real button beyond the eight-second hide timeout. It must still
   // receive UP and open the quality menu, without a visibility setter.

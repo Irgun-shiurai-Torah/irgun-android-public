@@ -1,8 +1,8 @@
 {
   "sourceBranch": "fix/android-postmerge-like-home-20261013",
-  "sourceCommit": "7703c50ec547143cb3311798cb1ec56e81fdc8da",
+  "sourceCommit": "1c1128bf8b157c43c1e9742d0fa488a548482174",
   "track": "internal",
-  "requestedAt": "2026-10-14T17:44:57.622Z",
+  "requestedAt": "2026-10-14T18:05:56.522Z",
   "pullRequest": 37,
   "mergeIntoMain": false,
   "features": [
@@ -14,6 +14,9 @@
     "High-contrast Android Audio seek icons",
     "Same-player native transport retry and full Android packaging/regression checks"
   ],
-  "verification": "Complete matching Android matrix (38608690847, 221 checks, stable audio speed settings and all emulator regressions) and startup required before upload",
-  "releaseAttempt": 7
+  "verification": {
+    "localTests": 222,
+    "required": "Full exact-source Android matrix, startup and physical Media3 controls API 30/34/35/36; immediate Audio-to-Video transition plus stable settings."
+  },
+  "releaseAttempt": 8
 }
