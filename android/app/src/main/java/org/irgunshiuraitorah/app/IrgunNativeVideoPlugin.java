@@ -58,6 +58,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     private AlertDialog qualityDialog;
     private boolean systemPip;
     private int requestedQualityHeight;
+    private boolean controllerVisible;
 
     public static void systemPipChanged(boolean active) {
         IrgunNativeVideoPlugin plugin = current.get();
@@ -183,7 +184,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
 
     private void updateVideoActions() {
         if (videoActions == null) return;
-        videoActions.setVisibility(visible && !mini && !systemPip && surface.isControllerFullyVisible()
+        videoActions.setVisibility(visible && !mini && !systemPip && controllerVisible
             ? View.VISIBLE : View.GONE);
         sizeButton.setText(fullscreen ? "Shrink" : "Full");
         sizeButton.setContentDescription(fullscreen ? "Exit video fullscreen" : "Enter video fullscreen");
@@ -308,7 +309,16 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             sizeButton=actionButton("Full", "Enter video fullscreen", () -> webAction(
                 "window.__irgunToggleNativeVideoFullscreen && window.__irgunToggleNativeVideoFullscreen();"));
             minimizeButton=actionButton("Mini", "Minimize video", this::minimizeNativeVideo);
-            surface.setControllerVisibilityListener((PlayerView.ControllerVisibilityListener) visibility -> updateVideoActions());
+            controllerVisible = surface.isControllerFullyVisible();
+            surface.setControllerVisibilityListener((PlayerView.ControllerVisibilityListener) visibility -> {
+                // VISIBLE is sent when Media3 STARTS its show animation. A
+                // fully-visible query at that moment can still be false, and
+                // no second visibility callback follows animation completion.
+                // Track the actual visibility event so our independent native
+                // action bar cannot stay hidden after a real video tap.
+                controllerVisible = visibility == View.VISIBLE;
+                updateVideoActions();
+            });
             ExoPlayer existing = IrgunPlaybackService.nativeVideoPlayer();
             if (existing != null) surface.setPlayer(existing);
         }
