@@ -3816,6 +3816,14 @@ async function minimizeWatchToPersistent() {
   state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0, 300);
 }
 
+// The native PlayerView physically covers the mini thumbnail on Android.
+// Its transparent hit target forwards that REAL Android tap here. Text/keyboard
+// expansion still uses the existing DOM listener. No new playback instance.
+window.__irgunExpandNativeMiniVideo = () => {
+  if (state.watchVideo && state.watchMode === 'video' && state.watchMinimized)
+    void expandPersistentWatch();
+};
+
 async function expandPersistentWatch() {
   if (!state.watchVideo || !state.watchMinimized) return;
   // Reverse of minimize: same DOM, same iframe, same Vimeo Player object.
