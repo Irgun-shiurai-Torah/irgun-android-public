@@ -2,7 +2,7 @@
   "sourceBranch": "fix/android-postmerge-like-home-20261013",
   "sourceCommit": "aafbd4f4c15856214c88d1fbb1e7a11ddac05753",
   "track": "internal",
-  "requestedAt": "2026-10-14",
+  "requestedAt": "2026-10-14T16:12:00Z",
   "pullRequest": 37,
   "mergeIntoMain": false,
   "features": [
@@ -14,5 +14,6 @@
     "High-contrast Android Audio seek icons",
     "Same-player native transport retry and full Android packaging/regression checks"
   ],
-  "verification": "Complete matching Android regression matrix and startup required before upload"
+  "verification": "Complete matching Android regression matrix (38572223306, rerun of transient failures) and startup required before upload",
+  "releaseAttempt": 4
 }
