@@ -1,10 +1,25 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
-import {accountSwipeDirection} from './android-account-native-scroll.mjs';
+import {accountSwipeDirection, watchPlayerReturnGesture} from './android-account-native-scroll.mjs';
+import {selectAccountPlaybackFixture} from './android-account-playback-fixture.mjs';
 
 const geometry = height => ({left:0,top:24,right:320,bottom:24+height,focused:true});
 const immediate = async () => {};
+
+test('account playback skips a new Vimeo-only upload with no Audio and pins an actually ready native/audio lecture',async()=>{
+  const reads=[];
+  const fixture=await selectAccountPlaybackFixture([
+    {id:'new-vimeo',hasDriveVideo:false,hasAudio:false},
+    {id:'pending',hasDriveVideo:true,hasAudio:true},
+    {id:'ready',hasDriveVideo:true,hasAudio:true}
+  ],async id=>{reads.push(id);return id==='ready'?{video:{hls:'real.m3u8'},audio:{mp3:'real.mp3'}}:{video:{mp4:'real.mp4'},audio:{mp3:null}};});
+  assert.deepEqual(reads,['pending','ready']);
+  assert.deepEqual(fixture,{id:'ready',hasDriveVideo:true,hasAudio:true});
+});
+test('an absent native/audio fixture fails explicitly instead of treating Vimeo-only playback as a broken Audio button',async()=>{
+  await assert.rejects(selectAccountPlaybackFixture([{id:'new',hasDriveVideo:false,hasAudio:false}],()=>{throw Error('Must not request native media for Vimeo-only');}),/native video AND separate audio/);
+});
 
 test('a keyboard resize requires fresh stable native and DOM bounds before mapping a tap',async()=>{
   const heights=[350,592,592,592,592,592];let boundsReads=0;
@@ -40,5 +55,14 @@ test('a permanently moving viewport remains a failure with a bounded observation
 
 test('IME-obscured Password and Login scroll into view rather than back to Email',()=>{
   for(const key of ['password','login','saveQaComment'])assert.equal(accountSwipeDirection(key),'up');
-  for(const key of ['email','closeWatch','settings'])assert.equal(accountSwipeDirection(key),'down');
+  for(const key of ['email','closeWatch','settings','audioMode','videoMode','audioPlay'])assert.equal(accountSwipeDirection(key),'down');
+});
+
+test('Watch player recovery uses a real downward swipe within the measured scroll viewport',()=>{
+  const scroll={x:0,y:44,width:320,height:550,top:742};
+  const gesture=watchPlayerReturnGesture(scroll);
+  assert.ok(gesture.from.y<gesture.to.y,'A return gesture must physically swipe down to scroll upwards');
+  assert.ok(gesture.from.y>scroll.y&&gesture.to.y<scroll.y+scroll.height,'Keep physical swipes within actual Watch bounds');
+  assert.equal(gesture.from.x,gesture.to.x);
+  assert.throws(()=>watchPlayerReturnGesture({x:0,y:0,width:10,height:20}),/Watch scroll bounds/);
 });

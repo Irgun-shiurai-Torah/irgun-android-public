@@ -12,7 +12,35 @@ const app=readFileSync('src/main.js','utf8');
 const adapter=readFileSync('src/android-native-media3-video.js','utf8');
 const gradle=readFileSync('android/app/build.gradle','utf8');
 
-test('Android uses Media3 exclusively and refuses silent WebView/Vimeo fallback',()=>{
+test('video errors show a readable message without promising a nonexistent audio source',()=>{
+  const start=app.indexOf('function showAndroidNativeVideoError('),end=app.indexOf('\nfunction initWatchVimeo(',start);
+  for(const [detail,expected] of [[{code:'VIDEO_NOT_READY'},'not available yet'],[new Error('Network timeout'),'Check your connection']]){
+    const nodes=[],container={querySelector:()=>null,append:notice=>nodes.push(notice)};
+    const document={createElement:()=>({dataset:{},style:{},setAttribute(){},addEventListener(){},append(...children){this.children=children;}})};
+    const context={document,state:{watchVimeo:null},currentLanguage:()=> 'en',console:{warn(){}},frame:{style:{},parentElement:container},detail};
+    runInNewContext(app.slice(start,end)+'\nshowAndroidNativeVideoError(frame,detail);',context);
+    const [message,retry]=nodes[0].children;
+    assert.ok(message.textContent.includes(expected));assert.doesNotMatch(message.textContent,/Audio remains|Native/);
+    assert.equal(retry.textContent,'Try video again');
+  }
+});
+
+test('the actual watch header exposes an icon PiP control on small Android screens and keeps iOS markup',()=>{
+  const header=app.match(/<header class="watch-top">.*?<\/header>/)?.[0];
+  assert.ok(header);
+  for(const platform of ['android','ios']){
+    const html=runInNewContext('`'+header+'`',{state:{watchMode:'video'},v:{title:'Lecture'},
+      Capacitor:{getPlatform:()=>platform},currentLanguage:()=> 'en',nativePipPlugin:()=>({}),
+      esc:x=>x,displayShiurTitle:x=>x,svgIcon:name=>'<svg data-icon="'+name+'"></svg>'});
+    assert.match(html,/data-video-pip="1"/);assert.match(html,/data-icon="pip"/);
+    assert.equal(html.includes('data-native-video-fullscreen'),platform==='android');
+  }
+  const buttons=bridge.slice(bridge.indexOf('pipButton=iconButton'),bridge.indexOf('controllerVisible = surface.isControllerFullyVisible()'));
+  assert.doesNotMatch(buttons,/hasSystemFeature/,'Do not silently remove PiP when Android reports it unsupported');
+  assert.match(bridge,/new LinearLayout.LayoutParams\(dp\(44\),dp\(44\)\)/);
+});
+
+test('Android native sources use Media3 and never switch to Vimeo after a transport/decoder error',()=>{
   assert.match(app,/if \(Capacitor\.getPlatform\(\) === 'android'\) \{/);
   assert.match(app,/player = await createNativeMedia3VideoPlayer\(/);
   assert.doesNotMatch(app,/createAndroidHlsPlayer\(/,'WebView HLS decoder may not be reached or imported by the Android app');
@@ -21,9 +49,13 @@ test('Android uses Media3 exclusively and refuses silent WebView/Vimeo fallback'
   assert.match(adapter,/from '\.\/android-media-source\.js'/,'Pure source descriptor must be independent of the retired decoder');
   assert.match(app,/Android Video requires native Media3/);
   assert.match(app,/showAndroidNativeVideoError\(frame,nativeError\)/);
-  assert.match(app,/Retry native Video/,'Unplayable native video must show a user-directed retry, not a second video player');
+  assert.match(app,/Try video again/,'Unplayable native video must show a user-directed retry, not a second video player');
   assert.match(app,/Capacitor\.getPlatform\(\) === 'android' \? 'about:blank'/,'The initial Android iframe must never load Vimeo');
   assert.doesNotMatch(adapter,/VITE_ANDROID_MEDIA3_VIDEO_BETA/,'Media3 must no longer depend on a build feature flag');
+  const native=app.slice(app.indexOf("if (Capacitor.getPlatform() === 'android' && !androidVimeoOnly)"),app.indexOf('    if (!player && androidVimeoOnly)'));
+  assert.match(native,/catch \(nativeError\)/);
+  assert.match(native,/showAndroidNativeVideoError\(frame,nativeError\);\s*return;/,
+    'Native transport/decoder errors must stop before the Vimeo-only route');
 });
 test('native video and native audio use the SAME ExoPlayer instance and MediaSession',()=>{
   assert.match(service,/private ExoPlayer player;/);

@@ -291,6 +291,7 @@ try {
   const tapNativeLabel=async (description, text, {holdMs=0}={}) => {
     const controlKey={
       'Choose video quality':'qualityButtonRect',
+      'Choose playback speed':'speedButtonRect',
       'Enter Picture-in-Picture':'pipButtonRect',
       'Enter video fullscreen':'sizeButtonRect',
       'Exit video fullscreen':'sizeButtonRect',
@@ -318,6 +319,8 @@ try {
           report.gestures.push({nativeDescription:description,point,nativeRect:second,holdMs});
           if(description==='Choose video quality')await waitNative(s=>s.media3.qualityMenuVisible,
             'Physical quality button must open its actual native menu',10000);
+          if(description==='Choose playback speed')await waitNative(s=>s.media3.speedMenuVisible,
+            'Physical speed icon must open its native menu',10000);
           return;
         }
         if (!['Expand mini video','Pause mini video','Play mini video'].includes(description)) await showNativeControls();
@@ -360,18 +363,25 @@ try {
       // whose process startup must not consume that remaining timeout.
       adb('shell','input','tap',...point);
       await waitNative(s=>!s.media3.qualityButtonVisible,'Physical tap must hide controls',10000);
+      // Separate these controller taps beyond Android's double-tap window.
+      // The same right-edge pair must not become a +15-second user gesture.
+      await delay(500);
     }
     if (fresh||!m.qualityButtonVisible) {
       adb('shell','input','tap',...point);
     }
-    return waitNative(s=>s.media3.pipButtonVisible&&s.media3.qualityButtonVisible,
+    const shown=await waitNative(s=>s.media3.pipButtonVisible&&s.media3.qualityButtonVisible,
       'Native PiP and quality buttons must be visible on the actual video',10000);
+    if(fresh)assert.equal(shown.media3.doubleTapSeekCount,m.doubleTapSeekCount,
+      'Physically refreshing controls must not trigger a double-tap seek');
+    return shown;
   };
   const samePlayback=(before,after,label,elapsed)=>{
     assert.equal(after.playerIdentity,before.playerIdentity,label+' created/replaced ExoPlayer');
     assert.equal(after.mediaItemIdentity,before.mediaItemIdentity,label+' replaced the MediaItem');
     assert.ok(after.positionMs>=before.positionMs-1250,label+' rewound playback');
-    assert.ok(after.positionMs<=before.positionMs+elapsed+5000,label+' jumped playback forward');
+    const rate=Math.max(1,before.playbackSpeed||1,after.playbackSpeed||1);
+    assert.ok(after.positionMs<=before.positionMs+elapsed*rate+5000,label+' jumped playback forward');
     assert.equal(after.sourceType,'hls',label+' changed the source');
   };
   let controls=await showNativeControls();
@@ -398,6 +408,16 @@ try {
   const auto=await waitNative(s=>s.media3.qualityHeight===0&&s.media3.playing,'Auto must restore adaptive Media3 selection');
   samePlayback(controls.media3,auto.media3,'Auto after held quality control',Date.now()-autoStarted);
   report.checks.push({label:'Held physical quality control survives its hide timeout and Auto preserves same player/item/clock',holdMs:8500,after:auto.media3});
+
+  for(const [rate,label] of [[1.25,'1.25×'],[1,'1×']]){
+    const before=(await showNativeControls()).media3,started=Date.now();
+    await tapNativeLabel('Choose playback speed');
+    await tapNativeLabel('',label);
+    const changed=await waitNative(s=>Math.abs(s.media3.playbackSpeed-rate)<.01&&
+      s.media3.playing&&s.media3.frames>before.frames+5,'Native speed menu must change real Media3 speed');
+    samePlayback(before,changed.media3,'Speed '+rate+'x',Date.now()-started);
+    report.checks.push({label:'Physical speed icon changes same Media3 player to '+rate+'x',before,after:changed.media3});
+  }
 
   // Two actual native taps on each side must seek exactly once on the same engine.
   for(const direction of [1,-1]) {
@@ -539,6 +559,16 @@ try {
   assert.ok(afterPip.webAudio.every(a=>a.paused||a.muted||a.volume===0),'No second audible WebView audio in PiP');
   report.checks.push({label:'Physical PiP button enters real Android pinned task and returns without player/item/clock change',
     before:beforePip,pip:pipMoved.media3,after:afterPip.media3});
+
+  const headerPipStart=Date.now(),headerBefore=(await sample()).media3;
+  await tapVisible('[data-video-pip]',true);
+  await waitNative(s=>s.media3.systemPip&&s.media3.playing,'Header PiP icon must enter system PiP');
+  assert.match(adb('shell','dumpsys','activity','activities'),/mode=pinned/);
+  adb('shell','am','start','-W','-n','org.irgunshiuraitorah.app/.MainActivity');
+  const headerAfter=await waitNative(s=>!s.media3.systemPip&&s.media3.surfaceVisibleOnScreen&&s.media3.playing,
+    'Header PiP return must restore the same visible player');
+  samePlayback(headerBefore,headerAfter.media3,'Header PiP',Date.now()-headerPipStart);
+  report.checks.push({label:'Visible header PiP icon enters real pinned mode and preserves one player',before:headerBefore,after:headerAfter.media3});
 
   if (process.env.IRGUN_NATIVE_MEDIA3_SOAK === '1') {
     // A REAL wall-clock 15-minute Media3 HLS soak, not a mock clock or a

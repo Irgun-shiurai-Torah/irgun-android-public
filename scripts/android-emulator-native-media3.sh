@@ -15,4 +15,5 @@ if [[ "${1:-}" == "soak" ]]; then
   IRGUN_NATIVE_MEDIA3_SOAK=1 timeout --signal=TERM --kill-after=15s 28m node scripts/android-emulator-native-media3.mjs
 else
   node scripts/android-emulator-native-media3.mjs
+  node scripts/android-emulator-vimeo.mjs
 fi

@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import {getAndroidHlsSource} from '../src/android-media-source.js';
 
 const descriptor={video:{hls:'https://media.example/master.m3u8',mp4:null}};
+test('a missing native video is identified as not ready instead of a connection failure',async()=>{
+ await assert.rejects(sourceFixture(async()=>({ok:true,json:async()=>({video:{hls:null,mp4:null}})})),
+  error=>error.code==='VIDEO_NOT_READY');
+});
 async function sourceFixture(fetchImpl,options){
  const original=globalThis.fetch;
  globalThis.fetch=fetchImpl;

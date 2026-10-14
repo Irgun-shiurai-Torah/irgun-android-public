@@ -6,6 +6,7 @@ import android.os.Build;
 import android.view.MotionEvent;
 import android.view.ViewConfiguration;
 import android.widget.Button;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.Toast;
 import androidx.media3.common.C;
@@ -57,8 +58,9 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     private PlayerView surface;
     private static WeakReference<IrgunNativeVideoPlugin> current = new WeakReference<>(null);
     private LinearLayout videoActions;
-    private Button pipButton, qualityButton, sizeButton, minimizeButton;
-    private AlertDialog qualityDialog;
+    private Button qualityButton;
+    private ImageButton pipButton, sizeButton, minimizeButton, speedButton;
+    private AlertDialog qualityDialog, speedDialog;
     private boolean systemPip;
     private int requestedQualityHeight;
     private boolean controllerVisible;
@@ -143,7 +145,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             if (holdingActionBar && (event.getActionMasked() == MotionEvent.ACTION_UP
                     || event.getActionMasked() == MotionEvent.ACTION_CANCEL)) {
                 holdingActionBar=false;
-                if (qualityDialog == null || !qualityDialog.isShowing()) setControllerShowTimeoutMs(8000);
+                if ((qualityDialog == null || !qualityDialog.isShowing())
+                        && (speedDialog == null || !speedDialog.isShowing())) setControllerShowTimeoutMs(8000);
             }
             if (event.getActionMasked() == MotionEvent.ACTION_UP) {
                 float slop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
@@ -186,8 +189,43 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         button.setPadding(0,0,0,0);
         button.setContentDescription(description);
         button.setOnClickListener(view -> action.run());
-        videoActions.addView(button, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        videoActions.addView(button, new LinearLayout.LayoutParams(dp(72), dp(44)));
         return button;
+    }
+
+    private ImageButton iconButton(int drawable, String description, Runnable action) {
+        ImageButton button=new ImageButton(getActivity());
+        button.setImageResource(drawable);
+        button.setBackgroundColor(Color.TRANSPARENT);
+        button.setStateListAnimator(null);
+        button.setElevation(0); button.setTranslationZ(0);
+        button.setPadding(dp(10),dp(10),dp(10),dp(10));
+        button.setContentDescription(description);
+        if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)button.setTooltipText(description);
+        button.setOnClickListener(view -> action.run());
+        videoActions.addView(button,new LinearLayout.LayoutParams(dp(44),dp(44)));
+        return button;
+    }
+
+    private void showSpeedMenu() {
+        ExoPlayer player=IrgunPlaybackService.nativeVideoPlayer();
+        if (player == null || systemPip || mini) return;
+        final float[] speeds={.75f,1f,1.25f,1.5f,1.75f,2f};
+        final String[] labels={"0.75×","1×","1.25×","1.5×","1.75×","2×"};
+        int checked=-1;
+        for(int i=0;i<speeds.length;i++)
+            if(Math.abs(player.getPlaybackParameters().speed-speeds[i])<.01f)checked=i;
+        surface.setControllerShowTimeoutMs(0);
+        speedDialog=new AlertDialog.Builder(getActivity()).setTitle("Playback speed")
+            .setSingleChoiceItems(labels,checked,(dialog,which)->{
+                if(player == IrgunPlaybackService.nativeVideoPlayer())
+                    IrgunPlaybackService.setSpeed(speeds[which]);
+                dialog.dismiss();
+            }).setNegativeButton("Cancel",null).create();
+        speedDialog.setOnDismissListener(dialog->{
+            if(surface != null){surface.setControllerShowTimeoutMs(8000);surface.showController();}
+        });
+        speedDialog.show();
     }
 
     private static final class Resolution {
@@ -251,7 +289,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         if (videoActions == null) return;
         videoActions.setVisibility(visible && !mini && !systemPip && controllerVisible
             ? View.VISIBLE : View.GONE);
-        sizeButton.setText(fullscreen ? "Shrink" : "Full");
+        sizeButton.setImageResource(fullscreen ? R.drawable.irgun_shrink : R.drawable.irgun_fullscreen);
         sizeButton.setContentDescription(fullscreen ? "Exit video fullscreen" : "Enter video fullscreen");
     }
     // In MINI the Android PlayerView is above the WebView. A DOM hit test
@@ -371,6 +409,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             surface.setUseController(true);
             surface.setControllerAutoShow(true);
             surface.setControllerShowTimeoutMs(8000);
+            surface.setShowPreviousButton(false);
+            surface.setShowNextButton(false);
             surface.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING);
             surface.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
             surface.setKeepContentOnPlayerReset(true);
@@ -381,26 +421,23 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             root.addView(surface, params);
             videoActions = new LinearLayout(getActivity());
             videoActions.setOrientation(LinearLayout.HORIZONTAL);
+            videoActions.setGravity(Gravity.END);
             videoActions.setElevation(dp(8));
             videoActions.setBackgroundColor(0x99000000);
             FrameLayout.LayoutParams actionParams = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(44), Gravity.TOP);
             surface.addView(videoActions, actionParams);
-            pipButton=actionButton("PiP", "Enter Picture-in-Picture", () -> {
-                systemPipChanged(true);
-                if (!(getActivity() instanceof MainActivity)
-                        || !((MainActivity)getActivity()).enterIrgunPictureInPicture()) {
-                    systemPipChanged(false);
-                    Toast.makeText(getContext(), "Picture-in-Picture is unavailable", Toast.LENGTH_SHORT).show();
-                }
+            pipButton=iconButton(R.drawable.irgun_pip, "Enter Picture-in-Picture", () -> {
+                if(getActivity() instanceof MainActivity)
+                    ((MainActivity)getActivity()).enterIrgunPictureInPicture();
             });
-            pipButton.setVisibility(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-                getContext().getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)
+            pipButton.setVisibility(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? View.VISIBLE : View.GONE);
             qualityButton=actionButton("Auto", "Choose video quality", this::showQualityMenu);
-            sizeButton=actionButton("Full", "Enter video fullscreen", () -> webAction(
+            speedButton=iconButton(R.drawable.irgun_speed,"Choose playback speed",this::showSpeedMenu);
+            sizeButton=iconButton(R.drawable.irgun_fullscreen, "Enter video fullscreen", () -> webAction(
                 "window.__irgunToggleNativeVideoFullscreen && window.__irgunToggleNativeVideoFullscreen();"));
-            minimizeButton=actionButton("Mini", "Minimize video", this::minimizeNativeVideo);
+            minimizeButton=iconButton(R.drawable.irgun_mini, "Minimize video", this::minimizeNativeVideo);
             controllerVisible = surface.isControllerFullyVisible();
             surface.setControllerVisibilityListener((PlayerView.ControllerVisibilityListener) visibility -> {
                 // VISIBLE is sent when Media3 STARTS its show animation. A
@@ -672,6 +709,10 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("qualityButtonVisible", qualityButton != null && qualityButton.isShown());
             response.put("qualityHeight", requestedQualityHeight);
             response.put("qualityMenuVisible", qualityDialog != null && qualityDialog.isShowing());
+            response.put("speedMenuVisible", speedDialog != null && speedDialog.isShowing());
+            response.put("playbackSpeed", state.active && IrgunPlaybackService.nativeVideoPlayer()!=null
+                ? IrgunPlaybackService.nativeVideoPlayer().getPlaybackParameters().speed : 1f);
+            response.put("speedButtonRect", controlRect(speedButton));
             // Read-only actual Android geometry. No UI/controller state mutation.
             response.put("pipButtonRect", controlRect(pipButton));
             response.put("qualityButtonRect", controlRect(qualityButton));
@@ -738,7 +779,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             miniPlayPauseTarget = null;
         }
         if (qualityDialog != null) { qualityDialog.dismiss(); qualityDialog=null; }
-        videoActions=null; pipButton=null; qualityButton=null; sizeButton=null; minimizeButton=null;
+        if (speedDialog != null) { speedDialog.dismiss(); speedDialog=null; }
+        videoActions=null; pipButton=null; qualityButton=null; sizeButton=null; minimizeButton=null; speedButton=null;
         if (root != null) root.removeOnLayoutChangeListener(rootLayoutListener);
         if (miniExpandTarget != null) {
             ViewGroup hitParent = (ViewGroup)miniExpandTarget.getParent();

@@ -28,7 +28,8 @@ public class IrgunPictureInPicturePlugin extends Plugin {
     @PluginMethod
     public void isSupported(PluginCall call) {
         JSObject result = new JSObject();
-        result.put("supported", Build.VERSION.SDK_INT >= Build.VERSION_CODES.O);
+        result.put("supported", Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            && getContext().getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE));
         call.resolve(result);
     }
 
@@ -55,7 +56,9 @@ public class IrgunPictureInPicturePlugin extends Plugin {
         }
         activity.runOnUiThread(() -> {
             JSObject result = new JSObject();
-            result.put("entered", activity.enterIrgunPictureInPicture());
+            boolean entered=activity.enterIrgunPictureInPicture();
+            result.put("entered",entered);
+            result.put("nativeMessageShown",!entered);
             call.resolve(result);
         });
     }

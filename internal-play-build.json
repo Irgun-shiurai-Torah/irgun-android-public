@@ -1,24 +1,26 @@
 {
   "sourceBranch": "fix/android-postmerge-like-home-20261013",
-  "sourceCommit": "1c1128bf8b157c43c1e9742d0fa488a548482174",
+  "sourceCommit": "b7411610f2eba1c0d3dfc7940dbe14cb7c6ba529",
   "track": "internal",
-  "requestedAt": "2026-10-14T18:10:13.234Z",
+  "requestedAt": "2026-10-14T21:26:22.989Z",
   "pullRequest": 37,
   "mergeIntoMain": false,
   "features": [
-    "PiP, quality Auto/resolutions, fullscreen exit",
-    "Mini Pause/Play, swipe down and expansion in English/Hebrew",
-    "Video double-tap ±15 seconds",
-    "Visible partially scrolled Video, including older Android WebViews",
-    "Home/notification returns to Video",
-    "High-contrast Android Audio seek icons",
-    "Same-player native transport retry and full Android packaging/regression checks"
+    "Vimeo-only catalog lectures use Vimeo; stop native playback before starting one Vimeo player; no false Audio availability",
+    "Compact native PiP, Auto/resolution, speed, fullscreen exit and Mini controls; hide previous/next buttons",
+    "System PiP button visible with device support/settings explanation",
+    "Same Media3 player retained through native PiP, quality, speed, Mini and foreground restore",
+    "White skip icons on dark Audio; navy icons on light Audio; remove circular patches",
+    "Smaller aspect-preserving splash and reduced launcher artwork padding",
+    "Account tests pin a descriptor-verified native-video/audio lecture; Vimeo-only playback tested separately"
   ],
   "verification": {
-    "localTests": 222,
-    "fullMatrixRun": 38612232128,
-    "startupRun": 38612231672,
-    "status": "Full emulator tests running; user explicitly requested immediate Internal upload for concurrent real-phone testing."
+    "localTests": 233,
+    "androidPackaging": "npm run test:player passed",
+    "status": "Android emulator matrix running separately; user requested Internal upload for concurrent real-phone testing.",
+    "limitations": [
+      "External session revocation unverified; QA no longer reads the application session credential"
+    ]
   },
-  "releaseAttempt": 9
+  "releaseAttempt": 10
 }
