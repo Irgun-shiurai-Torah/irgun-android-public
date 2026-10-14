@@ -2703,3 +2703,93 @@ body.irgun-android .rotation-fullscreen-exit {
   color: white;
   font-size: 24px;
 }
+
+/* Android navigation remains outside page/player renders, above ordinary pages. */
+body.irgun-android {
+  --android-nav-height: 72px;
+  --android-nav-bottom: calc(10px + env(safe-area-inset-bottom));
+  --android-nav-clearance: calc(var(--android-nav-height) + var(--android-nav-bottom) + 8px);
+}
+body.irgun-android .android-floating-nav {
+  position: fixed;
+  z-index: 118;
+  left: 50%;
+  right: auto;
+  bottom: var(--android-nav-bottom);
+  transform: translateX(-50%);
+  width: calc(100% - 20px);
+  max-width: 640px;
+  height: var(--android-nav-height);
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  padding: 6px;
+  border: 1px solid #dce3eb;
+  border-radius: 24px;
+  background: rgba(255,255,255,.97);
+  box-shadow: 0 8px 30px rgba(15,31,53,.18), 0 1px 3px rgba(15,31,53,.08);
+  backdrop-filter: blur(18px);
+}
+body.irgun-android .nav-active-indicator {
+  position: absolute;
+  pointer-events: none;
+  inset-inline-start: 6px;
+  top: 6px;
+  bottom: 6px;
+  width: calc((100% - 12px) / 5);
+  border: 1px solid #dec68e;
+  border-radius: 18px;
+  background: #f2e4c4;
+  transform: translateX(calc(var(--nav-index, 0) * 100%));
+  transition: transform .22s ease;
+}
+html[dir="rtl"] body.irgun-android .nav-active-indicator {
+  transform: translateX(calc(var(--nav-index, 0) * -100%));
+}
+body.irgun-android .android-floating-nav .nav-btn {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  min-height: 58px;
+  padding: 5px 1px;
+  gap: 3px;
+  border-radius: 18px;
+  color: #5d6b7b;
+  font-size: 10px;
+}
+body.irgun-android .android-floating-nav .nav-btn.active { color: #102a43; }
+body.irgun-android .android-floating-nav .nav-icon { background: transparent; }
+body.irgun-android .android-floating-nav .nav-btn.active .nav-icon { transform: translateY(-1px); }
+body.irgun-android .android-floating-nav .nav-btn:focus-visible { outline: 2px solid #102a43; outline-offset: -3px; }
+body.irgun-android .app-shell { padding-bottom: 0; }
+body.irgun-android .content { padding-bottom: calc(var(--android-nav-clearance) + 16px); }
+body.irgun-android .app-shell.android-has-mini .content { padding-bottom: calc(var(--android-nav-clearance) + 88px); }
+body.irgun-android .mini-player,
+body.irgun-android .mini-video-player { bottom: var(--android-nav-clearance); }
+body.irgun-android:not(.irgun-system-pip) #persistentVideoMount.watch-mini-host .watch-overlay {
+  bottom: var(--android-nav-clearance) !important;
+}
+body.irgun-android .watch-scroll { padding-bottom: calc(var(--android-nav-clearance) + 20px) !important; }
+body.irgun-android .sheet-backdrop { padding-bottom: var(--android-nav-clearance); }
+body.irgun-android .player-sheet {
+  max-height: calc(100vh - var(--android-nav-clearance) - 20px - env(safe-area-inset-top));
+  padding-bottom: 24px;
+}
+body.irgun-android .donate-fab { bottom: calc(var(--android-nav-clearance) + 6px); }
+body.irgun-android .donate-fab.with-player { bottom: calc(var(--android-nav-clearance) + 82px); }
+body.irgun-android .toast { bottom: calc(var(--android-nav-clearance) + 82px); }
+body.irgun-android.irgun-video-fullscreen #androidBottomNavigationMount,
+body.irgun-android.irgun-system-pip #androidBottomNavigationMount { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  body.irgun-android .nav-active-indicator { transition: none; }
+}
+/* Fit regular video into short displays so its controls remain above the bar. */
+body.irgun-android:not(.irgun-system-pip):not(.irgun-video-fullscreen) #persistentVideoMount.watch-full-host #watchVimeoFrame {
+  max-height: calc(100vh - var(--android-nav-clearance) - 112px) !important;
+}
+body.irgun-android .android-floating-nav .nav-btn > span:last-child {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  line-height: 14px;
+}

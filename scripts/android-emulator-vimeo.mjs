@@ -18,6 +18,12 @@ try{
  }else{
   report.fixture={id:target.id,code:target.shiurCode,hasDriveVideo:target.hasDriveVideo};
   const pid=adb('shell','pidof','org.irgunshiuraitorah.app').trim().split(/\s+/)[0];
+  // The preceding native suite deliberately exercises Home/background Audio.
+  // Launch the existing task before attempting a foreground UI touch; never
+  // restart the process or pretend an unfocused WebView can receive a tap.
+  adb('shell','am','start','-W','-n','org.irgunshiuraitorah.app/.SplashActivity');
+  assert.equal(adb('shell','pidof','org.irgunshiuraitorah.app').trim().split(/\s+/)[0],pid,
+   'Foregrounding for Vimeo must keep the existing app process');
   adb('forward','tcp:9222',`localabstract:webview_devtools_remote_${pid}`);
   const pages=await (await fetch('http://127.0.0.1:9222/json/list')).json();
   const page=pages.find(p=>p.type==='page'&&/localhost/.test(p.url));assert.ok(page);
@@ -45,6 +51,12 @@ try{
       return {x,y,width:innerWidth,height:innerHeight};}return null;})()`)});
    adb('shell','input','tap',...measured.point.map(String));
   };
+  let focused=false;
+  for(let i=0;i<30;i++){
+   focused=(await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})")).focused;
+   if(focused)break;await delay(200);
+  }
+  assert.equal(focused,true,'The actual Irgun window must regain foreground focus before Vimeo navigation');
   await tap('[data-close-watch]');await delay(500);
   await tap('.bottom-nav [data-nav="home"]');await delay(600);
   for(let i=0;i<6;i++){

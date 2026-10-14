@@ -6,6 +6,7 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 import {bindAndroidPlayerSheetInteractions,preserveAndroidPlayerSheetScroll} from './android-player-controls.js';
 import {isAndroidVimeoOnlyVideo,createAndroidVimeoPlayer} from './android-vimeo-playback.js';
 import {createAndroidVideoDisplaySync} from './android-video-display.js';
+import {androidNavigationRoot,createAndroidBottomNavigation,prepareAndroidTabNavigation} from './android-bottom-navigation.js';
 const androidPlayerSheetRenderGate=bindAndroidPlayerSheetInteractions({document,view:window,
   isAndroid:()=>Capacitor.getPlatform()==='android',render:()=>render()});
 import { Filesystem, Directory } from '@capacitor/filesystem';
@@ -43,6 +44,14 @@ const IrgunFullscreen = registerPlugin('IrgunFullscreen');
 const IrgunNativeVideo = registerPlugin('IrgunNativeVideo');
 const IrgunPlayback = registerPlugin('IrgunPlayback');
 let nativeVideoFullscreen = false;
+const syncAndroidBottomNavigation=createAndroidBottomNavigation({
+  isAndroid:()=>Capacitor.getPlatform()==='android',document,
+  model:()=>{
+    state.androidNavRoot=androidNavigationRoot(state.screen,state.androidNavRoot);
+    return {root:state.androidNavRoot,language:currentLanguage()};
+  },
+  markup:()=>bottomNavHtml(),navigate:button=>navigateToScreen(button)
+});
 const syncAndroidVideoDisplay=createAndroidVideoDisplaySync({
   isAndroid:()=>Capacitor.getPlatform()==='android',read:()=>state,
   send:value=>{
@@ -57,10 +66,12 @@ const syncAndroidVideoDisplay=createAndroidVideoDisplaySync({
 async function setNativeVideoFullscreen(enabled, {fromSensor=false}={}) {
   if (Capacitor.getPlatform() !== 'android') return;
   const next = Boolean(enabled);
+  document.body.classList.toggle('irgun-video-fullscreen',next);
   if (nativeVideoFullscreen === next) return;
   nativeVideoFullscreen = next;
   try {
     await IrgunFullscreen.set({ enabled: next, fromSensor });
+    state.watchVimeo?.updateFrame?.();
   } catch (error) {
     nativeVideoFullscreen = false;
     console.warn('Android fullscreen system-bar sync failed', error);
@@ -3713,15 +3724,17 @@ function bottomNavHtml() {
     ['library', 'Library', 'library'],
     ['account', 'Account', 'account']
   ];
-  const activeRoot = state.screen.startsWith('live') ? 'live' : state.screen;
-  return `<nav class="bottom-nav">${items.map(([key, label, icon]) => `
-    <button class="nav-btn ${activeRoot === key ? 'active' : ''}" data-nav="${key}">
+  const android=Capacitor.getPlatform()==='android';
+  const activeRoot = android ? androidNavigationRoot(state.screen,state.androidNavRoot)
+    : state.screen.startsWith('live') ? 'live' : state.screen;
+  return `<nav class="bottom-nav${android?' android-floating-nav':''}"${android?' aria-label="'+(currentLanguage()==='he'?'ניווט ראשי':'Main navigation')+'"':''}>${android?'<span class="nav-active-indicator" aria-hidden="true"></span>':''}${items.map(([key, label, icon]) => `
+    <button class="nav-btn ${activeRoot === key ? 'active' : ''}" data-nav="${key}"${android?' type="button"'+(activeRoot===key?' aria-current="page"':''):''}>
       <span class="nav-icon">${svgIcon(icon)}</span><span>${tr(label)}</span>
     </button>`).join('')}</nav>`;
 }
 
 function shell(content) {
-  return `<div class="app-shell ${state.sponsorRibbon?.enabled ? 'has-sponsor-ribbon' : ''}">
+  return `<div class="app-shell ${state.sponsorRibbon?.enabled ? 'has-sponsor-ribbon' : ''}${Capacitor.getPlatform()==='android'&&(state.current||(state.watchVideo&&state.watchMinimized))?' android-has-mini':''}">
     ${sponsorRibbonHtml()}
     <header class="topbar">
       <div class="brand">
@@ -3739,7 +3752,7 @@ function shell(content) {
     <main class="content">${content}</main>
     ${state.current && !(state.watchVideo && state.watchMinimized && state.watchMode === 'video') ? miniPlayerHtml() : ''}
     ${donateFabHtml()}
-    ${bottomNavHtml()}
+    ${Capacitor.getPlatform()==='android'?'':bottomNavHtml()}
     ${state.playerOpen && state.current ? fullPlayerHtml() : ''}
     ${state.watchVideo && !state.watchHostedExternally && !state.playerOpen ? watchHtml() : ''}
     <div id="downloadManagerMount">${downloadManagerHtml()}</div>
@@ -6496,6 +6509,7 @@ function preserveAuthFormDraft() {
 }
 
 function render() {
+  syncAndroidBottomNavigation();
   syncAndroidVideoDisplay();
   if (tabSwipeRenderGate.shouldDefer()) return;
   // Closing Audio or opening Video must replace the sheet immediately: the
@@ -6684,9 +6698,17 @@ function bindPlayerSpeedChoices() {
     return PlaybackController.setSpeed(Number(el.dataset.speedChoice)||1).then(refresh).catch(refresh);
   }));
 }
-function bind() {
-  document.querySelectorAll('[data-retry-library]').forEach(el => el.addEventListener('click', () => bootstrap({ manual:true })));
-  document.querySelectorAll('[data-nav]').forEach(el => el.addEventListener('click', () => {
+let androidNavigationSequence=0;
+async function navigateToScreen(el) {
+    const sequence=++androidNavigationSequence;
+    if(Capacitor.getPlatform()==='android'&&el.closest('.android-floating-nav')){
+      state.screen=el.dataset.nav;
+      syncAndroidBottomNavigation();
+      await prepareAndroidTabNavigation({state,
+        exitFullscreen:()=>window.__irgunExitNativeVideoFullscreen(),
+        minimizeVideo:()=>minimizeWatchToPersistent(),closeAudioWatch:()=>closeWatch(true)});
+      if(sequence!==androidNavigationSequence)return;
+    }
     state.screen = el.dataset.nav;
     if (el.dataset.openPurchased) state.librarySection = 'purchased';
     if (el.dataset.openHistory) state.librarySection = 'history';
@@ -6704,7 +6726,13 @@ function bind() {
     state.filterDialog = '';
     render();
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }));
+}
+function bind() {
+  document.querySelectorAll('[data-retry-library]').forEach(el => el.addEventListener('click', () => bootstrap({ manual:true })));
+  document.querySelectorAll('[data-nav]').forEach(el => {
+    if(Capacitor.getPlatform()==='android'&&el.closest('#androidBottomNavigationMount'))return;
+    el.addEventListener('click',()=>{void navigateToScreen(el);});
+  });
 
   document.querySelectorAll('[data-language-toggle]').forEach(el => el.addEventListener('click', async () => {
     if (state.watchVideo) await preserveWatchTime();
@@ -9712,14 +9740,14 @@ if (Capacitor.getPlatform() === 'android' && Capacitor.isNativePlatform()) {
   bindTabSwipes(app, {
     onGestureState: active => tabSwipeRenderGate.setActive(active),
     getActiveTab: () => state.screen,
-    getTabs: () => Array.from(app.querySelectorAll('.bottom-nav [data-nav]'))
+    getTabs: () => Array.from(document.querySelectorAll('.bottom-nav [data-nav]'))
       .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
       .map(button => button.dataset.nav),
     canNavigate: () => ['home','shiurim','live','library','account'].includes(state.screen)
       && !state.loading && !state.error && !state.playerOpen && !state.filterDialog
       && (!state.watchVideo || state.watchMinimized)
       && !document.querySelector('[aria-modal="true"], .admin-editor-backdrop, .sheet-backdrop, .playlist-picker-backdrop, .download-manager-backdrop'),
-    navigate: tab => app.querySelector(`.bottom-nav [data-nav="${tab}"]`)?.click()
+    navigate: tab => document.querySelector(`.bottom-nav [data-nav="${tab}"]`)?.click()
   });
 }
 

@@ -73,9 +73,11 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     }
     const rect=current.getBoundingClientRect();
     const scroll=current.closest?.('.watch-scroll')?.getBoundingClientRect();
+    const navigation=document.querySelector('#androidBottomNavigationMount .bottom-nav')?.getBoundingClientRect();
+    const navigationTop=navigation?.width>0&&navigation?.height>0 ? navigation.top-8 : innerHeight;
     const left=Math.max(0,rect.left,scroll?.left??0),top=Math.max(0,rect.top,scroll?.top??0);
     const right=Math.min(innerWidth,rect.right,scroll?.right??innerWidth);
-    const bottom=Math.min(innerHeight,rect.bottom,scroll?.bottom??innerHeight);
+    const bottom=Math.min(innerHeight,rect.bottom,scroll?.bottom??innerHeight,navigationTop);
     if(right<=left||bottom<=top){
       framePlacedOnScreen=false;
       await native.frame({width:0,height:0,...nativeBounds});return;

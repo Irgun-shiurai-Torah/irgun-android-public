@@ -131,6 +131,21 @@ test('native Video surface yields to Save picker, then restores the SAME player'
     'App must refresh native surface after in-place picker dismissal');
 });
 
+test('native video never covers the persistent navigation on a short viewport and releases that clip when navigation hides',async()=>{
+  const start=adapter.indexOf('  const viewportFrame=()=>{'),end=adapter.indexOf('  const scheduleFrame=',start);
+  let visible=true;const calls=[];
+  const frame={getBoundingClientRect:()=>({x:0,y:100,left:0,top:100,right:320,bottom:280,width:320,height:180})};
+  const context={destroyed:false,mode:'video',framePlacedOnScreen:false,placeholder:frame,
+    document:{body:{classList:{contains:()=>false}},querySelector:selector=>selector==='#androidBottomNavigationMount .bottom-nav'?{
+      getBoundingClientRect:()=>visible?{width:300,height:72,top:238}:{width:0,height:0,top:0}}:null,
+      querySelectorAll:()=>[frame],getElementById:()=>null},
+    native:{frame:async value=>calls.push(value)},innerWidth:320,innerHeight:320};
+  runInNewContext(adapter.slice(start,end)+'\nthis.place=positionFrame;',context);
+  await context.place();assert.equal(calls[0].height,180,'Do not resize or replace the decoder just to apply a clip');
+  assert.equal(calls[0].clip.bottom,130,'Native PlayerView must end above the actual navigation touch targets');
+  visible=false;await context.place();assert.equal(calls[1].clip.bottom,180,'Hidden fullscreen/PiP navigation must not clip video');
+});
+
 test('native Media3 refuses an offscreen -12000px iframe after Audio to Video',async()=>{
   const start=adapter.indexOf('  const viewportFrame=()=>{');
   const end=adapter.indexOf('  const scheduleFrame=',start);

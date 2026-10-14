@@ -1,11 +1,13 @@
 {
   "sourceBranch": "fix/android-postmerge-like-home-20261013",
-  "sourceCommit": "2efd5b2eed351d6eed43def39f28abd1bf9d95ca",
+  "sourceCommit": "a832a8f9a3381cfed7525c8746cf4f446515335d",
   "track": "internal",
-  "requestedAt": "2026-10-14T22:37:46.789Z",
+  "requestedAt": "2026-10-14T23:14:28.035Z",
   "pullRequest": 37,
   "mergeIntoMain": false,
   "features": [
+    "Persistent floating Android bottom navigation outside page/player renders; sliding active-tab highlight; English/Hebrew support",
+    "Physical tab taps minimize the same Video player and open the selected page; Audio continues; native view stays clear of navigation",
     "Keep Android screen awake for playing/buffering video, release for Pause/Audio/Home",
     "Physical sensor enters landscape fullscreen with system auto-rotate OFF; upright restores regular player; manual exit honored",
     "Vimeo-only catalog lectures use Vimeo; stop native playback before starting one Vimeo player; no false Audio availability",
@@ -17,11 +19,11 @@
     "Account tests pin a descriptor-verified native-video/audio lecture; Vimeo-only playback tested separately"
   ],
   "verification": {
-    "localTests": 237,
+    "localTests": 243,
     "androidPackaging": "npm run test:player passed",
-    "status": "Physical emulator regression matrix running separately; user-authorized concurrent Internal testing.",
-    "fullMatrixRun": 38648924060,
-    "startupRun": 38648924014
+    "status": "Physical emulator tests queued/running separately; user-authorized concurrent Internal testing.",
+    "fullMatrixRun": 38652822318,
+    "startupRun": 38652822130
   },
-  "releaseAttempt": 12
+  "releaseAttempt": 13
 }
