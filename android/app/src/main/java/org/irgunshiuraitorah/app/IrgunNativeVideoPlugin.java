@@ -1,6 +1,21 @@
 package org.irgunshiuraitorah.app;
 
 import android.content.Intent;
+import android.app.AlertDialog;
+import android.os.Build;
+import android.view.MotionEvent;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.Toast;
+import androidx.media3.common.C;
+import androidx.media3.common.Tracks;
+import androidx.media3.common.TrackSelectionOverride;
+import androidx.media3.common.TrackSelectionParameters;
+import com.getcapacitor.JSArray;
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.TreeMap;
 import android.net.Uri;
 import android.graphics.Color;
 import android.os.Handler;
@@ -37,6 +52,142 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     private static final String API_HOST = "api.irgunshiuraitorah.com";
     private final Handler main = new Handler(Looper.getMainLooper());
     private PlayerView surface;
+    private static WeakReference<IrgunNativeVideoPlugin> current = new WeakReference<>(null);
+    private LinearLayout videoActions;
+    private Button pipButton, qualityButton, sizeButton, minimizeButton;
+    private AlertDialog qualityDialog;
+    private boolean systemPip;
+    private int requestedQualityHeight;
+
+    public static void systemPipChanged(boolean active) {
+        IrgunNativeVideoPlugin plugin = current.get();
+        if (plugin == null) return;
+        plugin.systemPip = active;
+        if (!active) plugin.fullscreen = false;
+        plugin.layoutSurface();
+    }
+
+    private int dp(float value) {
+        return Math.round(value * getContext().getResources().getDisplayMetrics().density);
+    }
+
+    private void webAction(String expression) {
+        if (getBridge() != null && getBridge().getWebView() != null)
+            getBridge().getWebView().evaluateJavascript(expression, null);
+    }
+
+    private void minimizeNativeVideo() {
+        if (!visible || mini || systemPip) return;
+        webAction("window.__irgunMinimizeNativeVideo && window.__irgunMinimizeNativeVideo();");
+    }
+
+    // Observe gestures before child controls consume them. Leave taps, horizontal
+    // seeks, bottom transport controls and multitouch with the native controller.
+    private final class NativePlayerView extends PlayerView {
+        private float downX, downY;
+        private boolean canSwipe;
+        NativePlayerView() { super(getActivity()); }
+        @Override public boolean dispatchTouchEvent(MotionEvent event) {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                downX = event.getX(); downY = event.getY();
+                canSwipe = visible && !mini && !systemPip
+                    && downY > dp(44) && downY < getHeight() - dp(40);
+            } else if (event.getPointerCount() > 1 || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                canSwipe = false;
+            } else if (canSwipe && event.getActionMasked() == MotionEvent.ACTION_MOVE
+                    && NativeVideoSwipe.shouldMinimize(event.getX()-downX, event.getY()-downY,
+                        getResources().getDisplayMetrics().density)) {
+                canSwipe = false;
+                MotionEvent cancel = MotionEvent.obtain(event);
+                cancel.setAction(MotionEvent.ACTION_CANCEL);
+                super.dispatchTouchEvent(cancel);
+                cancel.recycle();
+                minimizeNativeVideo();
+                return true;
+            }
+            return super.dispatchTouchEvent(event);
+        }
+    }
+
+    private Button actionButton(String label, String description, Runnable action) {
+        Button button = new Button(getActivity());
+        button.setText(label);
+        button.setTextSize(12);
+        button.setAllCaps(false);
+        button.setTextColor(Color.WHITE);
+        button.setBackgroundColor(Color.TRANSPARENT);
+        button.setMinWidth(0); button.setMinimumWidth(0);
+        button.setPadding(0,0,0,0);
+        button.setContentDescription(description);
+        button.setOnClickListener(view -> action.run());
+        videoActions.addView(button, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        return button;
+    }
+
+    private static final class Resolution {
+        final Tracks.Group group; final int track; final int height;
+        Resolution(Tracks.Group group, int track, int height) {
+            this.group=group; this.track=track; this.height=height;
+        }
+    }
+
+    private List<Resolution> availableResolutions(ExoPlayer player) {
+        TreeMap<Integer, Resolution> choices = new TreeMap<>(java.util.Collections.reverseOrder());
+        if (player != null) for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
+            if (group.getType() != C.TRACK_TYPE_VIDEO) continue;
+            for (int i=0; i<group.length; i++) {
+                int height=group.getTrackFormat(i).height;
+                if (height > 0 && group.isTrackSupported(i))
+                    choices.putIfAbsent(height, new Resolution(group,i,height));
+            }
+        }
+        return new ArrayList<>(choices.values());
+    }
+
+    private void showQualityMenu() {
+        ExoPlayer player=IrgunPlaybackService.nativeVideoPlayer();
+        if (player == null || systemPip || mini) return;
+        List<Resolution> choices=availableResolutions(player);
+        String[] labels=new String[choices.size()+1]; labels[0]="Auto";
+        int checked=0;
+        for (int i=0; i<choices.size(); i++) {
+            labels[i+1]=choices.get(i).height+"p";
+            if (requestedQualityHeight==choices.get(i).height) checked=i+1;
+        }
+        surface.setControllerShowTimeoutMs(0);
+        qualityDialog=new AlertDialog.Builder(getActivity()).setTitle("Video quality")
+            .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                // Dialog may outlive a source switch. Never apply a stale TrackGroup.
+                if (player != IrgunPlaybackService.nativeVideoPlayer()) { dialog.dismiss(); return; }
+                TrackSelectionParameters.Builder selection=player.getTrackSelectionParameters()
+                    .buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO);
+                if (which > 0) {
+                    Resolution choice=choices.get(which-1);
+                    if (!player.getCurrentTracks().getGroups().contains(choice.group)) { dialog.dismiss(); return; }
+                    selection.setOverrideForType(new TrackSelectionOverride(choice.group.getMediaTrackGroup(),choice.track));
+                    requestedQualityHeight=choice.height;
+                } else requestedQualityHeight=0;
+                // Track selection only: no seek, prepare, source replacement or player.
+                player.setTrackSelectionParameters(selection.build());
+                qualityButton.setText(requestedQualityHeight==0 ? "Auto" : requestedQualityHeight+"p");
+                dialog.dismiss();
+            }).setNegativeButton("Cancel", null).create();
+        qualityDialog.setOnDismissListener(dialog -> {
+            if (surface != null) {
+                surface.setControllerShowTimeoutMs(8000);
+                surface.showController();
+            }
+        });
+        qualityDialog.show();
+    }
+
+    private void updateVideoActions() {
+        if (videoActions == null) return;
+        videoActions.setVisibility(visible && !mini && !systemPip && surface.isControllerFullyVisible()
+            ? View.VISIBLE : View.GONE);
+        sizeButton.setText(fullscreen ? "Shrink" : "Full");
+        sizeButton.setContentDescription(fullscreen ? "Exit video fullscreen" : "Enter video fullscreen");
+    }
     // In MINI the Android PlayerView is above the WebView. A DOM hit test
     // incorrectly reports the thumbnail as clickable while Android routes
     // the physical touch to this native view instead. Place one transparent,
@@ -86,6 +237,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
                 Math.max(0L, Math.round(call.getDouble("positionMs", 0.0))),
                 (float)Math.max(0.25, call.getDouble("speed", 1.0)),
                 Boolean.TRUE.equals(call.getBoolean("playing", true)));
+            requestedQualityHeight = 0;
             visible = true;
             fullscreen = false;
             attachWhenReady(++surfaceGeneration, 0);
@@ -122,9 +274,11 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             root.addOnLayoutChangeListener(rootLayoutListener);
         }
         if (surface == null) {
-            surface = new PlayerView(getActivity());
+            surface = new NativePlayerView();
+            current = new WeakReference<>(this);
             surface.setUseController(true);
             surface.setControllerAutoShow(true);
+            surface.setControllerShowTimeoutMs(8000);
             surface.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING);
             surface.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
             surface.setKeepContentOnPlayerReset(true);
@@ -133,6 +287,28 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(1,1);
             params.gravity = Gravity.TOP | Gravity.LEFT;
             root.addView(surface, params);
+            videoActions = new LinearLayout(getActivity());
+            videoActions.setOrientation(LinearLayout.HORIZONTAL);
+            videoActions.setBackgroundColor(0x99000000);
+            FrameLayout.LayoutParams actionParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44), Gravity.TOP);
+            surface.addView(videoActions, actionParams);
+            pipButton=actionButton("PiP", "Enter Picture-in-Picture", () -> {
+                systemPipChanged(true);
+                if (!(getActivity() instanceof MainActivity)
+                        || !((MainActivity)getActivity()).enterIrgunPictureInPicture()) {
+                    systemPipChanged(false);
+                    Toast.makeText(getContext(), "Picture-in-Picture is unavailable", Toast.LENGTH_SHORT).show();
+                }
+            });
+            pipButton.setVisibility(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                getContext().getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)
+                ? View.VISIBLE : View.GONE);
+            qualityButton=actionButton("Auto", "Choose video quality", this::showQualityMenu);
+            sizeButton=actionButton("Full", "Enter video fullscreen", () -> webAction(
+                "window.__irgunToggleNativeVideoFullscreen && window.__irgunToggleNativeVideoFullscreen();"));
+            minimizeButton=actionButton("Mini", "Minimize video", this::minimizeNativeVideo);
+            surface.setControllerVisibilityListener((PlayerView.ControllerVisibilityListener) visibility -> updateVideoActions());
             ExoPlayer existing = IrgunPlaybackService.nativeVideoPlayer();
             if (existing != null) surface.setPlayer(existing);
         }
@@ -157,7 +333,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     private void layoutSurface() {
         if (surface == null || root == null || getBridge() == null) return;
         WebView web = getBridge().getWebView();
-        if (fullscreen && visible) {
+        updateVideoActions();
+        if ((fullscreen || systemPip) && visible) {
             // Use the real Android root, not the old WebView HLS stage. Media3
             // keeps decoding on the SAME existing ExoPlayer while switching
             // between in-page and fullscreen native PlayerView dimensions.
@@ -167,8 +344,9 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             full.leftMargin = 0;
             full.topMargin = 0;
             surface.setLayoutParams(full);
-            surface.setUseController(true);
+            surface.setUseController(!systemPip);
             surface.setVisibility(View.VISIBLE);
+            updateVideoActions();
             if (miniExpandTarget != null) miniExpandTarget.setVisibility(View.GONE);
             return;
         }
@@ -193,6 +371,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         params.topMargin = top;
         surface.setLayoutParams(params);
         surface.setUseController(!mini);
+        updateVideoActions();
         surface.setVisibility(View.VISIBLE);
         if (miniExpandTarget != null) {
             if (mini) {
@@ -298,6 +477,16 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         call.resolve();
     }
 
+    private JSObject controlRect(View control) {
+        android.graphics.Rect rect = new android.graphics.Rect();
+        if (control == null || !control.isShown() || !control.getGlobalVisibleRect(rect)
+                || rect.width() <= 0 || rect.height() <= 0) return null;
+        JSObject result = new JSObject();
+        result.put("x", rect.left); result.put("y", rect.top);
+        result.put("width", rect.width()); result.put("height", rect.height());
+        return result;
+    }
+
     @PluginMethod
     public void snapshot(PluginCall call) {
         getActivity().runOnUiThread(() -> {
@@ -318,6 +507,22 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("error", state.error);
             response.put("fullscreen", fullscreen);
             response.put("mini", mini);
+            response.put("systemPip", systemPip);
+            response.put("pipButtonVisible", pipButton != null && pipButton.isShown());
+            response.put("qualityButtonVisible", qualityButton != null && qualityButton.isShown());
+            response.put("qualityHeight", requestedQualityHeight);
+            // Read-only actual Android geometry. No UI/controller state mutation.
+            response.put("pipButtonRect", controlRect(pipButton));
+            response.put("qualityButtonRect", controlRect(qualityButton));
+            response.put("sizeButtonRect", controlRect(sizeButton));
+            response.put("miniExpandRect", controlRect(miniExpandTarget));
+            ExoPlayer player = IrgunPlaybackService.nativeVideoPlayer();
+            response.put("playerIdentity", player == null ? 0 : System.identityHashCode(player));
+            response.put("mediaItemIdentity", player == null || player.getCurrentMediaItem() == null
+                ? 0 : System.identityHashCode(player.getCurrentMediaItem()));
+            JSArray resolutions = new JSArray();
+            for (Resolution choice : availableResolutions(player)) resolutions.put(choice.height);
+            response.put("availableResolutions", resolutions);
             response.put("miniHitTargetVisible", miniExpandTarget != null && miniExpandTarget.isShown());
             response.put("surfaceVisible", surface != null && surface.getVisibility() == View.VISIBLE);
             // Native decoder counters alone cannot prove a visible picture.
@@ -354,6 +559,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     }
 
     private void removeSurface() {
+        if (qualityDialog != null) { qualityDialog.dismiss(); qualityDialog=null; }
+        videoActions=null; pipButton=null; qualityButton=null; sizeButton=null; minimizeButton=null;
         if (root != null) root.removeOnLayoutChangeListener(rootLayoutListener);
         if (miniExpandTarget != null) {
             ViewGroup hitParent = (ViewGroup)miniExpandTarget.getParent();

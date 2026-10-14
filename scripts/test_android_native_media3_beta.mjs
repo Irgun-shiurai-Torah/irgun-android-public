@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readFileSync,mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {runInNewContext} from 'node:vm';
 
 const service=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java','utf8');
@@ -161,7 +164,12 @@ test('expanded Android tests observe actual Media3 and physical Android network 
   assert.match(ext,/s\.media3=await evaluate\("window\.Capacitor\.nativePromise\('IrgunNativeVideo','snapshot'/);
   assert.match(ext,/s\.media3\.frames>=2/);
   assert.match(ext,/s\.media3\.bufferedPositionMs>s\.media3\.positionMs/);
-  assert.match(ext,/adb\('emu','network','speed','umts'\)/);
+  assert.match(ext,/adb\('emu','network','speed','hsdpa'\)/);
+  assert.match(ext,/adb\('emu','network','delay','edge'\)/);
+  assert.match(ext,/await seekAudio\(target\/1000\)/,
+    'When hardware FF is ignored during a stall, physically seek with the real Watch range instead');
+  assert.match(ext,/Math\.abs\(s\.media3\.positionMs-target\)<8000/,
+    'Physical seek must actually update the Media3 clock');
   assert.match(ext,/adb\('shell','input','keyevent','KEYCODE_MEDIA_FAST_FORWARD'\)/);
   assert.match(ext,/if\(start\.videoEngine==='native-media3'\)/);
   assert.match(ext,/assert\.equal\(s\.webViewVideo,null/);
@@ -271,4 +279,65 @@ test('MP3 download leaves active native Video playing and gives HLS buffer headr
   runInNewContext(script+'\nthis.prepareBuffer=prepareNativeVideoBufferForOfflineTransfer',context);
   await context.prepareBuffer();
   assert.equal(snapshots,1,'Enough genuinely buffered HLS must start the download immediately');
+});
+
+
+test('actual native swipe policy minimizes downward drags and preserves taps, seeks and upward drags',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'native-video-swipe-'));
+  try {
+    const probe=join(dir,'SwipeProbe.java');
+    writeFileSync(probe,`package org.irgunshiuraitorah.app;
+public class SwipeProbe {
+  static void check(boolean value) { if (!value) throw new AssertionError(); }
+  public static void main(String[] args) {
+    check(NativeVideoSwipe.shouldMinimize(0,48,1));
+    check(NativeVideoSwipe.shouldMinimize(10,160,3));
+    check(!NativeVideoSwipe.shouldMinimize(0,47,1));
+    check(!NativeVideoSwipe.shouldMinimize(0,100,3));
+    check(!NativeVideoSwipe.shouldMinimize(60,50,1));
+    check(!NativeVideoSwipe.shouldMinimize(0,-100,1));
+    check(!NativeVideoSwipe.shouldMinimize(0,0,1));
+    check(!NativeVideoSwipe.shouldMinimize(0,100,0));
+    System.out.println("native swipe checks passed");
+  }
+}`);
+    execFileSync('javac',['-d',dir,'android/app/src/main/java/org/irgunshiuraitorah/app/NativeVideoSwipe.java',probe]);
+    assert.match(execFileSync('java',['-cp',dir,'org.irgunshiuraitorah.app.SwipeProbe'],{encoding:'utf8'}),/checks passed/);
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+test('native PiP, resolution and swipe controls are exercised through real Android touches',()=>{
+  const integration=readFileSync('scripts/android-emulator-native-media3.mjs','utf8');
+  assert.match(bridge,/new NativePlayerView/);
+  assert.match(bridge,/dispatchTouchEvent/);
+  assert.match(bridge,/NativeVideoSwipe.shouldMinimize/);
+  assert.match(bridge,/enterIrgunPictureInPicture/);
+  const quality=bridge.slice(bridge.indexOf('    private void showQualityMenu()'),bridge.indexOf('    private void updateVideoActions()'));
+  assert.match(quality,/getTrackSelectionParameters/);
+  assert.match(quality,/clearOverridesOfType\(C.TRACK_TYPE_VIDEO\)/);
+  assert.match(quality,/new TrackSelectionOverride/);
+  assert.doesNotMatch(quality,/seekTo|setMediaItem|\.prepare\(|new ExoPlayer/);
+  assert.match(integration,/tapNativeLabel\('Enter Picture-in-Picture'\)/);
+  assert.match(integration,/mode=pinned/);
+  assert.match(integration,/tapNativeLabel\('Choose video quality'\)/);
+  assert.match(integration,/s.media3.height===height/);
+  assert.match(integration,/tapNativeLabel\('Expand mini video'\)/);
+  assert.match(integration,/after.playerIdentity,before.playerIdentity/);
+  assert.match(integration,/after.mediaItemIdentity,before.mediaItemIdentity/);
+});
+
+test('native PiP restoration only repositions the same engine and cannot seek a stale saved clock',async()=>{
+  const start=app.indexOf('async function restoreAfterSystemPip()');
+  const end=app.indexOf('window.__irgunSetSystemPip',start);
+  let updated=0,bars=0;
+  const context={
+    state:{watchVideo:{id:'lecture'},watchMode:'video',systemPipLastSeconds:15,watchResumeSeconds:10,
+      watchVimeo:{isIrgunNativeVideoPlayer:true,updateFrame:()=>updated++,
+        setCurrentTime:()=>{throw new Error('Stale PiP clock must never seek native Media3');}}},
+    Capacitor:{getPlatform:()=> 'android'},
+    setNativeVideoFullscreen:async enabled=>{assert.equal(enabled,false);bars++;}
+  };
+  runInNewContext(app.slice(start,end)+'\nthis.restore=restoreAfterSystemPip;',context);
+  await context.restore();
+  assert.equal(updated,1);assert.equal(bars,1);
 });

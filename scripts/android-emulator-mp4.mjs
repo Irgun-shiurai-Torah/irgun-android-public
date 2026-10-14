@@ -158,12 +158,26 @@ try {
     await delay(650);
   }
   assert.ok(search,'Home search must be visible');
-  await tapVisible('#homeLibrarySearch');
   const code=String(target.shiurCode||target.title.match(/IST-[A-Z]+\d+/)?.[0]||'');
   assert.ok(/^IST-[A-Z]+\d+$/.test(code),'Reported shiur search code required');
   const searchState=async()=>JSON.parse(await evaluate("JSON.stringify({screen:window.ISTReleaseQA?.snapshot?.().screen,focused:document.activeElement?.id||'',value:document.getElementById('homeLibrarySearch')?.value??null,query:window.ISTReleaseQA?.snapshot?.().searchQuery??null})"));
   let observedSearch;
-  for(let i=0;i<30;i++) {observedSearch=await searchState();if(observedSearch.focused==='homeLibrarySearch')break;await delay(150);}
+  // On API34 after restoring account state, the Home catalog reflows after
+  // our first native touch; that initial coordinate can land on a different
+  // card instead of focusing Search. Re-measure and physically tap the SAME
+  // visible input again. Do NOT use CDP focus() or synthetic keyboard events.
+  for(let attempt=0;attempt<3;attempt++){
+    await tapVisible('#homeLibrarySearch');
+    for(let i=0;i<20;i++){
+      observedSearch=await searchState();
+      if(observedSearch.focused==='homeLibrarySearch')break;
+      await delay(150);
+    }
+    if(observedSearch.focused==='homeLibrarySearch')break;
+    report.searchFocusRetryObservations||=[];
+    report.searchFocusRetryObservations.push({attempt:attempt+1,state:observedSearch});
+    await delay(450);
+  }
   report.searchBeforeTyping=observedSearch;
   assert.equal(observedSearch.focused,'homeLibrarySearch','Actual Android tap must focus Home search before sending text');
   await typeObservedNativeText({value:code,delay,

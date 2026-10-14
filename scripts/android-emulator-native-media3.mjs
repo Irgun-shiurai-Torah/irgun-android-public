@@ -3,6 +3,7 @@ import { writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {observedAdb} from './android-adb-observer.mjs';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
+import {fullscreenEducationTapPoint} from './android-system-ui-observation.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
 import {typeObservedNativeText} from './android-native-text-entry.mjs';
 
@@ -281,6 +282,149 @@ try {
   const restoredLuminance=captureVisibleNativePicture(resumed,'media3-video-restored');
   report.restoredVisiblePicture={luminance:restoredLuminance,frameCount:resumed.media3.frames,
     surfaceX:resumed.media3.surfaceX,surfaceY:resumed.media3.surfaceY};
+
+  // Every action below is a physical Android touch. CDP only observes state.
+  const tapNativeLabel=async (description, text) => {
+    const controlKey={
+      'Choose video quality':'qualityButtonRect',
+      'Enter Picture-in-Picture':'pipButtonRect',
+      'Enter video fullscreen':'sizeButtonRect',
+      'Exit video fullscreen':'sizeButtonRect',
+      'Expand mini video':'miniExpandRect'
+    }[description];
+    if (controlKey) {
+      for (let attempt=0;attempt<12;attempt++) {
+        // Two fresh native geometry reads replace the expensive whole-window
+        // hierarchy scan for app-owned buttons. That scan could return a stale
+        // visible node just as the 8-second native controller timer expired.
+        const first=(await sample()).media3[controlKey];
+        await delay(80);
+        const state=(await sample()).media3, second=state[controlKey];
+        if (first && second && Math.abs(first.x-second.x)<=1 &&
+            Math.abs(first.y-second.y)<=1 && second.width>0 && second.height>0) {
+          const point=[Math.round(second.x+second.width/2),Math.round(second.y+second.height/2)];
+          adb('shell','input','tap',...point.map(String));
+          report.gestures.push({nativeDescription:description,point,nativeRect:second});
+          return;
+        }
+        if (description!=='Expand mini video') await showNativeControls();
+        else await delay(200);
+      }
+      throw new Error('Actual native control has no stable visible rectangle: '+description);
+    }
+    let xml;
+    for (let attempt=0; attempt<12; attempt++) {
+      xml=nativeHierarchy();
+      const nodes=xml.match(/<node\b[^>]*>/g)||[];
+      const node=nodes.find(n=>(description && n.includes('content-desc="'+description+'"')) ||
+        (text && n.includes('text="'+text+'"')));
+      const b=node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+      if (b && Number(b[3])>Number(b[1]) && Number(b[4])>Number(b[2])) {
+        const x=Math.round((Number(b[1])+Number(b[3]))/2);
+        const y=Math.round((Number(b[2])+Number(b[4]))/2);
+        adb('shell','input','tap',String(x),String(y));
+        report.gestures.push({nativeDescription:description,text,point:[x,y]});
+        return;
+      }
+      if (['Choose video quality','Enter video fullscreen','Exit video fullscreen',
+          'Enter Picture-in-Picture'].includes(description)) {
+        // The hierarchy observer may take longer than Media3's control timeout.
+        // Reopen the actual controls with a physical video tap when observation
+        // confirms they disappeared; never inject a controller visibility setter.
+        await showNativeControls();
+      }
+      await delay(300);
+    }
+    throw new Error('Actual native control not visible: '+description+' / '+text+'; '+xml);
+  };
+  const showNativeControls=async()=>{
+    const s=await sample(), m=s.media3;
+    if (!m.qualityButtonVisible) {
+      adb('shell','input','tap',String(Math.round(m.surfaceX+m.surfaceVisibleWidth*.95)),
+        String(Math.round(m.surfaceY+m.surfaceVisibleHeight*.48)));
+    }
+    return waitNative(s=>s.media3.pipButtonVisible&&s.media3.qualityButtonVisible,
+      'Native PiP and quality buttons must be visible on the actual video',10000);
+  };
+  const samePlayback=(before,after,label,elapsed)=>{
+    assert.equal(after.playerIdentity,before.playerIdentity,label+' created/replaced ExoPlayer');
+    assert.equal(after.mediaItemIdentity,before.mediaItemIdentity,label+' replaced the MediaItem');
+    assert.ok(after.positionMs>=before.positionMs-1250,label+' rewound playback');
+    assert.ok(after.positionMs<=before.positionMs+elapsed+5000,label+' jumped playback forward');
+    assert.equal(after.sourceType,'hls',label+' changed the source');
+  };
+  let controls=await showNativeControls();
+  assert.ok(controls.media3.availableResolutions.length>=2,
+    'Quality integration fixture must contain at least two actual HLS resolutions');
+  const resolutions=controls.media3.availableResolutions;
+  for (const height of [resolutions.at(-1),resolutions[0]]) {
+    const before=(await showNativeControls()).media3,started=Date.now();
+    await tapNativeLabel('Choose video quality');
+    await tapNativeLabel('',height+'p');
+    const selected=await waitNative(s=>s.media3.qualityHeight===height&&
+      s.media3.height===height&&s.media3.playing&&s.media3.frames>before.frames+5,
+      'Actual Media3 decoder must change to selected HLS resolution '+height+'p',65000);
+    samePlayback(before,selected.media3,'Quality '+height+'p',Date.now()-started);
+    report.checks.push({label:'Physical quality menu selects real decoded HLS '+height+'p with same player/item/clock',
+      before,after:selected.media3});
+  }
+  controls=await showNativeControls();
+  await tapNativeLabel('Choose video quality');
+  await tapNativeLabel('','Auto');
+  await waitNative(s=>s.media3.qualityHeight===0&&s.media3.playing,'Auto must restore adaptive Media3 selection');
+
+  // Swipe the actual native picture, not a WebView proxy behind it.
+  const beforeSwipe=(await sample()).media3,swipeStart=Date.now();
+  const sx=Math.round(beforeSwipe.surfaceX+beforeSwipe.surfaceVisibleWidth*.5);
+  const sy=Math.round(beforeSwipe.surfaceY+beforeSwipe.surfaceVisibleHeight*.5);
+  adb('shell','input','swipe',String(sx),String(sy),String(sx),
+    String(sy+Math.max(110,Math.round(beforeSwipe.surfaceVisibleHeight*.9))),'480');
+  report.gestures.push({nativeSwipeDown:[sx,sy]});
+  const mini=await waitNative(s=>s.media3.mini&&s.media3.miniHitTargetVisible&&
+    s.media3.playing&&s.media3.surfaceVisibleOnScreen,'Real downward video swipe must open mini player');
+  samePlayback(beforeSwipe,mini.media3,'Swipe to mini',Date.now()-swipeStart);
+  await delay(2000);
+  const miniMoved=await sample();
+  assert.ok(miniMoved.media3.positionMs>mini.media3.positionMs+900&&
+    miniMoved.media3.frames>mini.media3.frames+5,'Mini must keep playing real moving video');
+  await tapNativeLabel('Expand mini video');
+  const expanded=await waitNative(s=>!s.media3.mini&&s.media3.surfaceVisibleWidth>120&&
+    s.media3.playing,'Physical mini thumbnail tap must expand the existing video');
+  samePlayback(beforeSwipe,expanded.media3,'Mini expand',Date.now()-swipeStart);
+  report.checks.push({label:'Physical swipe minimizes and physical mini thumbnail expands with continuous same-player playback',
+    before:beforeSwipe,mini:mini.media3,after:expanded.media3});
+
+  controls=await showNativeControls();
+  await tapNativeLabel('Enter video fullscreen');
+  await waitNative(s=>s.media3.fullscreen,'Native fullscreen control must expand video');
+  await delay(900);
+  const education=fullscreenEducationTapPoint(nativeHierarchy());
+  if (education) adb('shell','input','tap',...education.map(String));
+  await showNativeControls();
+  await tapNativeLabel('Exit video fullscreen');
+  await waitNative(s=>!s.media3.fullscreen,'Native Shrink control must exit fullscreen');
+
+  const beforePip=(await showNativeControls()).media3,pipStart=Date.now();
+  await tapNativeLabel('Enter Picture-in-Picture');
+  const pip=await waitNative(s=>s.media3.systemPip&&s.media3.videoSelected&&s.media3.playing,
+    'PiP button must enter Android system PiP without switching to Audio');
+  assert.match(adb('shell','dumpsys','activity','activities'),/mode=pinned/,
+    'Android ActivityManager must confirm a real pinned PiP task');
+  assert.equal(pip.media3.pipButtonVisible,false,'App controls must hide in system PiP');
+  await delay(3000);
+  const pipMoved=await sample();
+  assert.ok(pipMoved.media3.positionMs>pip.media3.positionMs+1500&&
+    pipMoved.media3.frames>pip.media3.frames+5,'System PiP must keep decoding and advancing');
+  samePlayback(beforePip,pipMoved.media3,'PiP entry',Date.now()-pipStart);
+  writeFileSync('emulator-report/native-system-pip.png',execFileSync('adb',['exec-out','screencap','-p']));
+  adb('shell','am','start','-W','-n','org.irgunshiuraitorah.app/.MainActivity');
+  const afterPip=await waitNative(s=>!s.media3.systemPip&&s.media3.videoSelected&&
+    s.media3.playing&&s.media3.surfaceVisibleWidth>120,'Returning from PiP must restore actual moving video');
+  samePlayback(beforePip,afterPip.media3,'PiP return',Date.now()-pipStart);
+  assert.equal(afterPip.video,null,'PiP must never create a WebView video decoder');
+  assert.ok(afterPip.webAudio.every(a=>a.paused||a.muted||a.volume===0),'No second audible WebView audio in PiP');
+  report.checks.push({label:'Physical PiP button enters real Android pinned task and returns without player/item/clock change',
+    before:beforePip,pip:pipMoved.media3,after:afterPip.media3});
 
   if (process.env.IRGUN_NATIVE_MEDIA3_SOAK === '1') {
     // A REAL wall-clock 15-minute Media3 HLS soak, not a mock clock or a
