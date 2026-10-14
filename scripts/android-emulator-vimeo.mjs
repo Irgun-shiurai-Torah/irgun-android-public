@@ -57,7 +57,9 @@ try{
    if(focused)break;await delay(200);
   }
   assert.equal(focused,true,'The actual Irgun window must regain foreground focus before Vimeo navigation');
-  await tap('[data-close-watch]');await delay(500);
+  if(await evaluate("!!document.querySelector('[data-close-watch]')")){
+   await tap('[data-close-watch]');await delay(500);
+  }
   await tap('.bottom-nav [data-nav="home"]');await delay(600);
   for(let i=0;i<6;i++){
    const visible=await evaluate("!!document.querySelector('#homeLibrarySearch')&&document.querySelector('#homeLibrarySearch').getBoundingClientRect().bottom<innerHeight-80");

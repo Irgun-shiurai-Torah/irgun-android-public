@@ -15,5 +15,9 @@ if [[ "${1:-}" == "soak" ]]; then
   IRGUN_NATIVE_MEDIA3_SOAK=1 timeout --signal=TERM --kill-after=15s 28m node scripts/android-emulator-native-media3.mjs
 else
   node scripts/android-emulator-native-media3.mjs
+  # The native suite physically dismisses the task as its final lifecycle test.
+  # This is an explicit new launch, not a retry of a failed gesture.
+  adb shell am start -W -n org.irgunshiuraitorah.app/.SplashActivity
+  node scripts/android-emulator-inspect.mjs > emulator-report/after-task-dismissal-startup.json
   node scripts/android-emulator-vimeo.mjs
 fi

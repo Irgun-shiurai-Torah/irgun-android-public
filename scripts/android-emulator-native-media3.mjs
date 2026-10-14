@@ -7,6 +7,7 @@ import {fullscreenEducationTapPoint} from './android-system-ui-observation.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
 import {typeObservedNativeText} from './android-native-text-entry.mjs';
 import {verifyAndroidVideoDisplay} from './android-video-display-regression.mjs';
+import {verifyAndroidTaskDismissal} from './android-task-dismissal-regression.mjs';
 
 // Read the real WebView through CDP, but perform every navigation gesture with
 // Android input events. No DOM clicks or synthetic touch events stand in for UI.
@@ -697,6 +698,7 @@ try {
     report.checks.push({label:'Real 15-minute native Media3 HLS, lock/Home/reopen, Audio/Video and memory',
       minutes:15,samples:report.soak.samples.length,events:report.soak.events.length});
   }
+  await verifyAndroidTaskDismissal({adb,sample,delay,report});
   report.result='passed';
 
 } catch (error) {
