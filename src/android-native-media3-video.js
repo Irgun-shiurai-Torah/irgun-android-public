@@ -32,8 +32,8 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     // document.getElementById() or placeholder.isConnected alone is unsafe.
     return [...document.querySelectorAll('#watchVimeoFrame')].find(element=>{
       const r=element.getBoundingClientRect();
-      return r.width>40&&r.height>40&&r.left>=-2&&r.top>=-2&&
-        r.right<=innerWidth+2&&r.bottom<=innerHeight+2;
+      return r.width>40&&r.height>40&&r.right>0&&r.bottom>0&&
+        r.left<innerWidth&&r.top<innerHeight;
     })||null;
   };
   const cleanups=[];
@@ -41,6 +41,12 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     if(destroyed || mode!=='video')return;
     const nativeBounds={viewportWidth:innerWidth,viewportHeight:innerHeight,
       mini:document.body.classList.contains('irgun-watch-mini-hosted')};
+    if(nativeBounds.mini){
+      const button=document.querySelector('#persistentVideoMount [data-mini-video-play-toggle]');
+      const r=button?.getBoundingClientRect();
+      if(r&&r.width>0&&r.height>0&&r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight)
+        nativeBounds.miniPlay={x:r.x,y:r.y,width:r.width,height:r.height};
+    }
     if(document.querySelector('.playlist-picker-backdrop')){
       // Hide the native view without stopping the SAME Media3 playback clock.
       framePlacedOnScreen=false;
@@ -66,6 +72,18 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
       return;
     }
     const rect=current.getBoundingClientRect();
+    const scroll=current.closest?.('.watch-scroll')?.getBoundingClientRect();
+    const left=Math.max(0,rect.left,scroll?.left??0),top=Math.max(0,rect.top,scroll?.top??0);
+    const right=Math.min(innerWidth,rect.right,scroll?.right??innerWidth);
+    const bottom=Math.min(innerHeight,rect.bottom,scroll?.bottom??innerHeight);
+    if(right<=left||bottom<=top){
+      framePlacedOnScreen=false;
+      await native.frame({width:0,height:0,...nativeBounds});return;
+    }
+    // Keep the original video size; clip only the part covered by the scroll
+    // viewport. Resizing the decoder view would change the picture's framing.
+    nativeBounds.clip={left:left-rect.left,top:top-rect.top,
+      right:right-rect.left,bottom:bottom-rect.top};
     try{
       await native.frame({x:rect.x,y:rect.y,width:rect.width,height:rect.height,
         ...nativeBounds});

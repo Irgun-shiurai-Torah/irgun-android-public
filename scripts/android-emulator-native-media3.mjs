@@ -128,21 +128,21 @@ try {
   let [left,top,right,bottom]=measuredBounds;
   report.nativeBounds=measuredBounds;
   const nativePoint=p=>[Math.round(left+p.x*(right-left)/p.width),Math.round(top+p.y*(bottom-top)/p.height)];
-  const visiblePoint=async selector=>JSON.parse(await evaluate(`JSON.stringify((()=>{
+  const visiblePoint=async (selector,allowHeader=false)=>JSON.parse(await evaluate(`JSON.stringify((()=>{
     // A card has several Watch targets. Its cover center can be obscured by
     // sibling Watch/Listen buttons; choose a genuinely visible target instead.
     for(const b of document.querySelectorAll(${JSON.stringify(selector)})) {
       const r=b.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
       const hit=document.elementFromPoint(x,y);
-      if(y>70 && y<innerHeight-75 && (hit===b || b.contains(hit)))
+      if(y>${allowHeader?0:70} && y<innerHeight-75 && (hit===b || b.contains(hit)))
         return {x,y,width:innerWidth,height:innerHeight};
     }
     return null;
   })())`));
-  const tapVisible=async selector=>{
+  const tapVisible=async (selector,allowHeader=false)=>{
     const measured=await settledNativeTapPoint({
       readBounds:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),
-      readPoint:()=>visiblePoint(selector),delay
+      readPoint:()=>visiblePoint(selector,allowHeader),delay
     });
     [left,top,right,bottom]=measured.bounds;
     adb('shell','input','tap',...measured.point.map(String));report.gestures.push({selector,...measured});
@@ -290,7 +290,9 @@ try {
       'Enter Picture-in-Picture':'pipButtonRect',
       'Enter video fullscreen':'sizeButtonRect',
       'Exit video fullscreen':'sizeButtonRect',
-      'Expand mini video':'miniExpandRect'
+      'Expand mini video':'miniExpandRect',
+      'Pause mini video':'miniPlayPauseRect',
+      'Play mini video':'miniPlayPauseRect'
     }[description];
     if (controlKey) {
       for (let attempt=0;attempt<12;attempt++) {
@@ -307,7 +309,7 @@ try {
           report.gestures.push({nativeDescription:description,point,nativeRect:second});
           return;
         }
-        if (description!=='Expand mini video') await showNativeControls();
+        if (!['Expand mini video','Pause mini video','Play mini video'].includes(description)) await showNativeControls();
         else await delay(200);
       }
       throw new Error('Actual native control has no stable visible rectangle: '+description);
@@ -373,6 +375,40 @@ try {
   await tapNativeLabel('','Auto');
   await waitNative(s=>s.media3.qualityHeight===0&&s.media3.playing,'Auto must restore adaptive Media3 selection');
 
+  // Two actual native taps on each side must seek exactly once on the same engine.
+  for(const direction of [1,-1]) {
+    await delay(500);
+    const before=(await sample()).media3,started=Date.now();
+    const x=Math.round(before.surfaceX+before.surfaceVisibleWidth*(direction>0?.90:.10));
+    const y=Math.round(before.surfaceY+before.surfaceVisibleHeight*.50);
+    adb('shell','input tap '+x+' '+y+'; input tap '+x+' '+y);
+    const target=Math.max(0,before.positionMs+direction*15000);
+    const sought=await waitNative(s=>s.media3.playing&&s.media3.frames>before.frames+3&&
+      Math.abs(s.media3.positionMs-target)<Date.now()-started+2500,
+      'Physical Video double tap must seek '+direction*15+' seconds once',25000);
+    assert.equal(sought.media3.playerIdentity,before.playerIdentity,'Double tap must keep ExoPlayer');
+    assert.equal(sought.media3.mediaItemIdentity,before.mediaItemIdentity,'Double tap must keep MediaItem');
+    report.checks.push({label:'Physical Video double tap seeks '+direction*15+' seconds on same player',before,after:sought.media3});
+  }
+
+  // Scroll from below the video to avoid the separate downward-to-mini gesture.
+  const beforeScroll=(await sample()).media3;
+  const scrollX=Math.round(beforeScroll.surfaceX+beforeScroll.surfaceVisibleWidth*.5);
+  const scrollY=Math.round(beforeScroll.surfaceY+beforeScroll.surfaceVisibleHeight+90);
+  adb('shell','input','swipe',String(scrollX),String(scrollY),String(scrollX),
+    String(scrollY-Math.round(beforeScroll.surfaceVisibleHeight*.65)),'700');
+  const partial=await waitNative(s=>s.media3.playing&&s.media3.surfaceVisibleOnScreen&&
+    s.media3.surfaceVisibleHeight>20&&s.media3.surfaceVisibleHeight<beforeScroll.surfaceVisibleHeight*.9,
+    'Partly scrolled video must retain a visible native picture');
+  await delay(1200);const partialMoved=await sample();
+  assert.ok(partialMoved.media3.frames>partial.media3.frames+5,'Clipped Video must keep rendering frames');
+  captureVisibleNativePicture(partialMoved,'media3-partially-scrolled');
+  adb('shell','input','swipe',String(scrollX),String(scrollY-Math.round(beforeScroll.surfaceVisibleHeight*.65)),
+    String(scrollX),String(scrollY),'700');
+  await waitNative(s=>s.media3.surfaceVisibleHeight>=beforeScroll.surfaceVisibleHeight-3&&s.media3.playing,
+    'Scrolling back must restore the same whole native picture');
+  report.checks.push({label:'Physical scroll clips the visible picture without removing or restarting it',before:beforeScroll,partial:partialMoved.media3});
+
   // Swipe the actual native picture, not a WebView proxy behind it.
   const beforeSwipe=(await sample()).media3,swipeStart=Date.now();
   const sx=Math.round(beforeSwipe.surfaceX+beforeSwipe.surfaceVisibleWidth*.5);
@@ -387,6 +423,36 @@ try {
   const miniMoved=await sample();
   assert.ok(miniMoved.media3.positionMs>mini.media3.positionMs+900&&
     miniMoved.media3.frames>mini.media3.frames+5,'Mini must keep playing real moving video');
+  const originalLang=await evaluate('document.documentElement.lang');
+  for (let language=0;language<2;language++) {
+    if(language===1){
+      await tapVisible('[data-language-toggle]',true);
+      for(let n=0;n<30&&(await evaluate('document.documentElement.lang'))===originalLang;n++)await delay(150);
+      assert.notEqual(await evaluate('document.documentElement.lang'),originalLang,'Physical language toggle must change real layout direction');
+    }
+    for(let cycle=0;cycle<2;cycle++) {
+      const before=(await sample()).media3,started=Date.now();
+      assert.ok(before.miniPlayPauseRect,'Mini must expose a visible native Pause button');
+      assert.equal(before.miniPlayPauseLabel,'Pause mini video');
+      await tapNativeLabel('Pause mini video');
+      const paused=await waitNative(s=>s.media3.mini&&!s.media3.playWhenReady&&!s.media3.playing&&
+        s.media3.miniPlayPauseLabel==='Play mini video','Physical Mini Pause must stop real Media3 playback without expanding');
+      await delay(1300);const stopped=await sample();
+      assert.ok(!stopped.media3.playWhenReady&&!stopped.media3.playing,'Mini must remain explicitly paused');
+      assert.ok(Math.abs(stopped.media3.positionMs-paused.media3.positionMs)<250,'Actual Mini Pause must freeze the native clock');
+      samePlayback(before,stopped.media3,'Mini Pause',Date.now()-started);
+      await tapNativeLabel('Play mini video');
+      const continued=await waitNative(s=>s.media3.mini&&s.media3.playWhenReady&&s.media3.playing&&
+        s.media3.positionMs>stopped.media3.positionMs+500&&s.media3.frames>stopped.media3.frames+5&&
+        s.media3.miniPlayPauseLabel==='Pause mini video','Physical Mini Play must resume moving video at saved position');
+      samePlayback(before,continued.media3,'Mini Resume',Date.now()-started);
+      report.checks.push({label:'Actual Mini Pause/Play stops and resumes one native clock without expansion',
+        language:await evaluate('document.documentElement.lang'),cycle,before,paused:stopped.media3,after:continued.media3});
+    }
+  }
+  await tapVisible('[data-language-toggle]',true);
+  for(let n=0;n<30&&(await evaluate('document.documentElement.lang'))!==originalLang;n++)await delay(150);
+  assert.equal(await evaluate('document.documentElement.lang'),originalLang,'Restore actual original language after Mini controls');
   await tapNativeLabel('Expand mini video');
   const expanded=await waitNative(s=>!s.media3.mini&&s.media3.surfaceVisibleWidth>120&&
     s.media3.playing,'Physical mini thumbnail tap must expand the existing video');

@@ -2619,3 +2619,14 @@ body { min-width:0; }
     aspect-ratio: auto !important;
   }
 }
+
+/* Android audio: solid high-contrast seek icons in both Audio presentations. */
+body.irgun-android .skip-icon-modern { color: #102a43; opacity: 1; }
+body.irgun-android .skip-icon-modern .skip-ring,
+body.irgun-android .skip-icon-modern .skip-arrowhead { stroke-width: 4.5px; }
+body.irgun-android .skip-icon-modern .skip-text { font-weight: 800; }
+body.irgun-android .big-controls .skip-control,
+body.irgun-android .watch-audio-controls .skip-control {
+  background: #e5edf5 !important;
+  opacity: 1;
+}

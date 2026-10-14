@@ -4,10 +4,12 @@ import android.content.Intent;
 import android.app.AlertDialog;
 import android.os.Build;
 import android.view.MotionEvent;
+import android.view.ViewConfiguration;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.Toast;
 import androidx.media3.common.C;
+import androidx.media3.common.Player;
 import androidx.media3.common.Tracks;
 import androidx.media3.common.TrackSelectionOverride;
 import androidx.media3.common.TrackSelectionParameters;
@@ -18,6 +20,7 @@ import java.util.List;
 import java.util.TreeMap;
 import android.net.Uri;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
@@ -86,25 +89,63 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     // seeks, bottom transport controls and multitouch with the native controller.
     private final class NativePlayerView extends PlayerView {
         private float downX, downY;
-        private boolean canSwipe;
+        private boolean canSwipe, canDoubleTap;
+        private long downTime;
+        private final NativeVideoDoubleTap doubleTap = new NativeVideoDoubleTap();
         NativePlayerView() { super(getActivity()); }
+        private boolean interactiveAt(View view, float x, float y) {
+            if (!view.isShown() || x < 0 || y < 0 || x >= view.getWidth() || y >= view.getHeight()) return false;
+            if (view != this && view.isEnabled() && view.isClickable()) return true;
+            if (view instanceof ViewGroup) {
+                ViewGroup group=(ViewGroup)view;
+                for(int i=group.getChildCount()-1;i>=0;i--) {
+                    View child=group.getChildAt(i);
+                    if(interactiveAt(child,x-child.getLeft()+group.getScrollX(),
+                        y-child.getTop()+group.getScrollY())) return true;
+                }
+            }
+            return false;
+        }
         @Override public boolean dispatchTouchEvent(MotionEvent event) {
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-                downX = event.getX(); downY = event.getY();
+                downX = event.getX(); downY = event.getY(); downTime=event.getEventTime();
                 canSwipe = visible && !mini && !systemPip
                     && downY > dp(44) && downY < getHeight() - dp(40);
+                canDoubleTap=canSwipe && !interactiveAt(this,downX,downY);
+                if(!canDoubleTap) doubleTap.cancel();
             } else if (event.getPointerCount() > 1 || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
-                canSwipe = false;
+                canSwipe = false; doubleTap.cancel();
             } else if (canSwipe && event.getActionMasked() == MotionEvent.ACTION_MOVE
                     && NativeVideoSwipe.shouldMinimize(event.getX()-downX, event.getY()-downY,
                         getResources().getDisplayMetrics().density)) {
-                canSwipe = false;
+                canSwipe = false; doubleTap.cancel();
                 MotionEvent cancel = MotionEvent.obtain(event);
                 cancel.setAction(MotionEvent.ACTION_CANCEL);
                 super.dispatchTouchEvent(cancel);
                 cancel.recycle();
                 minimizeNativeVideo();
                 return true;
+            }
+            if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                float slop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
+                boolean tap = canSwipe && canDoubleTap && event.getEventTime()-downTime < ViewConfiguration.getLongPressTimeout() && Math.hypot(event.getX()-downX,event.getY()-downY) <= slop;
+                int direction = tap ? doubleTap.tap(event.getEventTime(),event.getX(),event.getY(),
+                    getWidth(),ViewConfiguration.getDoubleTapTimeout(),
+                    ViewConfiguration.get(getContext()).getScaledDoubleTapSlop()) : 0;
+                if (!tap) doubleTap.cancel();
+                if (direction != 0) {
+                    ExoPlayer player = IrgunPlaybackService.nativeVideoPlayer();
+                    if (player != null) {
+                        IrgunPlaybackService.seekTo(NativeVideoDoubleTap.seekTarget(
+                            player.getCurrentPosition(),player.getDuration(),direction));
+                        Toast.makeText(getContext(),direction < 0 ? "−15 seconds" : "+15 seconds",
+                            Toast.LENGTH_SHORT).show();
+                    }
+                    MotionEvent cancel = MotionEvent.obtain(event);
+                    cancel.setAction(MotionEvent.ACTION_CANCEL);
+                    super.dispatchTouchEvent(cancel); cancel.recycle();
+                    return true;
+                }
             }
             return super.dispatchTouchEvent(event);
         }
@@ -194,6 +235,31 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     // the physical touch to this native view instead. Place one transparent,
     // native, clickable overlay over ONLY the moving mini thumbnail.
     private View miniExpandTarget;
+    private Button miniPlayPauseTarget;
+    private float miniPlayX, miniPlayY, miniPlayWidth, miniPlayHeight;
+    private ExoPlayer observedMiniPlayer;
+    private final Player.Listener miniPlaybackListener = new Player.Listener() {
+        @Override public void onPlayWhenReadyChanged(boolean playing, int reason) { refreshMiniTransport(); }
+        @Override public void onIsPlayingChanged(boolean playing) { refreshMiniTransport(); }
+    };
+
+    private void refreshMiniTransport() {
+        ExoPlayer player = IrgunPlaybackService.nativeVideoPlayer();
+        if (observedMiniPlayer != player) {
+            if (observedMiniPlayer != null) observedMiniPlayer.removeListener(miniPlaybackListener);
+            observedMiniPlayer = player;
+            if (player != null) player.addListener(miniPlaybackListener);
+        }
+        if (miniPlayPauseTarget == null) return;
+        boolean playIntent = player != null && player.getPlayWhenReady();
+        miniPlayPauseTarget.setText(playIntent ? "II" : "▶");
+        miniPlayPauseTarget.setContentDescription(playIntent ? "Pause mini video" : "Play mini video");
+    }
+
+    private void hideMiniTargets() {
+        if (miniExpandTarget != null) miniExpandTarget.setVisibility(View.GONE);
+        if (miniPlayPauseTarget != null) miniPlayPauseTarget.setVisibility(View.GONE);
+    }
     private FrameLayout root;
     private boolean visible = false;
     private boolean mini = false;
@@ -204,6 +270,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     private boolean fullscreen = false;
     private int surfaceGeneration = 0;
     private float x, y, width, height, viewportWidth, viewportHeight;
+    private float clipLeft, clipTop, clipRight, clipBottom;
 
     private boolean permitted(String url) {
         if (url == null || url.isEmpty()) return false;
@@ -338,6 +405,29 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             params.gravity = Gravity.TOP | Gravity.LEFT;
             root.addView(miniExpandTarget, params);
         }
+        if (miniPlayPauseTarget == null) {
+            miniPlayPauseTarget = new Button(getActivity());
+            miniPlayPauseTarget.setTextColor(Color.WHITE);
+            miniPlayPauseTarget.setTextSize(18);
+            miniPlayPauseTarget.setBackgroundColor(Color.rgb(15,31,53));
+            miniPlayPauseTarget.setPadding(0,0,0,0);
+            miniPlayPauseTarget.setMinWidth(0); miniPlayPauseTarget.setMinimumWidth(0);
+            // Native thumbnail/Expand can overlap a WebView button in RTL or on
+            // narrow phones. Own the actual Pause rectangle ABOVE that surface.
+            miniPlayPauseTarget.setElevation(20f);
+            miniPlayPauseTarget.setVisibility(View.GONE);
+            miniPlayPauseTarget.setOnClickListener(view -> {
+                if (!mini || !visible || systemPip) return;
+                ExoPlayer player = IrgunPlaybackService.nativeVideoPlayer();
+                if (player == null) return;
+                // Buffering is not Pause. Honor the actual Media3 play intent.
+                if (player.getPlayWhenReady()) IrgunPlaybackService.pause();
+                else IrgunPlaybackService.play();
+                refreshMiniTransport();
+            });
+            root.addView(miniPlayPauseTarget, new FrameLayout.LayoutParams(1,1));
+        }
+        refreshMiniTransport();
     }
 
     private void layoutSurface() {
@@ -354,16 +444,17 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             full.leftMargin = 0;
             full.topMargin = 0;
             surface.setLayoutParams(full);
+            surface.setClipBounds(null);
             surface.setUseController(!systemPip);
             surface.setVisibility(View.VISIBLE);
             updateVideoActions();
-            if (miniExpandTarget != null) miniExpandTarget.setVisibility(View.GONE);
+            hideMiniTargets();
             return;
         }
         if (web == null || viewportWidth <= 0 || viewportHeight <= 0
                 || width <= 0 || height <= 0 || !visible) {
             surface.setVisibility(View.GONE);
-            if (miniExpandTarget != null) miniExpandTarget.setVisibility(View.GONE);
+            hideMiniTargets();
             return;
         }
         int[] webScreen = new int[2], rootScreen = new int[2];
@@ -380,6 +471,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         params.leftMargin = left;
         params.topMargin = top;
         surface.setLayoutParams(params);
+        surface.setClipBounds(new Rect(Math.round(clipLeft*scaleX),Math.round(clipTop*scaleY),
+            Math.round(clipRight*scaleX),Math.round(clipBottom*scaleY)));
         surface.setUseController(!mini);
         updateVideoActions();
         surface.setVisibility(View.VISIBLE);
@@ -393,6 +486,18 @@ public final class IrgunNativeVideoPlugin extends Plugin {
                 miniExpandTarget.setVisibility(View.VISIBLE);
             } else miniExpandTarget.setVisibility(View.GONE);
         }
+        if (miniPlayPauseTarget != null) {
+            if (mini && miniPlayWidth > 0 && miniPlayHeight > 0) {
+                FrameLayout.LayoutParams control = new FrameLayout.LayoutParams(
+                    Math.max(1,Math.round(miniPlayWidth*scaleX)), Math.max(1,Math.round(miniPlayHeight*scaleY)));
+                control.gravity = Gravity.TOP | Gravity.LEFT;
+                control.leftMargin = webScreen[0]-rootScreen[0]+Math.round(miniPlayX*scaleX);
+                control.topMargin = webScreen[1]-rootScreen[1]+Math.round(miniPlayY*scaleY);
+                miniPlayPauseTarget.setLayoutParams(control);
+                miniPlayPauseTarget.setVisibility(View.VISIBLE);
+                refreshMiniTransport();
+            } else miniPlayPauseTarget.setVisibility(View.GONE);
+        }
     }
 
     @PluginMethod
@@ -404,6 +509,16 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         viewportWidth = (float)(double)call.getDouble("viewportWidth", 0.0);
         viewportHeight = (float)(double)call.getDouble("viewportHeight", 0.0);
         mini = Boolean.TRUE.equals(call.getBoolean("mini", false));
+        JSObject clip = call.getObject("clip");
+        clipLeft = clip == null ? 0f : (float)clip.optDouble("left",0);
+        clipTop = clip == null ? 0f : (float)clip.optDouble("top",0);
+        clipRight = clip == null ? width : (float)clip.optDouble("right",width);
+        clipBottom = clip == null ? height : (float)clip.optDouble("bottom",height);
+        JSObject transport = call.getObject("miniPlay");
+        miniPlayX = transport == null ? 0f : (float)transport.optDouble("x",0);
+        miniPlayY = transport == null ? 0f : (float)transport.optDouble("y",0);
+        miniPlayWidth = transport == null ? 0f : (float)transport.optDouble("width",0);
+        miniPlayHeight = transport == null ? 0f : (float)transport.optDouble("height",0);
         getActivity().runOnUiThread(() -> {
             // Device rotation may have rebuilt the Android root while the
             // single ExoPlayer service kept playing. Rebind the PlayerView to
@@ -466,6 +581,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
                 if (surface != null) surface.setPlayer(IrgunPlaybackService.nativeVideoPlayer());
                 layoutSurface();
             } else if (surface != null) {
+                hideMiniTargets();
                 surface.setVisibility(View.GONE);
                 surface.setPlayer(null);
             }
@@ -526,6 +642,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("qualityButtonRect", controlRect(qualityButton));
             response.put("sizeButtonRect", controlRect(sizeButton));
             response.put("miniExpandRect", controlRect(miniExpandTarget));
+            response.put("miniPlayPauseRect", controlRect(miniPlayPauseTarget));
+            response.put("miniPlayPauseLabel", miniPlayPauseTarget == null ? "" : miniPlayPauseTarget.getContentDescription());
             ExoPlayer player = IrgunPlaybackService.nativeVideoPlayer();
             response.put("playerIdentity", player == null ? 0 : System.identityHashCode(player));
             response.put("mediaItemIdentity", player == null || player.getCurrentMediaItem() == null
@@ -569,6 +687,13 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     }
 
     private void removeSurface() {
+        if (observedMiniPlayer != null) observedMiniPlayer.removeListener(miniPlaybackListener);
+        observedMiniPlayer = null;
+        if (miniPlayPauseTarget != null) {
+            ViewGroup parent = (ViewGroup)miniPlayPauseTarget.getParent();
+            if (parent != null) parent.removeView(miniPlayPauseTarget);
+            miniPlayPauseTarget = null;
+        }
         if (qualityDialog != null) { qualityDialog.dismiss(); qualityDialog=null; }
         videoActions=null; pipButton=null; qualityButton=null; sizeButton=null; minimizeButton=null;
         if (root != null) root.removeOnLayoutChangeListener(rootLayoutListener);

@@ -210,6 +210,7 @@ public final class NativeMetadataRegression {
   float logicalSpeed=1,logicalVolume=1;
   boolean syncingVideoShadow;
   boolean nativeVideoSourceActive=false,nativeVideoSelected=false,nativeVideoOfflineAudioActive=false;
+  boolean resumeVideoOnForeground=false;
   PlaybackMode playbackMode=PlaybackMode.AUDIO;
   FakePlayer player=new FakePlayer();
   static final class FakePlayer {

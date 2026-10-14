@@ -1,13 +1,15 @@
 {
-  "sourceBranch": "fix/android-postmerge-like-home-20261013",
-  "sourceCommit": "e029df24f879f19424c110d4ee7dcc817eff5f47",
+  "source_branch": "fix/android-postmerge-like-home-20261013",
+  "source_commit": "1501c82bb2a61b644b49847c35b27c6da5ebb7e9",
+  "pull_request": 37,
   "track": "internal",
-  "requestedAt": "2026-10-14",
-  "features": [
-    "Native Picture-in-Picture button",
-    "Auto and available Media3 video resolutions",
-    "Native swipe-down Mini and thumbnail expansion",
-    "Visible fullscreen Shrink button"
+  "date": "2026-10-14",
+  "changes": [
+    "Native Mini Play/Pause",
+    "Video notification return",
+    "Visible partially scrolled video",
+    "Video double tap 15-second seeks",
+    "High-contrast Android Audio seek icons"
   ],
-  "mergeIntoMain": false
+  "verification": "Full matching Android regression matrix and startup required before Play upload"
 }
