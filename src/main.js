@@ -6425,14 +6425,14 @@ async function playPaidTrack(productId, trackId, options = {}) {
   const product = state.paidCatalog.find(item => String(item.id) === String(productId));
   const track = product?.tracks?.find(item => String(item.id) === String(trackId));
   if (!product?.owned || !track) return false;
-  if(!options.fromAutoAdvance){state.paidLastFinishedKey='';state.paidPlaybackGeneration++;}
+  if(Capacitor.getPlatform()==='android' && !options.fromAutoAdvance){state.paidLastFinishedKey='';state.paidPlaybackGeneration++;}
   const playbackGeneration=state.paidPlaybackGeneration;
   try {
     setToast('Preparing secure playback...');
     const data = await requestPaidPlaySession(productId, trackId, false);
     state.paidPlaySessionCache.delete(paidPlaySessionKey(productId, trackId));
     if(options.fromAutoAdvance && (state.paidPlaybackGeneration!==playbackGeneration || String(state.current?.id||'')!==String(options.expectedCurrentId||''))) return false;
-    if(!data?.playbackUrl)throw new Error('Protected audio session has no playable URL.');
+    if(Capacitor.getPlatform()==='android' && !data?.playbackUrl)throw new Error('Protected audio session has no playable URL.');
     audio.crossOrigin = 'use-credentials';
     await startAudio({
       kind:'paid-audio',
@@ -7819,7 +7819,7 @@ async function startAudio(item, resumeAt = 0) {
     if (previous.kind === 'paid-audio') {
       if(Capacitor.getPlatform()==='android') void savePaidAudioProgress(false,true).catch(()=>{});
       else await savePaidAudioProgress(false, true).catch(() => {});
-      state.paidProgressLastAt=0;
+      if(Capacitor.getPlatform()==='android')state.paidProgressLastAt=0;
     } else {
       const outgoing = captureCurrentAudioHistorySnapshot();
       if (outgoing) saveAudioHistorySnapshot(outgoing, false, { reconcile:true }).catch(() => {});
