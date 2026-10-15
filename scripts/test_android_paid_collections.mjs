@@ -110,3 +110,43 @@ test('published website JSON is the same index source; Android alone owns behavi
   assert.doesNotMatch(ui,/<audio|<video|<iframe|media\.m3u8|driveId/);
   assert.doesNotMatch(controller,/function .*playTrack|playPaidTrack\(/);
 });
+
+test('Android folder albums and long paid-track lists use page scrolling, not a trapped nested box',()=>{
+  const css=readFileSync('src/style.css','utf8');
+  const android=css.slice(css.indexOf('/* Android purchase catalog: website-inspired compact cards'));
+  assert.ok(android.length>3000,'Android purchase-scrolling overrides must exist');
+  const folderBlock=android.slice(android.indexOf('body.irgun-android .paid-folder-tree {'),
+    android.indexOf('body.irgun-android .paid-folder-node {'));
+  assert.match(folderBlock,/max-height:none !important/);
+  assert.match(folderBlock,/overflow:visible !important/);
+  assert.match(folderBlock,/overscroll-behavior-y:auto !important/);
+  assert.match(folderBlock,/touch-action:pan-y/);
+  assert.doesNotMatch(folderBlock,/overscroll-behavior[^;]*contain|overflow:auto|64vh/);
+  assert.match(android,/\.paid-folder-track \{[\s\S]*?touch-action:pan-y/);
+  assert.match(android,/\.paid-index-page,[\s\S]*?overscroll-behavior-y:auto/);
+  assert.match(android,/\.purchased-library/);
+  assert.match(android,/env\(safe-area-inset-bottom\)/);
+  assert.match(android,/\.paid-card\.expanded \{ grid-column:1\/-1; \}/);
+  const main=readFileSync('src/main.js','utf8');
+  assert.match(main,/data-paid-collection-id="/);
+  assert.match(main,/scrollIntoView\(\{block:'start',behavior:'smooth'\}\)/);
+  const previewHtml=paidFolderTreeHtml({...product,owned:false,folderPreview:[
+    {folders:['Volume 1','Shabbos'],trackCount:20},
+    {folders:['Volume 2','Pesach'],trackCount:30}
+  ]},{esc:escape});
+  assert.match(previewHtml,/data-paid-scroll-container="page"/);
+  assert.match(previewHtml,/Open a folder to see its tracks/);
+  assert.doesNotMatch(previewHtml,/max-height|overflow:|style=".*height/);
+  assert.doesNotMatch(previewHtml,/data-paid-track="/);
+  const tracks=Array.from({length:125},(_,index)=>({
+    id:'track-'+index,title:'Track '+String(index+1),
+    folders:['Album '+String(Math.floor(index/25)+1),'Session '+String(Math.floor(index/10)+1)]
+  }));
+  const html=paidFolderTreeHtml({...product,tracks},{esc:escape});
+  assert.equal((html.match(/data-paid-track="/g)||[]).length,125,
+    'Folder navigation must not truncate owned audio tracks');
+  assert.equal((html.match(/data-paid-folder-key="/g)||[]).length>=5,true);
+  assert.match(html,/class="paid-track-info"/);
+  assert.match(html,/class="paid-folder-count"/);
+  assert.doesNotMatch(html,/<audio|<video|<iframe/,'Native Media3 ownership remains unchanged');
+});
