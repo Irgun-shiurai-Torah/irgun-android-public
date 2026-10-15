@@ -28,7 +28,8 @@ public class IrgunPictureInPicturePlugin extends Plugin {
     @PluginMethod
     public void isSupported(PluginCall call) {
         JSObject result = new JSObject();
-        result.put("supported", Build.VERSION.SDK_INT >= Build.VERSION_CODES.O);
+        result.put("supported", Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            && getContext().getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE));
         call.resolve(result);
     }
 
