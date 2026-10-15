@@ -588,6 +588,24 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             full.gravity=Gravity.TOP | Gravity.LEFT;
             clipHost.setLayoutParams(full);
             clipHost.setVisibility(View.VISIBLE);
+            // Android 15/16 edge-back gestures steal taps on tablet fullscreen
+            // controls mounted at x=screen.width-22dp (or the opposite side
+            // after 90-degree native video rotation). Inset the EXISTING
+            // native action row inside gesture-safe bounds. The player,
+            // video tracks, MediaSession and physical rotation stay unchanged.
+            if (videoActions != null) {
+                final boolean tablet = getContext().getResources()
+                    .getConfiguration().smallestScreenWidthDp >= 600;
+                final FrameLayout.LayoutParams toolbar =
+                    (FrameLayout.LayoutParams) videoActions.getLayoutParams();
+                final int safeInset = tablet ? dp(28) : 0;
+                if (toolbar.topMargin != safeInset) {
+                    toolbar.topMargin = safeInset;
+                    videoActions.setLayoutParams(toolbar);
+                }
+                if (videoActions.getPaddingRight() != safeInset)
+                    videoActions.setPadding(0, 0, safeInset, 0);
+            }
             // On a rotation-locked tablet, rotate only the native video
             // presentation. The user sees landscape when holding it sideways,
             // without forcing an OS-wide display orientation.
@@ -648,6 +666,16 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             return;
         }
         if (surface.getRotation() != 0f) surface.setRotation(0f);
+        if (videoActions != null) {
+            final FrameLayout.LayoutParams toolbar =
+                (FrameLayout.LayoutParams) videoActions.getLayoutParams();
+            if (toolbar.topMargin != 0) {
+                toolbar.topMargin = 0;
+                videoActions.setLayoutParams(toolbar);
+            }
+            if (videoActions.getPaddingRight() != 0)
+                videoActions.setPadding(0, 0, 0, 0);
+        }
         FrameLayout.LayoutParams clipParams = new FrameLayout.LayoutParams(r-l,b-t);
         clipParams.gravity = Gravity.TOP | Gravity.LEFT;
         clipParams.leftMargin = left+l;

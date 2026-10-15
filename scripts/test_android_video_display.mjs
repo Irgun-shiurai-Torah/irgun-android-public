@@ -58,6 +58,21 @@ test('controller reveal taps never hit a seek bar or custom top controls',()=>{
  assert.ok(wide[1]>50&&wide[1]<500);
 });
 
+test('native tablet controls stay outside Android 15/16 edge-back gesture zones',()=>{
+ const java=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
+ assert.match(java,/final int safeInset = tablet \? dp\(28\) : 0/);
+ assert.match(java,/toolbar\.topMargin = safeInset/);
+ assert.match(java,/videoActions\.setPadding\(0, 0, safeInset, 0\)/);
+ assert.match(java,/videoActions\.setPadding\(0, 0, 0, 0\)/,
+  'In-page controls must restore their original position');
+ // The physical tablet regression still MUST tap the real Exit button;
+ // neither this test nor the production app sets fullscreen=false directly
+ // as a substitute for a successful native touch event.
+ const realTest=readFileSync('scripts/android-video-display-regression.mjs','utf8');
+ assert.match(realTest,/tapExit\(\)/);
+ assert.match(realTest,/Actual fullscreen exit button must exit sensor fullscreen/);
+});
+
 test('manual fullscreen Exit suppresses sensor re-entry immediately, but upright sensor exit does not',()=>{
  const javascript=readFileSync('src/main.js','utf8');
  const java=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
