@@ -493,7 +493,7 @@ function hostFixture() {
   const mount=new Node(),app=new Node(),overlay=new Node(),iframe={};app.appendChild(overlay);
   const state={watchVideo:{id:'1233236785:585d5d53db'},watchMode:'video'};
   const presentations=[];
-  const context={persistentVideoMount:mount,state,document:{body:new Node(),querySelector:()=>app.children.includes(overlay)?overlay:null},bindPersistentVideoChrome(){},PlaybackController:{setPresentation:async mode=>presentations.push(mode)}};
+  const context={persistentVideoMount:mount,state,Capacitor:{getPlatform:()=> 'android'},document:{body:new Node(),querySelector:()=>app.children.includes(overlay)?overlay:null},bindPersistentVideoChrome(){},PlaybackController:{setPresentation:async mode=>presentations.push(mode)}};
   const extract=(name,next)=>mainSource.slice(mainSource.indexOf(`function ${name}(`),mainSource.indexOf(next,mainSource.indexOf(`function ${name}(`)));
   runInNewContext(extract('clearPersistentVideoMount','function refreshPersistentMiniVideoChrome')+extract('hostCurrentWatchOverlay','async function resetWatchVimeoPlayer')+'\nthis.host=hostCurrentWatchOverlay;this.clear=clearPersistentVideoMount;',context);
   return {mount,overlay,state,iframe,presentations,host:context.host,clear:context.clear};
