@@ -8900,14 +8900,31 @@ async function preserveWatchTime() {
 
 async function closeWatch(save = true) {
   if (!state.watchVideo) return;
+  const closingVideo = state.watchVideo;
   const closingPlayer = state.watchVimeo;
-  const generation = state.watchVimeoGeneration;
+  const androidWatch = Capacitor.getPlatform() === 'android';
+  // Invalidate an in-flight Android Media3 start as soon as Back is clicked.
+  // Otherwise a slow/erroring native video can replace closingPlayer while
+  // this async handler saves history, leaving the visible Watch stuck open.
+  // Preserve the existing iOS close behavior and generation timing.
+  const generation = androidWatch ? ++state.watchVimeoGeneration : state.watchVimeoGeneration;
+  const sameWatch = () => generation === state.watchVimeoGeneration &&
+    state.watchVideo === closingVideo && (androidWatch || closingPlayer === state.watchVimeo);
   const continuingAudioId = usesNativeUnifiedAudio() && state.watchMode === 'audio' && !playbackIsPaused()
     ? String(state.current?.id || '') : '';
   if (save) await preserveWatchTime();
   if (state.watchMode === 'video' && state.watchVideo && save) {
-    let duration = 0;
-    try { duration = state.watchVimeo ? await state.watchVimeo.getDuration() : Number(state.watchVideo.duration) || 0; } catch (_) {}
+    let duration = Number(closingVideo.duration) || 0;
+    if (closingPlayer) {
+      try {
+        // A failed Media3 source may never answer a native duration request.
+        // Do not block the physical Back button on a stalled bridge call.
+        duration = androidWatch ? await Promise.race([
+          Promise.resolve().then(() => closingPlayer.getDuration()).catch(() => duration),
+          new Promise(resolve => setTimeout(() => resolve(duration), 900))
+        ]) : await closingPlayer.getDuration();
+      } catch (_) {}
+    }
     // Queue the actual position before closing, but keep Back usable while
     // server history writes or reconciliation are slow.
     saveHistory(videoId(state.watchVideo), 'video', state.watchResumeSeconds || 0, duration, false, { reconcile:true }).catch(error =>
@@ -8920,20 +8937,30 @@ async function closeWatch(save = true) {
     if (snapshot) saveAudioHistorySnapshot(snapshot, false, { reconcile:true }).catch(error =>
       console.warn('Could not save Audio history after closing Watch', error));
   }
-  if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
-  try { if (closingPlayer) await closingPlayer.destroy(); } catch (_) {}
-  if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
+  if (!sameWatch()) return;
+  try {
+    if (closingPlayer) {
+      const teardown = Promise.resolve().then(() => closingPlayer.destroy());
+      // Video is additionally stopped by clearNativeMediaSession below. An
+      // unresponsive native close must not hold the Watch overlay indefinitely.
+      if (androidWatch && state.watchMode === 'video') await Promise.race([
+        teardown, new Promise(resolve => setTimeout(resolve, 1800))
+      ]);
+      else await teardown;
+    }
+  } catch (_) {}
+  if (!sameWatch()) return;
   if (continuingAudioId) {
     // Removing a parked WebView decoder can deliver AUDIO_FOCUS_LOSS to the
     // still-playing Media3 source. The native guard preserves explicit Pause.
     await new Promise(resolve => setTimeout(resolve,150));
-    if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
+    if (!sameWatch()) return;
     if (state.watchMode === 'audio' && String(state.current?.id || '') === continuingAudioId) {
       await nativeMediaPlugin().restoreAudioAfterVideoTeardown({lectureId:continuingAudioId}).catch(()=>{});
       await PlaybackController.refreshFromNative().catch(()=>{});
     }
   }
-  if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
+  if (!sameWatch()) return;
   if (state.watchMode === 'video') {
     clearCurrentAudioStateForVideo();
     clearNativeMediaSession();
@@ -8941,7 +8968,7 @@ async function closeWatch(save = true) {
   state.watchVimeo = null;
   state.watchVimeoReady = false;
   state.watchVideoPlaying = false;
-  state.watchVimeoGeneration += 1;
+  if (!androidWatch) state.watchVimeoGeneration += 1;
   setNativeVideoFullscreen(false);
   clearPersistentVideoMount();
   state.watchVideo = null;
