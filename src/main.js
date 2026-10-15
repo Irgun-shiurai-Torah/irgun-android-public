@@ -3841,6 +3841,16 @@ function bindPersistentVideoChrome() {
   refreshPersistentMiniVideoChrome();
 }
 
+function bindWatchClick(el, handler) {
+  // Android keeps Watch outside #app while pages render. Its original controls
+  // must not accumulate listeners alongside bindPersistentVideoChrome().
+  if (Capacitor.getPlatform() === 'android') {
+    if (el.dataset.bound) return;
+    el.dataset.bound = '1';
+  }
+  el.addEventListener('click', handler);
+}
+
 function hostCurrentWatchOverlay(mode = 'full') {
   if (!persistentVideoMount || !state.watchVideo || state.watchMode !== 'video') return false;
   let overlay = persistentVideoMount.querySelector('.watch-overlay');
@@ -7158,12 +7168,12 @@ function bind() {
     PlaybackController.seekTo(Number(watchAudioSeek.value) || 0).catch(()=>{});
   });
 
-  document.querySelectorAll('[data-close-watch]').forEach(el => el.addEventListener('click', () => closeWatch(true)));
-  document.querySelectorAll('[data-watch-mode]').forEach(el => el.addEventListener('click', () => switchWatchMode(el.dataset.watchMode)));
-  document.querySelectorAll('[data-switch-audio]').forEach(el => el.addEventListener('click', () => switchWatchMode('audio')));
-  document.querySelectorAll('[data-switch-video]').forEach(el => el.addEventListener('click', () => switchWatchMode('video')));
+  document.querySelectorAll('[data-close-watch]').forEach(el => bindWatchClick(el, () => closeWatch(true)));
+  document.querySelectorAll('[data-watch-mode]').forEach(el => bindWatchClick(el, () => switchWatchMode(el.dataset.watchMode)));
+  document.querySelectorAll('[data-switch-audio]').forEach(el => bindWatchClick(el, () => switchWatchMode('audio')));
+  document.querySelectorAll('[data-switch-video]').forEach(el => bindWatchClick(el, () => switchWatchMode('video')));
 
-  document.querySelectorAll('[data-minimize-watch]').forEach(el => el.addEventListener('click', minimizeWatchToPersistent));
+  document.querySelectorAll('[data-minimize-watch]').forEach(el => bindWatchClick(el, minimizeWatchToPersistent));
   document.querySelectorAll('[data-native-video-fullscreen]').forEach(el => {
     if (el.dataset.bound) return;
     el.dataset.bound = '1';
@@ -7174,9 +7184,9 @@ function bind() {
       });
     });
   });
-  document.querySelectorAll('[data-video-pip]').forEach(el => el.addEventListener('click', enterSystemPictureInPicture));
-  document.querySelectorAll('[data-expand-watch]').forEach(el => el.addEventListener('click', expandPersistentWatch));
-  document.querySelectorAll('[data-close-mini-video]').forEach(el => el.addEventListener('click', () => closeWatch(true)));
+  document.querySelectorAll('[data-video-pip]').forEach(el => bindWatchClick(el, enterSystemPictureInPicture));
+  document.querySelectorAll('[data-expand-watch]').forEach(el => bindWatchClick(el, expandPersistentWatch));
+  document.querySelectorAll('[data-close-mini-video]').forEach(el => bindWatchClick(el, () => closeWatch(true)));
   const downloadMount = document.getElementById('downloadManagerMount');
   if (downloadMount) bindDownloadManager(downloadMount);
 
@@ -9264,6 +9274,12 @@ async function initWatchVimeoOnce(userInitiated = false) {
           image:video.thumbnail||video.image||'',
           audioUrl:video.hasAudio?audioUrl(mediaApiId(video,videoKey)):'',
           speed:Number(state.playbackSpeed)||1,
+          onRecovered:()=>{
+            if (generation!==state.watchVimeoGeneration || state.watchMode!=='video') return;
+            state.watchNativeVideoFailedId='';
+            frame.parentElement?.querySelector('[data-native-video-error]')?.remove();
+            state.watchVimeo?.updateFrame?.();
+          },
           onError:error=>{
             if (generation===state.watchVimeoGeneration && state.watchMode==='video') {
               state.watchNativeVideoFailedId=videoKey;

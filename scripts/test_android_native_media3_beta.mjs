@@ -10,6 +10,41 @@ const service=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/
 const bridge=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
 const app=readFileSync('src/main.js','utf8');
 const adapter=readFileSync('src/android-native-media3-video.js','utf8');
+
+test('persistent Android watch controls bind once across page renders and alongside permanent chrome',()=>{
+ const start=app.indexOf('function bindWatchClick('),end=app.indexOf('\nfunction ',start+1);
+ assert.ok(start>0&&end>start);
+ let requested=0;const listeners=[],button={dataset:{},addEventListener:(name,fn)=>listeners.push(fn)};
+ const context={Capacitor:{getPlatform:()=> 'android'}};
+ runInNewContext(app.slice(start,end)+'\nthis.bind=bindWatchClick;',context);
+ for(let n=0;n<8;n++)context.bind(button,()=>requested++);
+ assert.equal(button.dataset.bound,'1','Permanent chrome must see that the original Android button is bound');
+ assert.equal(listeners.length,1);listeners[0]();assert.equal(requested,1,'One real click must request PiP only once');
+});
+
+test('native network recovery clears error UI only after the same video renders new frames',async()=>{
+ const start=adapter.indexOf('  const tick=async()=>{'),end=adapter.indexOf('  const timer=setInterval',start);
+ assert.ok(start>0&&end>start);
+ const player={identity:'same player'},errors=[],recovered=[];
+ let sample={active:true,videoSelected:true,playing:false,playWhenReady:true,error:'NETWORK',frames:100,positionMs:4000,durationMs:60000};
+ const context={destroyed:false,ticking:false,mode:'video',framePlacedOnScreen:false,lastPlaying:false,reportedError:'',failedFrames:0,
+  refresh:async()=>({...sample}),scheduleFrame(){},trackFrame(){},emit(){},console:{warn(){}},
+  native:{frame:async()=>{}},innerWidth:320,innerHeight:640,adapter:player,
+  onError:err=>errors.push(err.message),onRecovered:value=>recovered.push(value)};
+ runInNewContext(adapter.slice(start,end)+'\nthis.tick=tick;',context);
+ await context.tick();await context.tick();assert.equal(errors.length,1,'One persistent error must not repeatedly create notices');
+ sample={...sample,error:'',playing:true};await context.tick();
+ assert.equal(recovered.length,0,'A cleared error alone cannot count as recovered moving video');
+ sample={...sample,frames:108,positionMs:5000};await context.tick();await context.tick();
+ assert.deepEqual(recovered,[player]);
+ const callback=app.slice(app.indexOf('          onRecovered:()=>{'),app.indexOf('          onError:error=>{'));
+ let removed=0,placed=0;
+ const state={watchVimeoGeneration:4,watchMode:'video',watchNativeVideoFailedId:'lecture',watchVimeo:{updateFrame:()=>placed++}};
+ const model={state,generation:4,frame:{parentElement:{querySelector:()=>({remove:()=>removed++})}}};
+ const config=runInNewContext('({'+callback+'})',model);config.onRecovered();
+ assert.equal(state.watchNativeVideoFailedId,'');assert.equal(removed,1);assert.equal(placed,1);
+ state.watchVimeoGeneration=5;config.onRecovered();assert.equal(removed,1,'Old lecture recovery cannot clear a newer lecture notice');
+});
 const gradle=readFileSync('android/app/build.gradle','utf8');
 
 test('video errors show a readable message without promising a nonexistent audio source',()=>{

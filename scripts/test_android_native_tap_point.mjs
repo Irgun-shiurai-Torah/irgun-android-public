@@ -1,11 +1,18 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {settledNativeTapPoint} from './android-native-tap-point.mjs';
-import {accountSwipeDirection, watchPlayerReturnGesture} from './android-account-native-scroll.mjs';
+import {settledNativeTapPoint,waitForNativeWindowFocus} from './android-native-tap-point.mjs';
+import {accountSwipeDirection, watchPlayerReturnGesture, watchCommentsGesture} from './android-account-native-scroll.mjs';
 import {selectAccountPlaybackFixture} from './android-account-playback-fixture.mjs';
 
 const geometry = height => ({left:0,top:24,right:320,bottom:24+height,focused:true});
 const immediate = async () => {};
+
+test('notification activation waits for actual app window focus and refuses a shade that never closes',async()=>{
+ const observations=[{...geometry(592),focused:false},{...geometry(592),focused:false},geometry(592)];
+ const observed=await waitForNativeWindowFocus({readBounds:async()=>observations.shift(),delay:immediate});
+ assert.equal(observed.focused,true);assert.equal(observations.length,0);
+ await assert.rejects(waitForNativeWindowFocus({readBounds:async()=>({...geometry(592),focused:false}),delay:immediate,samples:3}),/actual native foreground/);
+});
 
 test('account playback skips a new Vimeo-only upload with no Audio and pins an actually ready native/audio lecture',async()=>{
   const reads=[];
@@ -65,4 +72,13 @@ test('Watch player recovery uses a real downward swipe within the measured scrol
   assert.ok(gesture.from.y>scroll.y&&gesture.to.y<scroll.y+scroll.height,'Keep physical swipes within actual Watch bounds');
   assert.equal(gesture.from.x,gesture.to.x);
   assert.throws(()=>watchPlayerReturnGesture({x:0,y:0,width:10,height:20}),/Watch scroll bounds/);
+});
+
+test('comment and player gestures stay above the floating navigation instead of starting on a tab',()=>{
+  const scroll={x:0,y:56,width:320,height:560,visibleBottom:518};
+  const comment=watchCommentsGesture(scroll),player=watchPlayerReturnGesture(scroll);
+  assert.ok(comment.from.y<518&&comment.to.y<comment.from.y);
+  assert.ok(comment.from.y>scroll.y&&comment.to.y>scroll.y);
+  assert.ok(player.to.y<518&&player.from.y<player.to.y);
+  assert.throws(()=>watchCommentsGesture({...scroll,visibleBottom:100}),/obscured/);
 });

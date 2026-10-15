@@ -8,7 +8,7 @@ const native = registerPlugin('IrgunNativeVideo');
 const delay = ms => new Promise(resolve => setTimeout(resolve,ms));
 export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
   resumeSeconds=0,title='Shiur',speaker='',image='',audioUrl='',speed=1,
-  onError=()=>{}}={}) {
+  onError=()=>{},onRecovered=()=>{}}={}) {
   if (!iframe || !videoId) throw new Error('Native Media3 Video requires a real lecture and host');
   const source = await getAndroidHlsSource(String(apiBase).replace(/\/$/,''),String(videoId));
   if (!source?.hls && !source?.mp4) throw new Error('Media3 source lookup returned no video URL');
@@ -26,6 +26,7 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
   let destroyed=false,mode='video',last=null,lastPlaying=false;
   let ticking=false,layoutRequested=false,observedFrame=null;
   let framePlacedOnScreen=false;
+  let reportedError='',failedFrames=0;
   const viewportFrame=()=>{
     // Query ALL matching nodes: during Audio -> Video the old persistent
     // iframe can still be connected while transformed 12,000px off-screen.
@@ -128,7 +129,19 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
       const playing=s.videoSelected && s.playing;
       if(playing!==lastPlaying){lastPlaying=playing;emit(playing?'play':'pause',{seconds:s.positionMs/1000,duration:s.durationMs/1000});}
       emit('timeupdate',{seconds:s.positionMs/1000,duration:s.durationMs/1000,frames:s.frames});
-      if(s.error)onError(new Error('Native Media3 '+s.error),s.positionMs/1000,s.playWhenReady,adapter);
+      if(s.error){
+        failedFrames=s.frames;
+        if(s.error!==reportedError){
+          reportedError=s.error;
+          onError(new Error('Native Media3 '+s.error),s.positionMs/1000,s.playWhenReady,adapter);
+        }
+      }else if(reportedError&&mode==='video'&&s.videoSelected&&s.playing&&s.frames>failedFrames){
+        // Network recovery keeps the same player. Remove its old error UI only
+        // after this source is actually rendering new frames, then reveal it.
+        reportedError='';failedFrames=0;
+        onRecovered(adapter);
+        framePlacedOnScreen=false;trackFrame();
+      }
       if(mode==='video'&&!s.videoSelected){
         // Android Home was pressed; its media service switched to audio-only
         // using this same HLS MediaItem, so remove the picture surface.

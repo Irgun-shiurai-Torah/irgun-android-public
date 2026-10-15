@@ -5,6 +5,21 @@ import {nativeHierarchy} from './android-native-hierarchy.mjs';
 
 const pkg='org.irgunshiuraitorah.app';
 
+export function recentsEducationAction(xml) {
+  const nodes=xml.match(/<node\b[^>]*>/g)||[];
+  const launcher=nodes.filter(node=>/package="com\.(?:google\.android\.apps\.nexuslauncher|android\.launcher3)"/.test(node)&&/visible="true"/.test(node));
+  if(!launcher.some(node=>/text="Select text and images to copy, share, and more"/.test(node)))return null;
+  const close=launcher.find(node=>/resource-id="[^"]*:id\/dismiss"/.test(node)&&/clickable="true"/.test(node));
+  const rect=close?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
+  return rect?{tap:[Math.round((rect[0]+rect[2])/2),Math.round((rect[1]+rect[3])/2)]}:{back:true};
+}
+
+export function hasIrgunRecentTask(dump) {
+  return dump.split(/(?=^\s*\*?\s*Recent #\d+:)/m).some(block=>
+    /^\s*\*?\s*Recent #\d+:/.test(block)&&
+    /(?:realActivity=|cmp=)org\.irgunshiuraitorah\.app\//.test(block));
+}
+
 export function recentsDismissGesture(xml,{width,height}) {
   const nodes=xml.match(/<node\b[^>]*>/g)||[];
   const card=nodes.find(node=>/visible="true"/.test(node)&&
@@ -41,9 +56,27 @@ export async function verifyAndroidTaskDismissal({adb,sample,delay,report}) {
   assert.ok(size,'Android must report its current display size');
   adb('shell','input','keyevent','KEYCODE_APP_SWITCH');
   await delay(1200);
-  const hierarchy=nativeHierarchy('emulator-report/task-dismissal-recents.xml');
+  let hierarchy=nativeHierarchy('emulator-report/task-dismissal-recents.xml');
+  const education=recentsEducationAction(hierarchy);
+  if(education){
+    if(education.tap)adb('shell','input','tap',...education.tap.map(String));
+    else adb('shell','input','keyevent','KEYCODE_BACK');
+    report.gestures.push({dismissRecentsEducation:education});
+    await delay(500);
+    hierarchy=nativeHierarchy();
+    // Back can close Overview along with its first-use tip. Reopen it as a
+    // separate navigation action before attempting the one task-dismiss swipe.
+    if(!/resource-id="[^"]*:id\/(?:overview_panel|snapshot|thumbnail)"/.test(hierarchy)){
+      adb('shell','input','keyevent','KEYCODE_APP_SWITCH');await delay(800);
+      hierarchy=nativeHierarchy();
+    }
+    assert.equal(recentsEducationAction(hierarchy),null,'Recents education must be dismissed before a task swipe');
+  }
+  writeFileSync('emulator-report/task-dismissal-recents.xml',hierarchy);
+  assert.equal(hasIrgunRecentTask(adb('shell','dumpsys','activity','recents')),true,
+    'Android ActivityManager must expose the actual Irgun task before dismissal');
   const gesture=recentsDismissGesture(hierarchy,{width:Number(size[1]),height:Number(size[2])});
-  writeFileSync('emulator-report/task-dismissal-before.png',execFileSync('adb',['exec-out','screencap','-p']));
+  writeFileSync('emulator-report/task-dismissal-before.png',execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));
   adb('shell','input','swipe',...gesture.map(String),'400');
   report.gestures.push({recentsSwipeUp:gesture});
   const stopped=()=>{
@@ -52,20 +85,21 @@ export async function verifyAndroidTaskDismissal({adb,sample,delay,report}) {
     const sessions=adb('shell','dumpsys','media_session');
     const notifications=adb('shell','dumpsys','notification','--noredact');
     return {destroyed:logs.includes('Media3 service destroyed'),
+      taskPresent:hasIrgunRecentTask(adb('shell','dumpsys','activity','recents')),
       servicePresent:/ServiceRecord\{[^\n]*IrgunPlaybackService/.test(services),
       sessionPresent:sessions.includes(pkg),notificationPresent:hasActivePlaybackNotification(notifications)};
   };
   let state;
   for(let n=0;n<30;n++){
     state=stopped();
-    if(state.destroyed&&!state.servicePresent&&!state.sessionPresent&&!state.notificationPresent)break;
+    if(state.destroyed&&!state.taskPresent&&!state.servicePresent&&!state.sessionPresent&&!state.notificationPresent)break;
     await delay(300);
   }
-  assert.ok(state.destroyed&&!state.servicePresent&&!state.sessionPresent&&!state.notificationPresent,
+  assert.ok(state.destroyed&&!state.taskPresent&&!state.servicePresent&&!state.sessionPresent&&!state.notificationPresent,
     'Actual Recents swipe must destroy playback service, release session, and remove notification: '+JSON.stringify(state));
   await delay(2200);
   const later=stopped();
-  assert.ok(!later.servicePresent&&!later.sessionPresent&&!later.notificationPresent,
+  assert.ok(!later.taskPresent&&!later.servicePresent&&!later.sessionPresent&&!later.notificationPresent,
     'A delayed handoff, retry or bridge command must not restart a dismissed lecture');
   report.checks.push({label:'Physical Recents swipe closes the lecture and removes service/session/notification without a delayed restart',state:later});
 }

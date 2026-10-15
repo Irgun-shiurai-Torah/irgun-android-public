@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Keep Media3's real seek/timestamp controls out of minimal mode in a
+         16:9 portrait video view and after expanding the in-app Mini player. -->
+    <dimen name="exo_styled_bottom_bar_height">32dp</dimen>
+    <dimen name="exo_styled_bottom_bar_margin_top">0dp</dimen>
+    <dimen name="exo_styled_progress_margin_bottom">32dp</dimen>
+    <dimen name="exo_styled_controls_padding">8dp</dimen>
+</resources>

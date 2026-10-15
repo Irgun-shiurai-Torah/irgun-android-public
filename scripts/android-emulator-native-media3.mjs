@@ -217,7 +217,7 @@ try {
       m.surfaceVisibleHeight>65 && m.surfaceX>=0 && m.surfaceY>=0,
       'Native decoded frames are NOT enough: Android PlayerView must be physically visible, not parked at x=-12000; '+JSON.stringify(m));
     const png='emulator-report/'+name+'.png';
-    writeFileSync(png,execFileSync('adb',['exec-out','screencap','-p']));
+    writeFileSync(png,execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));
     const w=Math.max(10,Math.round(m.surfaceVisibleWidth*.56));
     const h=Math.max(10,Math.round(m.surfaceVisibleHeight*.55));
     const x=Math.round(m.surfaceX+(m.surfaceVisibleWidth-w)/2);
@@ -372,8 +372,9 @@ try {
     if (fresh||!m.qualityButtonVisible) {
       adb('shell','input','tap',...point);
     }
-    const shown=await waitNative(s=>s.media3.pipButtonVisible&&s.media3.qualityButtonVisible,
-      'Native PiP and quality buttons must be visible on the actual video',10000);
+    const shown=await waitNative(s=>s.media3.pipButtonVisible&&s.media3.qualityButtonVisible&&
+      s.media3.elapsedTimeRect&&s.media3.durationTimeRect&&s.media3.seekBarRect,
+      'Native controls, elapsed time, total duration and seek bar must all be visible after layout settles',10000);
     assert.equal(shown.media3.settingsButtonVisible,false,
       'The duplicate bottom settings gear must stay removed whenever controls appear');
     assertAndroidVideoTimes(shown.media3);
@@ -421,7 +422,7 @@ try {
     samePlayback(navBefore,continued.media3,'Persistent navigation to '+tab,Date.now()-navStarted);
     report.checks.push({label:'Physical floating navigation to '+tab+' highlights the active tab and preserves same-player Mini',page});
   }
-  writeFileSync('emulator-report/floating-navigation-mini.png',execFileSync('adb',['exec-out','screencap','-p']));
+  writeFileSync('emulator-report/floating-navigation-mini.png',execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));
   await tapNativeLabel('Expand mini video');
   await waitNative(s=>!s.media3.mini&&s.media3.playing,'The same Mini player must expand after bottom-tab navigation');
   let controls=await showNativeControls();
@@ -590,7 +591,7 @@ try {
   assert.ok(pipMoved.media3.positionMs>pip.media3.positionMs+1500&&
     pipMoved.media3.frames>pip.media3.frames+5,'System PiP must keep decoding and advancing');
   samePlayback(beforePip,pipMoved.media3,'PiP entry',Date.now()-pipStart);
-  writeFileSync('emulator-report/native-system-pip.png',execFileSync('adb',['exec-out','screencap','-p']));
+  writeFileSync('emulator-report/native-system-pip.png',execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));
   adb('shell','am','start','-W','-n','org.irgunshiuraitorah.app/.MainActivity');
   const afterPip=await waitNative(s=>!s.media3.systemPip&&s.media3.videoSelected&&
     s.media3.playing&&s.media3.surfaceVisibleWidth>120,'Returning from PiP must restore actual moving video');
@@ -710,7 +711,7 @@ try {
 
 } catch (error) {
   report.result='failed';report.error=String(error.stack||error);
-  try {writeFileSync('emulator-report/media3-video-failure.png',execFileSync('adb',['exec-out','screencap','-p']));}catch{}
+  try {writeFileSync('emulator-report/media3-video-failure.png',execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));}catch{}
   process.exitCode=1;
 } finally {
   ws?.close();

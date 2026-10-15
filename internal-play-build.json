@@ -1,11 +1,14 @@
 {
   "sourceBranch": "fix/android-postmerge-like-home-20261013",
-  "sourceCommit": "f4423b50ba8d6b36055ff6722f6485e24c3d50d8",
+  "sourceCommit": "40a60fbf04bc8d64771acc61cef9741f77dc019a",
   "track": "internal",
-  "requestedAt": "2026-10-15T08:47:28.029Z",
+  "requestedAt": "2026-10-15T09:11:02.101Z",
   "pullRequest": 37,
   "mergeIntoMain": false,
   "features": [
+    "Account gestures use measured unobscured scroll area above floating nav; handle Overview education before actual task-dismiss swipe; verify actual recent task disappears",
+    "Bind persistent Android PiP/mode/close controls once; clear old native error overlay only after same-player frames recover",
+    "Compact native Media3 controls keep seek/time row visible in portrait and after Mini expansion",
     "Keep the existing Media3 seek bar above elapsed time at bottom-left and total duration at bottom-right; reuse existing TextViews and clock",
     "Android tablet MainActivity honors explicit video orientation with rotation lock on; Android 16 large-display compatibility and manufacturer orientation opt-out",
     "Remove the duplicate bottom-right Media3 settings gear; retain dedicated top-row quality and speed controls",
@@ -23,11 +26,11 @@
     "Account tests pin a descriptor-verified native-video/audio lecture; Vimeo-only playback tested separately"
   ],
   "verification": {
-    "localTests": 248,
+    "localTests": 254,
     "androidPackaging": "npm run test:player passed",
-    "status": "Added real Pixel Tablet API 35/36 accelerometer rotation and fullscreen geometry checks, plus actual native timestamp geometry/live-clock checks. Physical tests run separately; not claimed passed.",
-    "fullMatrixRun": 38708164239,
-    "startupRun": 38708164235
+    "status": "Fresh physical emulator regression runs started; results pending. Screenshot capture supports full tablet PNGs. Notification reopen waits for observed window focus.",
+    "fullMatrixRun": 38711030350,
+    "startupRun": 38711030354
   },
-  "releaseAttempt": 17
+  "releaseAttempt": 18
 }

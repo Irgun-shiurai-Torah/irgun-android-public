@@ -4,7 +4,7 @@ import {readFileSync, mkdtempSync, writeFileSync, rmSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {recentsDismissGesture, hasActivePlaybackNotification} from './android-task-dismissal-regression.mjs';
+import {recentsDismissGesture, hasActivePlaybackNotification,recentsEducationAction,hasIrgunRecentTask} from './android-task-dismissal-regression.mjs';
 
 test('actual Java task-removal and bridge callbacks stop playing, paused and buffering lectures without late restart', () => {
   const source=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java','utf8');
@@ -90,4 +90,18 @@ test('notification verification ignores historical and unrelated records but det
   assert.equal(hasActivePlaybackNotification('Notification List:\n'+record+'\nHistorical notifications:\n'),true);
   assert.equal(hasActivePlaybackNotification('Notification List:\nHistorical notifications:\n'+record),false);
   assert.equal(hasActivePlaybackNotification('Notification List:\n'+record.replaceAll('org.irgunshiuraitorah.app','another.app')),false);
+});
+
+test('first-use Overview tips are handled before the actual task swipe, with and without a Close control',()=>{
+ const tip='<node text="Select text and images to copy, share, and more" package="com.google.android.apps.nexuslauncher" visible="true">';
+ const close='<node content-desc="Close" resource-id="com.google.android.apps.nexuslauncher:id/dismiss" package="com.google.android.apps.nexuslauncher" visible="true" clickable="true" bounds="[266,519][306,559]">';
+ assert.deepEqual(recentsEducationAction(tip+close),{tap:[286,539]});
+ assert.deepEqual(recentsEducationAction(tip),{back:true});
+ assert.equal(recentsEducationAction('<node text="Close" package="org.irgunshiuraitorah.app" visible="true">'),null);
+});
+
+test('task dismissal requires the actual ActivityManager recent task to disappear, independently of the service',()=>{
+ const task='Recent tasks:\n  * Recent #0: Task{abc #12 type=standard}\n    realActivity=org.irgunshiuraitorah.app/.SplashActivity\n  * Recent #1: Task{def #11}\n    realActivity=com.android.settings/.Settings';
+ assert.equal(hasIrgunRecentTask(task),true);
+ assert.equal(hasIrgunRecentTask(task.replace('org.irgunshiuraitorah.app/.SplashActivity','other.app/.Main')),false);
 });

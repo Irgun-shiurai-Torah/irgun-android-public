@@ -3,7 +3,7 @@ import {writeFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
-import {accountSwipeDirection, watchPlayerReturnGesture} from './android-account-native-scroll.mjs';
+import {accountSwipeDirection, watchPlayerReturnGesture, watchCommentsGesture} from './android-account-native-scroll.mjs';
 import {observedAdb} from './android-adb-observer.mjs';
 import {selectAccountPlaybackFixture} from './android-account-playback-fixture.mjs';
 const email=process.env.IRGUN_TEST_EMAIL,password=process.env.IRGUN_TEST_PASSWORD;
@@ -134,8 +134,8 @@ async function tap(key) {
     const sc=s.watchScroll;
     assert.ok(sc.heightTotal>sc.visibleHeight+20,
       'Comment editor below the fold, but actual Watch scroll container is not scrollable');
-    const start=native({x:sc.x+sc.width*.70,y:sc.y+sc.height*.86},s);
-    const finish=native({x:sc.x+sc.width*.70,y:sc.y+sc.height*.16},s);
+    const gesture=watchCommentsGesture(sc);
+    const start=native(gesture.from,s),finish=native(gesture.to,s);
     adb('shell','input','swipe',...start.map(String),...finish.map(String),'520');
     await delay(600);
     const after=await read();
