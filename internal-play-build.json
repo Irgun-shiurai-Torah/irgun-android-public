@@ -1,11 +1,12 @@
 {
   "sourceBranch": "fix/android-postmerge-like-home-20261013",
-  "sourceCommit": "f0d512e3b3e0182247b38150fce52643b3e357b2",
+  "sourceCommit": "1bf1ce7e240fd91902d959c0ba2c95ec88a2730e",
   "track": "internal",
-  "requestedAt": "2026-10-14T23:38:23.224Z",
+  "requestedAt": "2026-10-15T00:00:29.930Z",
   "pullRequest": 37,
   "mergeIntoMain": false,
   "features": [
+    "Remove the duplicate bottom-right Media3 settings gear; retain dedicated top-row quality and speed controls",
     "Home continues playback; swiping the app card away from Recents stops playing/paused/buffering lecture, clears media item and notification, cancels retries/handoffs and blocks stale bridge commands",
     "Persistent floating Android bottom navigation outside page/player renders; sliding active-tab highlight; English/Hebrew support",
     "Physical tab taps minimize the same Video player and open the selected page; Audio continues; native view stays clear of navigation",
@@ -23,8 +24,8 @@
     "localTests": 246,
     "androidPackaging": "npm run test:player passed",
     "status": "Physical emulator regression matrix runs separately; user-authorized concurrent Internal testing.",
-    "fullMatrixRun": 38655303849,
-    "startupRun": 38655303891
+    "fullMatrixRun": 38657469398,
+    "startupRun": 38657469074
   },
-  "releaseAttempt": 15
+  "releaseAttempt": 16
 }
