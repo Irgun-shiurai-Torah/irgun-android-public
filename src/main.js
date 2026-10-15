@@ -9126,7 +9126,18 @@ async function performWatchModeSwitch(mode) {
     // Merely hiding HLS's Video track does not use the downloaded MP3. When a
     // verified offline copy exists, route the SAME Media3 ExoPlayer to that
     // private file and retain the exact clock. Video restores original HLS.
-    await player.setMode(mode,{offlineUri});
+    // Put the parked host back onscreen BEFORE re-enabling the native Video
+    // track. Previously the first native layout measurement happened while
+    // the host was 12,000px offscreen, adding a second black-frame delay.
+    const videoHostPrepared = mode==='video' && restoreParkedHostedVideo();
+    if(mode==='video' && !videoHostPrepared)
+      throw new Error('Native Media3 Video cannot restore its single persistent Watch host');
+    try {
+      await player.setMode(mode,{offlineUri});
+    } catch (error) {
+      if(videoHostPrepared) parkHostedVideoForAudio();
+      throw error;
+    }
     let observed=null;
     for(let attempt=0;attempt<12;attempt++){
       observed=await player.refresh();
@@ -9137,6 +9148,7 @@ async function performWatchModeSwitch(mode) {
         (mode==='audio'&&offlineUri&&observed.sourceType!=='offline-mp3')){
       console.warn('[Media3] native mode/file source switch did not commit',observed);
       await player.setMode(previous).catch(()=>{});
+      if(videoHostPrepared) parkHostedVideoForAudio();
       return false;
     }
     state.watchResumeSeconds=Math.max(0,Number(observed.positionMs||0)/1000);
@@ -9153,9 +9165,6 @@ async function performWatchModeSwitch(mode) {
     // Previous emulator runs saw two overlays and a visually blocked mini
     // Expand control even though ExoPlayer kept moving.
     if(mode==='video'){
-      if(!restoreParkedHostedVideo()){
-        throw new Error('Native Media3 Video cannot restore its single persistent Watch host');
-      }
       clearCurrentAudioStateForVideo();
     }else{
       parkHostedVideoForAudio();
