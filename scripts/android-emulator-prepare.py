@@ -57,6 +57,10 @@ p = p.replace(method, '''    // Disposable QA APK only: fresh native geometry, n
             out.put("keepScreenOn", (getActivity().getWindow().getAttributes().flags
                 & android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0);
             out.put("requestedOrientation", getActivity().getRequestedOrientation());
+            out.put("smallestScreenWidthDp", getActivity().getResources().getConfiguration().smallestScreenWidthDp);
+            android.view.Display.Mode mode = getActivity().getWindowManager().getDefaultDisplay().getMode();
+            out.put("physicalDisplayWidth", mode.getPhysicalWidth());
+            out.put("physicalDisplayHeight", mode.getPhysicalHeight());
             call.resolve(out);
         });
     }

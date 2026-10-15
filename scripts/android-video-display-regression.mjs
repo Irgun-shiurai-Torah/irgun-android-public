@@ -1,7 +1,30 @@
 import assert from 'node:assert/strict';
+import {writeFileSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
+
+export function assertAndroidVideoTimes(media) {
+ const {elapsedTimeRect:p,durationTimeRect:d,seekBarRect:bar}=media;
+ assert.ok(p&&d&&bar,'Actual native elapsed time, duration and seek bar must all be visible');
+ assert.ok(p.x+p.width<d.x,'Elapsed and total duration must be on opposite sides without a separator');
+ assert.ok(p.x+p.width<media.surfaceX+media.surfaceVisibleWidth*.4&&
+  d.x>media.surfaceX+media.surfaceVisibleWidth*.6,
+  'Elapsed belongs on the left and total duration on the right, including Hebrew layout');
+ assert.ok(Math.abs((p.y+p.height/2)-(d.y+d.height/2))<=Math.max(p.height,d.height)*.25,
+  'The two actual timestamps must share one bottom row');
+ assert.ok(bar.y+bar.height<=Math.min(p.y,d.y)+2,'The original seek bar must remain directly above the time row');
+ const seconds=value=>{
+  assert.match(value,/^\d+:\d{2}(?::\d{2})?$/,'Actual Media3 timestamp must remain readable');
+  return value.split(':').reduce((sum,n)=>sum*60+Number(n),0);
+ };
+ assert.ok(Math.abs(seconds(media.elapsedTimeText)-media.positionMs/1000)<3,
+  'Elapsed timestamp must still follow the same live Media3 playback clock');
+ assert.ok(Math.abs(seconds(media.durationTimeText)-media.durationMs/1000)<1.1,
+  'Right timestamp must show the actual total duration, not remaining time');
+}
 
 // Real emulator accelerometer and Android input; CDP is observation only.
-export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,delay,report,showControls,tapExit}) {
+export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,delay,report,showControls,tapExit,
+ naturalLandscape=process.env.IRGUN_TABLET_NATURAL_LANDSCAPE==='1'}) {
  const setting=(scope,key)=>adb('shell','settings','get',scope,key).trim();
  const saved=[['system','accelerometer_rotation'],['system','user_rotation'],
   ['system','screen_off_timeout'],['global','stay_on_while_plugged_in']].map(([scope,key])=>[scope,key,setting(scope,key)]);
@@ -20,10 +43,18 @@ export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,
   assert.ok(after.positionMs<=before.positionMs+elapsed*(before.playbackSpeed||1)+2500,'Rotation must not seek forward');
   assert.ok(after.frames>before.frames+5,'Rotation must retain moving video');
  };
+ const upright=naturalLandscape?'9.81:0:0':'0:9.81:0';
+ const sideways=naturalLandscape?['0:9.81:0','0:-9.81:0']:['9.81:0:0','-9.81:0:0'];
  try{
+  if(naturalLandscape){
+   const actual=await window();
+   assert.ok(actual.smallestScreenWidthDp>=600&&actual.physicalDisplayWidth>actual.physicalDisplayHeight,
+    'Tablet rotation job must run on a real landscape-native large display, not a phone viewport');
+   report.checks.push({label:'Actual landscape-native tablet display verified',window:actual});
+  }
   adb('shell','settings','put','system','accelerometer_rotation','0');
-  adb('shell','settings','put','system','user_rotation','0');
-  adb('emu','sensor','set','acceleration','0:9.81:0');await delay(1200);
+  adb('shell','settings','put','system','user_rotation',naturalLandscape?'1':'0');
+  adb('emu','sensor','set','acceleration',upright);await delay(1200);
   assert.equal(setting('system','accelerometer_rotation'),'0','The actual Android rotation lock must stay on');
   assert.equal((await window()).keepScreenOn,true,'Playing video must set the actual native screen-awake flag');
   adb('shell','settings','put','system','screen_off_timeout','2000');
@@ -44,27 +75,39 @@ export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,
   const timeout=saved.find(row=>row[1]==='screen_off_timeout')[2];
   adb('shell','settings','put','system','screen_off_timeout',timeout);
 
-  for(const acceleration of ['9.81:0:0','-9.81:0:0']){
+  for(const [index,acceleration] of sideways.entries()){
    const before=(await sample()).media3,started=Date.now();
    adb('emu','sensor','set','acceleration',acceleration);
    const full=await waitNative(s=>s.media3.fullscreen&&s.media3.playing&&s.media3.frames>before.frames+5,
     'Physical accelerometer tilt must enter native fullscreen with auto-rotate OFF');
    const landscape=await waitShape(true);assert.ok(landscape.width>landscape.height,'Actual Android/WebView must be landscape');
-   same(before,full.media3,Date.now()-started);
+   let bounds,visible,filled=false;
+   for(let n=0;n<30;n++){
+    bounds=await window();visible=(await sample()).media3;
+    filled=bounds.right-bounds.left>bounds.bottom-bounds.top&&
+     visible.surfaceVisibleWidth>=(bounds.right-bounds.left)*.96&&
+     visible.surfaceVisibleHeight>=(bounds.bottom-bounds.top)*.94;
+    if(filled)break;await delay(200);
+   }
+   assert.ok(filled,'Native video must actually fill the rotated landscape window, not just set a fullscreen flag: '+JSON.stringify({bounds,visible}));
+   const shown=await showControls();
+   assertAndroidVideoTimes(shown.media3);
+   writeFileSync('emulator-report/video-landscape-'+index+'.png',execFileSync('adb',['exec-out','screencap','-p']));
+   same(before,visible,Date.now()-started);
    assert.equal(setting('system','accelerometer_rotation'),'0','The app must not change the system auto-rotate preference');
-   adb('emu','sensor','set','acceleration','0:9.81:0');
+   adb('emu','sensor','set','acceleration',upright);
    const regular=await waitNative(s=>!s.media3.fullscreen&&s.media3.playing,
     'Turning upright must restore the regular player');
    const portrait=await waitShape(false);assert.ok(portrait.height>portrait.width,'Actual window must return to portrait');
    same(before,regular.media3,Date.now()-started);
-   report.checks.push({label:'Actual sensor landscape/fullscreen and portrait/regular player with rotation lock ON',before,after:regular.media3});
+   report.checks.push({label:'Actual sensor landscape/full-window video and portrait/regular player with rotation lock ON',naturalLandscape,bounds,before,landscape:visible,after:regular.media3});
   }
-  adb('emu','sensor','set','acceleration','9.81:0:0');
+  adb('emu','sensor','set','acceleration',sideways[0]);
   await waitNative(s=>s.media3.fullscreen,'Landscape must re-enter fullscreen');
   await showControls();await tapExit();
   await waitNative(s=>!s.media3.fullscreen,'Actual fullscreen exit button must exit sensor fullscreen');
   await delay(1200);assert.equal((await sample()).media3.fullscreen,false,'A manual exit must not immediately reopen fullscreen');
-  adb('emu','sensor','set','acceleration','0:9.81:0');await delay(1000);
+  adb('emu','sensor','set','acceleration',upright);await delay(1000);
  }finally{
   adb('shell','input','keyevent','KEYCODE_WAKEUP');
   adb('emu','sensor','set','acceleration',sensor);
