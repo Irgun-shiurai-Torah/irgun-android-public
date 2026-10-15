@@ -8,6 +8,12 @@ capture() {
 trap capture EXIT
 adb install -r android/qa-native-observer/build/outputs/apk/debug/qa-native-observer-debug.apk
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+# Android 16 may cover the native video with a first-use SystemUI
+# "Viewing full screen" tutorial. Acknowledge it only in this disposable
+# emulator so physical Media3 control taps remain observable. Production
+# devices and app settings are not changed.
+adb shell settings put secure immersive_mode_confirmations confirmed
+test "$(adb shell settings get secure immersive_mode_confirmations | tr -d '\r')" = confirmed
 # Let first-boot package and launcher work finish before the measured cold
 # app launch. Do not dismiss ANRs or restart either the app or the emulator.
 if adb shell am help | grep -q wait-for-broadcast-idle; then
