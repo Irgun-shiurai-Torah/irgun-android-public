@@ -7560,8 +7560,22 @@ async function shareItem(kind, id) {
     if (item) title = displayShiurTitle(item.title || item.name, title);
     url = `${WEBSITE}videos.html?tab=audio&audio=${encodeURIComponent(id)}`;
   }
+  const sharingNativeVideo = Capacitor.getPlatform() === 'android' && kind === 'video' &&
+    state.watchMode === 'video' && state.watchVimeo?.isIrgunNativeVideoPlayer &&
+    videoId(state.watchVideo) === String(id);
+  // Capture the exact player. A stale Share result must not reflow a newer
+  // lecture if the user changes screens while Android has its chooser open.
+  const sharedPlayer = sharingNativeVideo ? state.watchVimeo : null;
+  let shareGuardActive = false;
   try {
     if (Capacitor.isNativePlatform()) {
+      if (sharingNativeVideo) {
+        // Android ACTION_CHOOSER can fire onUserLeaveHint() as if Home was
+        // pressed. Arm the short-lived native guard BEFORE launching Share,
+        // so Media3 does not disable video or restart the decoder.
+        await IrgunNativeVideo.shareSheet({active:true});
+        shareGuardActive = true;
+      }
       await Share.share({ title, text: title, url, dialogTitle: tr('Share Shiur') });
     } else if (navigator.share) {
       await navigator.share({ title, text: title, url });
@@ -7569,7 +7583,25 @@ async function shareItem(kind, id) {
       await navigator.clipboard.writeText(url);
       setToast('Link copied.');
     }
-  } catch (_) {}
+  } catch (error) {
+    // Dismissing the Android chooser is a normal cancellation, not a reason
+    // to pause or rebuild the same playback session.
+    if (sharingNativeVideo && !shareGuardActive)
+      console.warn('[Share] Android video chooser could not arm its lifecycle guard',error);
+  } finally {
+    if (shareGuardActive) {
+      await IrgunNativeVideo.shareSheet({active:false}).catch(()=>{});
+      const restoreSharedFrame = () => {
+        if (state.watchVimeo === sharedPlayer && state.watchMode === 'video' &&
+            videoId(state.watchVideo) === String(id)) sharedPlayer.updateFrame?.();
+      };
+      // Android may finish recompositing its Window shortly after the Share
+      // chooser closes. Reposition the SAME native PlayerView, never reload it.
+      restoreSharedFrame();
+      requestAnimationFrame(restoreSharedFrame);
+      setTimeout(restoreSharedFrame, 180);
+    }
+  }
 }
 
 function closeDownloadDialog() {
