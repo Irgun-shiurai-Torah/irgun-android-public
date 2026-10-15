@@ -7992,6 +7992,15 @@ async function enterSystemPictureInPicture() {
   }
 }
 
+// The native top-row PiP button is NOT a separate Android entry path.
+// It must perform the same preparation as the working video-header button.
+window.__irgunEnterSystemPipFromNative = () => {
+  if (Capacitor.getPlatform() !== 'android' || state.watchMode !== 'video' ||
+      !state.watchVideo || !state.watchVimeo?.isIrgunNativeVideoPlayer ||
+      state.systemPipActive) return;
+  void enterSystemPictureInPicture();
+};
+
 async function restoreAfterSystemPip() {
   if (!state.watchVideo || state.watchMode !== 'video' || !state.watchVimeo) return;
   const player = state.watchVimeo;
@@ -8095,7 +8104,18 @@ window.__irgunRestoreViewportAfterPip = function() {
     requestAnimationFrame(() => {
       void document.body.offsetWidth;
       window.dispatchEvent(new Event('resize'));
-      setTimeout(() => window.dispatchEvent(new Event('resize')), 120);
+      // A native Media3 PlayerView is positioned OUTSIDE the WebView. After
+      // Android restores the Activity size, remeasure the actual video frame
+      // twice rather than keeping stale PiP/fullscreen pixel coordinates.
+      if (Capacitor.getPlatform() === 'android' &&
+          state.watchVimeo?.isIrgunNativeVideoPlayer) {
+        state.watchVimeo.updateFrame?.();
+      }
+      setTimeout(() => {
+        window.dispatchEvent(new Event('resize'));
+        if (Capacitor.getPlatform() === 'android' &&
+            state.watchVimeo?.isIrgunNativeVideoPlayer) state.watchVimeo.updateFrame?.();
+      }, 120);
     });
   } catch (_) {}
 };
