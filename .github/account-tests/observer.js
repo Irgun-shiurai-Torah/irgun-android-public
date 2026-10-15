@@ -39,6 +39,13 @@ window.ISTAccountTest = {
       visibleBottom:Math.min(innerHeight,r.bottom,nav?.height>0?nav.top-8:innerHeight),
       heightTotal:scroll.scrollHeight,visibleHeight:scroll.clientHeight,
       touchAction:getComputedStyle(scroll).touchAction};})() : null;
+  const followElement=document.querySelector('#persistentVideoMount .watch-overlay [data-follow-type="speaker"]')
+    || document.querySelector('#app .watch-overlay [data-follow-type="speaker"]');
+  // Read-only DOM geometry: the Android test still performs an actual ADB
+  // swipe and real tap. Missing speaker metadata remains explicitly missing.
+  const followTarget=followElement ? (()=>{const r=followElement.getBoundingClientRect();
+    return {x:r.x+r.width/2,y:r.y+r.height/2,width:r.width,height:r.height,
+      key:followElement.dataset.followKey||'',rendered:true};})():null;
   const video = state.watchVimeo?.getVideoElement?.()
     || document.querySelector('#watchDirectHlsVideo')
     || state.watchVimeo?.video
@@ -59,7 +66,7 @@ window.ISTAccountTest = {
     ? { x:stripRect.x, y:stripRect.y, width:stripRect.width, height:stripRect.height,
         scrollLeft:libraryStrip.scrollLeft, scrollWidth:libraryStrip.scrollWidth, clientWidth:libraryStrip.clientWidth }
     : null;
-  return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,libraryTabStrip,watchScroll,
+  return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,libraryTabStrip,watchScroll,followTarget,
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
     libraryReady:!!state.libraryReady,loading:!!state.loading,bootstrapInFlight:!!bootstrapInFlight,hasStoredSession:!!state.token,
     authBusy:!!state.authBusy,authMode:String(state.authMode||''),
