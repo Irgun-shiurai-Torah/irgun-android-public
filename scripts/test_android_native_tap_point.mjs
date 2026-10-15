@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {settledNativeTapPoint,waitForNativeWindowFocus} from './android-native-tap-point.mjs';
-import {accountSwipeDirection, watchPlayerReturnGesture, watchCommentsGesture} from './android-account-native-scroll.mjs';
+import {accountSwipeDirection, watchPlayerReturnGesture, watchCommentsGesture, watchFollowTargetGesture} from './android-account-native-scroll.mjs';
 import {selectAccountPlaybackFixture} from './android-account-playback-fixture.mjs';
 
 const geometry = height => ({left:0,top:24,right:320,bottom:24+height,focused:true});
@@ -81,4 +81,18 @@ test('comment and player gestures stay above the floating navigation instead of 
   assert.ok(comment.from.y>scroll.y&&comment.to.y>scroll.y);
   assert.ok(player.to.y<518&&player.from.y<player.to.y);
   assert.throws(()=>watchCommentsGesture({...scroll,visibleBottom:100}),/obscured/);
+});
+
+test('real Follow target directs native swipes both ways without hiding failures',()=>{
+  const scroll={x:4,y:50,width:315,height:590,visibleBottom:545,top:470};
+  const above=watchFollowTargetGesture(scroll,19);
+  assert.equal(above.direction,'down','Overshot Follow above the viewport: scroll back UP the page');
+  assert.ok(above.from.y<above.to.y);
+  assert.ok(above.to.y<scroll.visibleBottom,'Do not touch floating bottom navigation');
+  const below=watchFollowTargetGesture(scroll,720);
+  assert.equal(below.direction,'up','Follow below viewport: scroll down to find it');
+  assert.ok(below.from.y>below.to.y);
+  assert.ok(below.from.y>scroll.y);
+  assert.throws(()=>watchFollowTargetGesture(scroll,NaN),/Follow DOM target/);
+  assert.throws(()=>watchFollowTargetGesture({...scroll,visibleBottom:105},170),/obscured/);
 });
