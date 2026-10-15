@@ -411,6 +411,11 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             surface.setControllerShowTimeoutMs(8000);
             surface.setShowPreviousButton(false);
             surface.setShowNextButton(false);
+            // Quality and speed already have dedicated controls in our top row.
+            // Remove Media3's duplicate gear, including from its overflow layout.
+            View settings = surface.findViewById(androidx.media3.ui.R.id.exo_settings);
+            if (settings != null && settings.getParent() instanceof ViewGroup)
+                ((ViewGroup) settings.getParent()).removeView(settings);
             surface.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING);
             surface.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
             surface.setKeepContentOnPlayerReset(true);
@@ -707,6 +712,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("systemPip", systemPip);
             response.put("pipButtonVisible", pipButton != null && pipButton.isShown());
             response.put("qualityButtonVisible", qualityButton != null && qualityButton.isShown());
+            View settings = surface == null ? null : surface.findViewById(androidx.media3.ui.R.id.exo_settings);
+            response.put("settingsButtonVisible", settings != null && settings.isShown());
             response.put("qualityHeight", requestedQualityHeight);
             response.put("qualityMenuVisible", qualityDialog != null && qualityDialog.isShowing());
             response.put("speedMenuVisible", speedDialog != null && speedDialog.isShowing());

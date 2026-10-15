@@ -374,6 +374,8 @@ try {
     }
     const shown=await waitNative(s=>s.media3.pipButtonVisible&&s.media3.qualityButtonVisible,
       'Native PiP and quality buttons must be visible on the actual video',10000);
+    assert.equal(shown.media3.settingsButtonVisible,false,
+      'The duplicate bottom settings gear must stay removed whenever controls appear');
     if(fresh)assert.equal(shown.media3.doubleTapSeekCount,m.doubleTapSeekCount,
       'Physically refreshing controls must not trigger a double-tap seek');
     return shown;
