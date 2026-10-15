@@ -75,6 +75,13 @@ test('locked tablet rotates native Media3 fullscreen and its corner timestamps i
    elapsedTimeRect:media.durationTimeRect,durationTimeRect:media.elapsedTimeRect}));
  const [x,y]=nativeControllerRevealPoint(media).map(Number);
  assert.ok(x>media.seekBarRect.x+media.seekBarRect.width+15 && y>200&&y<1100);
+ const otherSide={...media,surfaceRotationDegrees:-90,seekBarRect:{x:720,y:0,width:48,height:1280}};
+ const [rx,ry]=nativeControllerRevealPoint(otherSide).map(Number);
+ assert.ok(rx<otherSide.seekBarRect.x-15&&ry>200&&ry<1100,
+   'Counter-clockwise video has a RIGHT-side vertical seek bar; safely tap its picture');
+ assert.throws(()=>nativeControllerRevealPoint({...otherSide,seekBarRect:{x:500,y:0,width:100,height:1280}}),
+   /Rotated controller tap must clear/,
+   'Real tap in an occupied seek stripe must still fail loudly');
  assert.throws(()=>assertAndroidVideoTimes({...media,surfaceRotationDegrees:0}),/opposite|right/);
 });
 

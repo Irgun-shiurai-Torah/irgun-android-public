@@ -11,7 +11,12 @@ export function nativeControllerRevealPoint(media) {
    // bottom seek row becomes a VERTICAL stripe. Tap the safe picture center
    // rather than using unrotated seek.y coordinates.
    const px=Math.round(x+w*.68),py=Math.round(y+h*.48);
-   assert.ok(!seek||px>seek.x+seek.width+15,'Rotated controller tap must clear the physical seek bar');
+   // A clockwise player puts the progress stripe on screen LEFT; the
+   // counter-clockwise layout puts it on RIGHT. Neither should be tapped.
+   // Checking only px > stripe.right incorrectly fails the second side
+   // despite a safe real tap and fully visible decoded picture.
+   assert.ok(!seek || px < seek.x-15 || px > seek.x+seek.width+15,
+     'Rotated controller tap must clear the physical seek bar on EITHER side');
    return [String(px),String(py)];
  }
  const top=y+50;
