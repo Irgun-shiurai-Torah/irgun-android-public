@@ -1,5 +1,5 @@
 import {execFileSync} from 'node:child_process';
-import {writeFileSync} from 'node:fs';
+import {writeFileSync,readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
@@ -282,12 +282,18 @@ try{
  assert.equal(catalogResponse.status,200,'Read the real catalog to choose a native/audio fixture');
  const catalog=await catalogResponse.json();
  catalog.sort((a,b)=>Date.parse(b.lectureDate||b.date||b.created||0)-Date.parse(a.lectureDate||a.date||a.created||0));
+ // Use a real Drive-backed lecture that actually has the website's
+ // Follow target: reviewed speaker metadata or exact title-based speaker.
+ // The previous first-available fixture had neither, so even website Watch
+ // would not render Follow for that one.
+ const websiteMetadata=JSON.parse(readFileSync('public/library-metadata.json','utf8'));
  report.playbackFixture=await selectAccountPlaybackFixture(catalog,async id=>{
    const response=await fetch(`https://api.irgunshiuraitorah.com/media/${encodeURIComponent(id)}/source.json`,{
      headers:{Origin:'https://localhost','X-Irgun-App':'1'},signal:AbortSignal.timeout(20000)});
    assert.equal(response.status,200,'Account playback fixture source must be available');
    return response.json();
- });
+ },{requireFollow:true,metadata:websiteMetadata});
+ report.playbackFixture.followVerifiedBy='website metadata or title Follow key';
  playbackFixtureId=report.playbackFixture.id;
  bounds=await readNativeBounds();
  report.androidApi=Number(adb('shell','getprop','ro.build.version.sdk'));
