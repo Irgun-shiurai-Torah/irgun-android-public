@@ -247,8 +247,8 @@ test('native Media3 refuses an offscreen -12000px iframe after Audio to Video',a
 test('native fullscreen expands the SAME PlayerView and Android Back exits without closing the lecture',()=>{
   const main=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/MainActivity.java','utf8');
   assert.match(bridge,/public void fullscreen\(PluginCall call\)/);
-  assert.match(bridge,/Math\.max\(1, root\.getWidth\(\)\)/);
-  assert.match(bridge,/Math\.max\(1, root\.getHeight\(\)\)/);
+  assert.match(bridge,/Math\.max\(1,\s*root\.getWidth\(\)\)/);
+  assert.match(bridge,/Math\.max\(1,\s*root\.getHeight\(\)\)/);
   assert.match(bridge,/surface\.setLayoutParams\(full\)/);
   assert.match(bridge,/response\.put\("surfaceWidth"/);
   assert.match(bridge,/response\.put\("rootWidth"/);
