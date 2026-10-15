@@ -29,6 +29,7 @@ public class MainActivity extends BridgeActivity {
     // Unlike the provisional entry guard, this only changes after Android has
     // CONFIRMED a real pinned window. Failed entry must not reset fullscreen.
     private boolean confirmedSystemPip = false;
+    private int pipEntrySerial = 0;
     private static final String PIP_TAG = "IrgunSystemPiP";
     private OnBackPressedCallback fullscreenBackCallback;
     private IrgunVideoDisplayController videoDisplay;
@@ -177,6 +178,7 @@ public class MainActivity extends BridgeActivity {
             return false;
         }
         if (isInPictureInPictureMode()) return true;
+        final int attempt = ++pipEntrySerial;
         try {
             // Guard Home's background-Audio handoff while Android enters pinned
             // mode, but DO NOT resize/reparent the native PlayerView yet. The
@@ -191,17 +193,29 @@ public class MainActivity extends BridgeActivity {
             boolean entered = enterPictureInPictureMode(builder.build());
             if (!entered && isInPictureInPictureMode()) entered = true;
             if (!entered) {
-                Log.w(PIP_TAG, "Android declined PiP entry; preserving fullscreen=" + videoFullscreen);
-                rollbackRejectedPictureInPicture();
-                explainUnavailablePip();
+                Log.w(PIP_TAG, "Android did not confirm PiP immediately; waiting for the real OS callback");
+                confirmRejectedPictureInPictureAfterSettling(attempt);
             }
             return entered;
         } catch (Exception error) {
-            Log.w(PIP_TAG, "Android PiP entry failed; preserving current native video", error);
-            rollbackRejectedPictureInPicture();
-            explainUnavailablePip();
+            Log.w(PIP_TAG, "Android PiP entry threw; checking for delayed OS confirmation", error);
+            confirmRejectedPictureInPictureAfterSettling(attempt);
             return false;
         }
+    }
+
+    private void confirmRejectedPictureInPictureAfterSettling(int attempt) {
+        // Some Samsung builds deliver the pinned-window callback shortly AFTER
+        // a native enter request returns. An immediate permission AlertDialog
+        // can itself end up IN the tiny PiP window, exactly like the screenshot.
+        // Give Android a moment to confirm entry before showing any error.
+        getWindow().getDecorView().postDelayed(() -> {
+            if (attempt != pipEntrySerial || confirmedSystemPip ||
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode()) ||
+                isFinishing() || isDestroyed()) return;
+            rollbackRejectedPictureInPicture();
+            explainUnavailablePip();
+        }, 350);
     }
 
     private void rollbackRejectedPictureInPicture() {
@@ -305,6 +319,7 @@ public class MainActivity extends BridgeActivity {
         if (videoDisplay != null) videoDisplay.pip(isInPictureInPictureMode);
         IrgunAnalyticsReporter.get(this).setPictureInPictureActive(isInPictureInPictureMode);
         if (isInPictureInPictureMode) {
+            ++pipEntrySerial; // Cancel any delayed rejection after real PiP.
             // The ONLY path which converts a running native PlayerView to a
             // pinned-window presentation. Do not run this before Android enters.
             IrgunNativeVideoPlugin.systemPipChanged(true);
