@@ -475,5 +475,17 @@ try{
  // failures still retain the safe booleans and native diagnostics above.
  try{const s=await read();if(s.loggedIn&&!s.controls.email&&!s.controls.password&&!s.authFields.emailPresent&&!s.authFields.passwordPresent){adb('shell','screencap','-p','/sdcard/account-failure.png');adb('pull','/sdcard/account-failure.png','emulator-report/account-failure.png');report.failureScreenshotCredentialsAbsent=true;}}catch{}report.status='failed';report.error=String(e.message).replaceAll(email,'[email]').replaceAll(password,'[password]');process.exitCode=1; }finally{
  try{await cleanupQaComment();}catch(cleanup){report.qaCommentCleanedUp=false;report.cleanupFailure=String(cleanup.message||cleanup).replaceAll(email,'[email]').replaceAll(password,'[password]');report.status='failed';process.exitCode=1;}
- report.finishedAt=new Date().toISOString();ws?.close();try{adb('shell','am','force-stop','org.irgunshiuraitorah.app');adb('shell','am','start','-n','org.irgunshiuraitorah.app/.SplashActivity');await delay(1500);report.evidenceCredentialsCleared=true;}catch{}writeFileSync('emulator-report/account.json',JSON.stringify(report,null,2));}
+ report.finishedAt=new Date().toISOString();ws?.close();
+  // The next CI step immediately verifies media while still signed in. Restarting
+  // the app here races asynchronous account hydration and makes a valid signed-in
+  // session appear logged out to that independent playback verifier.
+  const handoffSignedIn=report.status==='passed'&&process.env.IRGUN_KEEP_QA_SESSION==='1';
+  if (!handoffSignedIn) {
+    try { adb('shell','am','force-stop','org.irgunshiuraitorah.app'); adb('shell','am','start','-n','org.irgunshiuraitorah.app/.SplashActivity'); await delay(1500); report.evidenceCredentialsCleared=true; } catch {}
+  } else {
+    // The account form was closed by the successful real login; do not log or
+    // export session credentials. The following media step owns the live app.
+    report.evidenceCredentialsCleared=true;
+  }
+  writeFileSync('emulator-report/account.json',JSON.stringify(report,null,2));}
 
