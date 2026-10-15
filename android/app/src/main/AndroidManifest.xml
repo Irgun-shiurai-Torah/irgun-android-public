@@ -25,6 +25,11 @@
             android:resizeableActivity="true"
             android:exported="true">
 
+            <!-- Large Android screens are adaptive: do not opt out of
+                 Android 16 orientation/resizing or force a letterboxed window.
+                 Locked tablet screens use a rotated native video presentation,
+                 while unlocked displays rotate under Android system control. -->
+
             <intent-filter>
                 <action android:name="IRGUN_NOTIFICATION_CLICK" />
                 <category android:name="android.intent.category.DEFAULT" />

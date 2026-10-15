@@ -63,7 +63,7 @@ jobs:
           sudo apt-get install -y imagemagick
           bash scripts/prepare_android_icons.sh
       - name: Check tab gesture regressions
-        run: node --test scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs scripts/test_android_native_tap_point.mjs scripts/test_android_native_text_entry.mjs scripts/test_android_video_startup_buffer.mjs scripts/test_android_emulator_prepare.mjs scripts/test_android_background_handoff.mjs
+        run: node --test scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs scripts/test_android_native_tap_point.mjs scripts/test_android_native_text_entry.mjs scripts/test_android_video_startup_buffer.mjs scripts/test_android_emulator_prepare.mjs scripts/test_android_background_handoff.mjs scripts/test_android_like_persistence.mjs scripts/test_android_home_position.mjs scripts/test_android_native_media3_beta.mjs
       - name: Append required read-only playback and search observer to disposable APK
         run: cat .github/release-tests/observer.js >> src/main.js
       - run: npm run build
@@ -71,16 +71,16 @@ jobs:
       - name: Generate Android launcher resources
         run: bash scripts/prepare_android_icons.sh
       - name: Add emulator-only native volume observation
-        run: python3 scripts/android-emulator-prepare.py
+        run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon assembleDebug
+      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Test Android 11 tabs, MP4 playback and 10-minute audio/video handoff
+      - name: Test Android 11 tabs, native Media3 HLS video and physical Audio/Video switching
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30

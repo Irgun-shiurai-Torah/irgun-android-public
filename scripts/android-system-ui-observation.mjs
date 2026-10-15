@@ -46,6 +46,24 @@ export function mediaNotificationControlPoint(xml, action, pattern) {
   return [Math.round((rect[0] + rect[2]) / 2), Math.round((rect[1] + rect[3]) / 2)];
 }
 
+export async function settledMediaNotificationControlPoint({readHierarchy, action, pattern,
+  delay, now = Date.now, timeoutMs = 25000, samples = 60}) {
+  const deadline = now() + timeoutMs;
+  let previous, lastError;
+  for (let i = 0; i < samples && now() < deadline; i++) {
+    let point;
+    try { point = mediaNotificationControlPoint(await readHierarchy(), action, pattern); }
+    catch (error) {
+      if (!(error instanceof assert.AssertionError)) throw error;
+      lastError = error;
+    }
+    if (point && previous && point.every((value, index) => Math.abs(value - previous[index]) <= 1)) return point;
+    previous = point;
+    await delay(250);
+  }
+  throw new Error('Actual notification ' + action + ' control did not settle; no tap was performed', {cause: lastError});
+}
+
 export function offlineConfirmationTapPoint(xml) {
   const visible = nodes(xml).filter(node => /package="org.irgunshiuraitorah.app"/.test(node) && /visible="true"/.test(node));
   if (!visible.some(node => attribute(node, 'resource-id') === 'android:id/message' &&

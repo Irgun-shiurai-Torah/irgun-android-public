@@ -3,12 +3,17 @@ import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
 import { usageAnalytics } from './usageAnalytics.js';
 import { Capacitor, registerPlugin } from '@capacitor/core';
+import {bindAndroidPlayerSheetInteractions,preserveAndroidPlayerSheetScroll} from './android-player-controls.js';
+import {isAndroidVimeoOnlyVideo,createAndroidVimeoPlayer} from './android-vimeo-playback.js';
+import {createAndroidVideoDisplaySync} from './android-video-display.js';
+import {androidNavigationRoot,createAndroidBottomNavigation,prepareAndroidTabNavigation} from './android-bottom-navigation.js';
+const androidPlayerSheetRenderGate=bindAndroidPlayerSheetInteractions({document,view:window,
+  isAndroid:()=>Capacitor.getPlatform()==='android',render:()=>render()});
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileTransfer } from '@capacitor/file-transfer';
 import { Share } from '@capacitor/share';
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { createAndroidHlsPlayer } from './android-hls-video.js';
-import { createNativeMedia3VideoPlayer, nativeMedia3BetaEnabled } from './android-native-media3-video.js';
+import { createNativeMedia3VideoPlayer } from './android-native-media3-video.js';
 import {rememberCachedAccount,readCachedAccount,clearCachedAccount} from './android-offline-account.js';
 import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } from './offline-validation.js';
 import { downloadOfflineAudio } from './offline-download.js';
@@ -31,25 +36,99 @@ const SCHEDULE_CITY_FILTER_KEY = 'istScheduleCityFilterV1';
 const SKIP_SECONDS_KEY = 'istSkipSecondsV1';
 const audio = document.getElementById('audioEngine');
 const app = document.getElementById('app');
+if (Capacitor.getPlatform() === 'android') document.body.classList.add('irgun-android');
 const persistentVideoMount = document.getElementById('persistentVideoMount');
 const IrgunDownloader = registerPlugin('IrgunDownloader');
 const IrgunPush = registerPlugin('IrgunPush');
 const IrgunFullscreen = registerPlugin('IrgunFullscreen');
+const IrgunNativeVideo = registerPlugin('IrgunNativeVideo');
 const IrgunPlayback = registerPlugin('IrgunPlayback');
 let nativeVideoFullscreen = false;
+const syncAndroidBottomNavigation=createAndroidBottomNavigation({
+  isAndroid:()=>Capacitor.getPlatform()==='android',document,
+  model:()=>{
+    state.androidNavRoot=androidNavigationRoot(state.screen,state.androidNavRoot);
+    return {root:state.androidNavRoot,language:currentLanguage()};
+  },
+  markup:()=>bottomNavHtml(),navigate:button=>navigateToScreen(button)
+});
+const syncAndroidVideoDisplay=createAndroidVideoDisplaySync({
+  isAndroid:()=>Capacitor.getPlatform()==='android',read:()=>state,
+  send:value=>{
+    if(!value.active||!value.expanded||value.nativeEngine){
+      document.body.classList.remove('irgun-video-rotation-fullscreen');
+      document.querySelector('[data-rotation-fullscreen-exit]')?.remove();
+    }
+    return IrgunFullscreen.playback(value);
+  }
+});
 
-async function setNativeVideoFullscreen(enabled) {
+async function setNativeVideoFullscreen(enabled, {fromSensor=false}={}) {
   if (Capacitor.getPlatform() !== 'android') return;
   const next = Boolean(enabled);
+  document.body.classList.toggle('irgun-video-fullscreen',next);
   if (nativeVideoFullscreen === next) return;
   nativeVideoFullscreen = next;
   try {
-    await IrgunFullscreen.set({ enabled: next });
+    await IrgunFullscreen.set({ enabled: next, fromSensor });
+    state.watchVimeo?.updateFrame?.();
   } catch (error) {
     nativeVideoFullscreen = false;
     console.warn('Android fullscreen system-bar sync failed', error);
   }
 }
+
+// The native Media3 PlayerView lives outside the WebView. Android fullscreen
+// must expand that same physical view and synchronize system bars together.
+async function setAndroidNativeVideoFullscreen(enabled, {fromSensor=false}={}) {
+  if (Capacitor.getPlatform() !== 'android') return;
+  if (state.watchVimeo?.isAndroidVimeoFallback) {
+    if (fromSensor || document.body.classList.contains('irgun-video-rotation-fullscreen')) {
+      // Device rotation has no browser user activation. Resize the same Vimeo
+      // iframe in the app window instead of requesting browser fullscreen.
+      document.body.classList.toggle('irgun-video-rotation-fullscreen',Boolean(enabled));
+      let exit=document.querySelector('[data-rotation-fullscreen-exit]');
+      if(enabled&&!exit){
+        exit=document.createElement('button');exit.dataset.rotationFullscreenExit='1';
+        exit.className='rotation-fullscreen-exit';exit.setAttribute('aria-label','Exit video fullscreen');
+        exit.textContent='⛶';exit.addEventListener('click',()=>{void setAndroidNativeVideoFullscreen(false);});
+        document.body.appendChild(exit);
+      }else if(!enabled)exit?.remove();
+      await setNativeVideoFullscreen(Boolean(enabled),{fromSensor});
+      return;
+    }
+    if (enabled) await state.watchVimeo.requestFullscreen();
+    else await state.watchVimeo.exitFullscreen();
+    await setNativeVideoFullscreen(Boolean(enabled),{fromSensor});
+    return;
+  }
+  if (enabled && !state.watchVimeo?.isIrgunNativeVideoPlayer) {
+    throw new Error('Native fullscreen requires an active Media3 Video');
+  }
+  // Pass the origin of the request to native before the sensor can poll.
+  // A manual Exit must suppress a repeat landscape re-entry while the tablet
+  // remains tilted; an upright sensor exit must NOT suppress the next tilt.
+  await IrgunNativeVideo.fullscreen({enabled:Boolean(enabled),fromSensor:Boolean(fromSensor)});
+  await setNativeVideoFullscreen(Boolean(enabled),{fromSensor});
+}
+window.__irgunSetVideoFullscreenFromRotation = enabled => {
+  if(Capacitor.getPlatform()!=='android'||!state.watchVideo||state.watchMode!=='video'||state.watchMinimized)return;
+  return setAndroidNativeVideoFullscreen(Boolean(enabled),{fromSensor:true}).catch(error=>console.warn('Video rotation failed',error));
+};
+window.__irgunToggleNativeVideoFullscreen = () => {
+  if (Capacitor.getPlatform() === 'android' && state.watchVimeo?.isIrgunNativeVideoPlayer)
+    void setAndroidNativeVideoFullscreen(!nativeVideoFullscreen);
+};
+window.__irgunMinimizeNativeVideo = async () => {
+  if (Capacitor.getPlatform() !== 'android' || !state.watchVimeo?.isIrgunNativeVideoPlayer) return;
+  await window.__irgunExitNativeVideoFullscreen();
+  await minimizeWatchToPersistent();
+  state.watchVimeo?.updateFrame?.();
+};
+window.__irgunExitNativeVideoFullscreen = async () => {
+  if (nativeVideoFullscreen && (state.watchVimeo?.isIrgunNativeVideoPlayer||state.watchVimeo?.isAndroidVimeoFallback))
+    await setAndroidNativeVideoFullscreen(false);
+};
 
 function syncDocumentFullscreenToNative() {
   const element = document.fullscreenElement || document.webkitFullscreenElement || null;
@@ -238,6 +317,7 @@ const state = {
   watchVimeo: null,
   watchVimeoReady: false,
   watchVideoForceVimeoId: '',
+  watchNativeVideoFailedId: '',
   watchVideoPlaying: false,
   systemPipActive: false,
   systemPipWasPlaying: false,
@@ -482,6 +562,25 @@ function refreshOfflineButtonsForKey(key = '') {
   });
 }
 
+async function prepareNativeVideoBufferForOfflineTransfer() {
+  // Concurrent 60MB MP3 transfer briefly starved ExoPlayer's ~6s HLS buffer
+  // on Android 16. Allow the existing Media3 decoder to prefetch the next
+  // segments BEFORE the native FileTransfer consumes network bandwidth.
+  // This never pauses, seeks, replaces or starts a second player.
+  if (Capacitor.getPlatform() !== 'android' ||
+      !state.watchVimeo?.isIrgunNativeVideoPlayer || state.watchMode !== 'video') return;
+  const until=Date.now()+16000;
+  while (Date.now()<until) {
+    const s=await IrgunNativeVideo.snapshot().catch(()=>null);
+    if (!s?.active || !s.videoSelected || !s.playWhenReady || !s.playing) return;
+    if (Number(s.bufferedPositionMs)-Number(s.positionMs)>=18000) return;
+    await new Promise(resolve=>setTimeout(resolve,500));
+  }
+  // Bounded wait: never permanently block an offline download on a slow
+  // connection. The next test still detects a real VIDEO playback freeze.
+  console.warn('[Offline] Media3 prebuffer headroom remained low; starting download after bounded wait');
+}
+
 async function saveOffline(kind, id) {
   state.offlineSaveLastError = '';
   const normalizedKind = kind === 'audio' ? 'audio' : 'video';
@@ -539,6 +638,7 @@ async function saveOffline(kind, id) {
     const headers = { 'X-Irgun-App':'1' };
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
     const transferOptions = { url, path:fileInfo.uri, headers, progress:true };
+    if (normalizedKind==='video') await prepareNativeVideoBufferForOfflineTransfer();
     const transfer = Capacitor.getPlatform() === 'android'
       ? await downloadOfflineAudio(transferOptions, {
           download:options => FileTransfer.downloadFile(options),
@@ -719,6 +819,9 @@ function saveDestinationPresentation(kind, id) {
 function closePlaylistPickerInPlace() {
   state.playlistPickerItem = null;
   document.querySelectorAll('.playlist-picker-backdrop').forEach(node => node.remove());
+  // A removed modal must restore the same native Video surface without
+  // restarting the underlying Media3 item, position, or audible Audio track.
+  state.watchVimeo?.updateFrame?.();
 }
 
 function refreshSaveDestinationButtons(kind = '', id = '') {
@@ -1559,11 +1662,7 @@ function bindShiurimResultEvents(root) {
     event.stopPropagation();
     playLibraryAudio(el.dataset.listenAudio);
   }));
-  root.querySelectorAll('[data-like]').forEach(el => el.addEventListener('click', async event => {
-    event.stopPropagation();
-    await preserveWatchTime();
-    toggleLike(el.dataset.like);
-  }));
+  bindLikeButtons(root);
   root.querySelectorAll('[data-save]').forEach(el => el.addEventListener('click', async event => {
     event.stopPropagation();
     await preserveWatchTime();
@@ -1828,6 +1927,7 @@ function prewarmVideoAudioMetadata(video, id) {
     PlaybackController.loadLecture(item, state.watchResumeSeconds || 0, true).catch(()=>{});
     return;
   }
+  if (Capacitor.getPlatform() === 'android') return;
   if (!audio.paused) return;
   const sameSource = audio.src === item.url || audio.currentSrc === item.url;
   try {
@@ -2797,8 +2897,34 @@ async function updateProfile(name, password) {
   }
 }
 
+// A persistent Watch overlay stays outside #app across renders. Binding it
+// again would attach another click handler, turning one real tap into two
+// server-side /like toggles. The same guard also covers cards bound through
+// bindShiurimResultEvents and then through the global document binder.
+function bindLikeButtons(root) {
+  root.querySelectorAll('[data-like]').forEach(el => {
+    if (el.dataset.likeBound === '1') return;
+    el.dataset.likeBound = '1';
+    el.addEventListener('click', async event => {
+      event.stopPropagation();
+      if (el.dataset.likeBusy === '1') return;
+      el.dataset.likeBusy = '1';
+      try {
+        await preserveWatchTime();
+        await toggleLike(el.dataset.like);
+      } finally {
+        delete el.dataset.likeBusy;
+      }
+    });
+  });
+}
+
+const pendingLikeMutations = new Set();
 async function toggleLike(id) {
   if (!state.user) return requireLogin('Sign in to like shiurim.');
+  id = String(id || '');
+  if (!id || pendingLikeMutations.has(id)) return;
+  pendingLikeMutations.add(id);
   const wasLiked = state.myLikes.has(id);
   if (wasLiked) state.myLikes.delete(id); else state.myLikes.add(id);
   state.likeCounts[id] = Math.max(0, (Number(state.likeCounts[id]) || 0) + (wasLiked ? -1 : 1));
@@ -2818,6 +2944,8 @@ async function toggleLike(id) {
     state.likeCounts[id] = Math.max(0, (Number(state.likeCounts[id]) || 0) + (wasLiked ? 1 : -1));
     refreshInteractiveUi();
     alert(error.message || 'Could not update like.');
+  } finally {
+    pendingLikeMutations.delete(id);
   }
 }
 
@@ -3599,15 +3727,17 @@ function bottomNavHtml() {
     ['library', 'Library', 'library'],
     ['account', 'Account', 'account']
   ];
-  const activeRoot = state.screen.startsWith('live') ? 'live' : state.screen;
-  return `<nav class="bottom-nav">${items.map(([key, label, icon]) => `
-    <button class="nav-btn ${activeRoot === key ? 'active' : ''}" data-nav="${key}">
+  const android=Capacitor.getPlatform()==='android';
+  const activeRoot = android ? androidNavigationRoot(state.screen,state.androidNavRoot)
+    : state.screen.startsWith('live') ? 'live' : state.screen;
+  return `<nav class="bottom-nav${android?' android-floating-nav':''}"${android?' aria-label="'+(currentLanguage()==='he'?'ניווט ראשי':'Main navigation')+'"':''}>${android?'<span class="nav-active-indicator" aria-hidden="true"></span>':''}${items.map(([key, label, icon]) => `
+    <button class="nav-btn ${activeRoot === key ? 'active' : ''}" data-nav="${key}"${android?' type="button"'+(activeRoot===key?' aria-current="page"':''):''}>
       <span class="nav-icon">${svgIcon(icon)}</span><span>${tr(label)}</span>
     </button>`).join('')}</nav>`;
 }
 
 function shell(content) {
-  return `<div class="app-shell ${state.sponsorRibbon?.enabled ? 'has-sponsor-ribbon' : ''}">
+  return `<div class="app-shell ${state.sponsorRibbon?.enabled ? 'has-sponsor-ribbon' : ''}${Capacitor.getPlatform()==='android'&&(state.current||(state.watchVideo&&state.watchMinimized))?' android-has-mini':''}">
     ${sponsorRibbonHtml()}
     <header class="topbar">
       <div class="brand">
@@ -3625,7 +3755,7 @@ function shell(content) {
     <main class="content">${content}</main>
     ${state.current && !(state.watchVideo && state.watchMinimized && state.watchMode === 'video') ? miniPlayerHtml() : ''}
     ${donateFabHtml()}
-    ${bottomNavHtml()}
+    ${Capacitor.getPlatform()==='android'?'':bottomNavHtml()}
     ${state.playerOpen && state.current ? fullPlayerHtml() : ''}
     ${state.watchVideo && !state.watchHostedExternally && !state.playerOpen ? watchHtml() : ''}
     <div id="downloadManagerMount">${downloadManagerHtml()}</div>
@@ -3646,6 +3776,7 @@ function clearPersistentVideoMount() {
 }
 
 function refreshPersistentMiniVideoChrome() {
+  syncAndroidVideoDisplay();
   if (!persistentVideoMount) return;
   const button = persistentVideoMount.querySelector('[data-mini-video-play-toggle]');
   if (!button) return;
@@ -3656,9 +3787,10 @@ function refreshPersistentMiniVideoChrome() {
 async function togglePersistentMiniVideoPlayback(event) {
   if (event) event.stopPropagation();
   const player = state.watchVimeo;
-  if (!player || !state.watchVimeoReady) return;
+  if (!player || (!player.isIrgunNativeVideoPlayer && !state.watchVimeoReady)) return;
   try {
-    const paused = await player.getPaused();
+    const paused = player.isIrgunNativeVideoPlayer
+      ? !(await player.refresh()).playWhenReady : await player.getPaused();
     if (paused) await PlaybackController.play();
     else await PlaybackController.pause();
   } catch (_) {}
@@ -3689,6 +3821,16 @@ function bindPersistentVideoChrome() {
     minimize.dataset.bound = '1';
     minimize.addEventListener('click', event => { event.stopPropagation(); minimizeWatchToPersistent(); });
   }
+  const fullscreenControl = persistentVideoMount.querySelector('[data-native-video-fullscreen]');
+  if (fullscreenControl && !fullscreenControl.dataset.bound) {
+    fullscreenControl.dataset.bound = '1';
+    fullscreenControl.addEventListener('click', event => {
+      event.stopPropagation();
+      setAndroidNativeVideoFullscreen(!nativeVideoFullscreen).catch(error => {
+        console.warn('Native video fullscreen toggle failed', error);
+      });
+    });
+  }
   const pip = persistentVideoMount.querySelector('[data-video-pip]');
   if (pip && !pip.dataset.bound) {
     pip.dataset.bound = '1';
@@ -3700,6 +3842,16 @@ function bindPersistentVideoChrome() {
     back.addEventListener('click', event => { event.stopPropagation(); closeWatch(true); });
   }
   refreshPersistentMiniVideoChrome();
+}
+
+function bindWatchClick(el, handler) {
+  // Android keeps Watch outside #app while pages render. Its original controls
+  // must not accumulate listeners alongside bindPersistentVideoChrome().
+  if (Capacitor.getPlatform() === 'android') {
+    if (el.dataset.bound) return;
+    el.dataset.bound = '1';
+  }
+  el.addEventListener('click', handler);
 }
 
 function hostCurrentWatchOverlay(mode = 'full') {
@@ -3761,6 +3913,14 @@ async function minimizeWatchToPersistent() {
   PlaybackController.setPresentation('MINI').catch(()=>{});
   state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0, 300);
 }
+
+// The native PlayerView physically covers the mini thumbnail on Android.
+// Its transparent hit target forwards that REAL Android tap here. Text/keyboard
+// expansion still uses the existing DOM listener. No new playback instance.
+window.__irgunExpandNativeMiniVideo = () => {
+  if (state.watchVideo && state.watchMode === 'video' && state.watchMinimized)
+    void expandPersistentWatch().then(() => state.watchVimeo?.updateFrame?.());
+};
 
 async function expandPersistentWatch() {
   if (!state.watchVideo || !state.watchMinimized) return;
@@ -4378,6 +4538,13 @@ function libraryHtml() {
     ['likes',he?'אהבתי':'My Likes'],['later',he?'לשמירה':'Watch Later'],['history',he?'היסטוריה':'History'],
     ['following',he?'במעקב':'Following'],['downloads',he?'הורדות':'Downloads'],['playlists',he?'רשימות':'Playlists'],['purchased',he?'רכישות':'Purchased']
   ];
+  // Offline files are the only fully usable Library section when signed out.
+  // Put Downloads within physical reach rather than leaving it outside the
+  // horizontal strip after four account-only tabs on narrow Android 11.
+  if (!state.user) {
+    const index=tabs.findIndex(([section])=>section==='downloads');
+    if(index>=0)tabs.unshift(...tabs.splice(index,1));
+  }
   const headerText = state.user ? (he?`מסונכרן עם ${state.user.email||'החשבון שלכם'}.`:`Synced with ${state.user.email || 'your account'}.`) : (he?'הורדות לא מקוונות נשמרות במכשיר. התחברו כדי לסנכרן רשימות, לייקים והיסטוריה.':'Offline downloads stay on this device. Sign in to sync playlists, likes, history and follows.');
   let body = '';
   if (!state.user && !localSection) body = signedOutCard();
@@ -5297,6 +5464,22 @@ function restoreParkedHostedVideo() {
 async function switchVideoToAudioSeamlessly(video, id) {
   const player = state.watchVimeo;
   if (usesNativeUnifiedAudio()) {
+    // Home can commit the prebuffered native Audio session while WebView is
+    // suspended. A late user/visibility Audio callback must NOT loadLecture
+    // or call startAudioAt(shouldPlay=false) from the now-paused VIDEO object:
+    // that would pause the ALREADY-playing Media3 owner after Home.
+    const committed = await Promise.resolve(nativeMediaPlugin()?.getState()).catch(() => null);
+    if (committed?.mode === 'AUDIO' && committed?.audioAuthorityCommitted === true &&
+        String(committed.lectureId || '') === String(id)) {
+      console.debug('[Playback] reuse already-committed native Audio; no second handoff or pause');
+      state.nativePlayback = { ...state.nativePlayback, ...committed, connected:true };
+      state.watchVideoToAudioHandoff = false;
+      state.watchAudioToVideoHandoff = false;
+      state.watchAudioToVideoHandoffId = '';
+      state.watchAudioToVideoTargetSeconds = 0;
+      reconcileNativeWatchAudio(committed);
+      return true;
+    }
     const previousCurrent = state.current;
     let exact = await quickVimeoTime(state.watchResumeSeconds || 0, 350);
     let wasPlaying = Boolean(state.watchVideoPlaying);
@@ -5399,6 +5582,7 @@ async function switchVideoToAudioSeamlessly(video, id) {
       return false;
     }
   }
+  if (Capacitor.getPlatform() === 'android') return false;
   const previousCurrent = state.current;
   const previousMuted = Boolean(audio.muted);
   let exact = await quickVimeoTime(state.watchResumeSeconds || 0, 350);
@@ -5575,6 +5759,16 @@ async function resumeParkedVideoFromAudio(video, id, shouldPlay) {
         state.watchVideoPlaying = false;
       }
       state.watchResumeSeconds = Math.max(0, Number(current)||target);
+      if (player?.isIrgunNativeVideoPlayer && state.watchMode === 'video') {
+        // Older Vimeo handoff/layout events can re-park the permanent host
+        // after native Media3 has already committed VIDEO. That left the
+        // physical PlayerView at x=-12000: frames decoded, black UI.
+        // Restore the actual Video host and reposition this SAME ExoPlayer.
+        if (persistentVideoMount?.classList.contains('watch-audio-parked')) {
+          if (!restoreParkedHostedVideo()) throw new Error('Native video host stayed parked after Video commit');
+        }
+        player.updateFrame?.();
+      }
       refreshPersistentMiniVideoChrome();
       return true;
     } catch (error) {
@@ -5709,12 +5903,12 @@ function watchHtml() {
       <button class="mini-video-play" data-mini-video-play-toggle="1" aria-label="${state.watchVideoPlaying ? 'Pause' : 'Play'}">${state.watchVideoPlaying ? '<span class="pause-mark">II</span>' : svgIcon('play')}</button>
       <button class="mini-video-close" data-close-mini-video="1" aria-label="Close video">×</button>
     </div>
-    <header class="watch-top"><button data-close-watch="1">Back</button><strong>${esc(displayShiurTitle(v.title, 'Shiur'))}</strong>${state.watchMode === 'video' ? `<div class="watch-top-media-actions"><button class="watch-minimize" data-minimize-watch="1" aria-label="Keep playing at bottom of app" title="Mini player">${svgIcon('minimize')}</button>${nativePipPlugin() ? `<button class="watch-pip" data-video-pip="1" aria-label="Picture in Picture" title="Picture in Picture">${svgIcon('pip')}</button>` : ''}</div>` : ''}</header>
+    <header class="watch-top"><button data-close-watch="1">${currentLanguage() === 'he' ? 'חזרה' : 'Back'}</button><strong>${esc(displayShiurTitle(v.title, 'Shiur'))}</strong>${state.watchMode === 'video' ? `<div class="watch-top-media-actions"><button class="watch-minimize" data-minimize-watch="1" aria-label="Keep playing at bottom of app" title="Mini player">${svgIcon('minimize')}</button>${Capacitor.getPlatform() === 'android' ? `<button class="watch-minimize" data-native-video-fullscreen="1" aria-label="${currentLanguage() === 'he' ? 'מסך מלא' : 'Fullscreen'}" title="Fullscreen">⛶</button>` : ''}${nativePipPlugin() ? `<button class="watch-pip" data-video-pip="1" aria-label="Picture in Picture" title="Picture in Picture">${svgIcon('pip')}</button>` : ''}</div>` : ''}</header>
     <div class="watch-scroll">
       <div class="watch-player-card">
-        <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">Video</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">Audio</button>` : ''}</div>
+        <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">${currentLanguage() === 'he' ? 'וידאו' : 'Video'}</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">${currentLanguage() === 'he' ? 'אודיו' : 'Audio'}</button>` : ''}</div>
         ${state.watchMode === 'video'
-          ? `<iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${Capacitor.getPlatform() === 'android' && v.sourceType === 'drive-library' ? 'about:blank' : Capacitor.getPlatform() === 'android' ? watchVimeoEmbedSrc(v, state.watchResumeSeconds).replace('autoplay=1', 'autoplay=0') : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`
+          ? `<iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${Capacitor.getPlatform() === 'android' ? 'about:blank' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`
           : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${playbackDurationSeconds()}" value="${playbackPositionSeconds()}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${playbackIsPaused() ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(playbackPositionSeconds())} / ${fmtDurationOrUnknown(playbackDurationSeconds())}</div></div>`}
       </div>
       <section class="watch-details">
@@ -5723,7 +5917,7 @@ function watchHtml() {
         <div class="watch-actions compact-watch-actions">
           <button class="watch-action ${liked ? 'active' : ''}" data-like="${esc(likeId)}">${svgIcon('heart')}<span class="watch-action-text">${likeCount}</span></button>
           <button class="watch-action ${savePresentation.cls}" data-open-playlist-picker="1" data-playlist-kind="video" data-playlist-id="${esc(id)}">${svgIcon('bookmark')}<span class="watch-action-text">${tr(savePresentation.label)}</span></button>
-          ${v.hasAudio ? (state.watchMode === 'audio' ? `<button class="watch-action" data-switch-video="${esc(id)}">${svgIcon('video')}<span class="watch-action-text">Video</span></button>` : `<button class="watch-action" data-switch-audio="${esc(id)}">${svgIcon('audio')}<span class="watch-action-text">Audio</span></button>`) : ''}
+          ${v.hasAudio ? (state.watchMode === 'audio' ? `<button class="watch-action" data-switch-video="${esc(id)}">${svgIcon('video')}<span class="watch-action-text">${currentLanguage() === 'he' ? 'וידאו' : 'Video'}</span></button>` : `<button class="watch-action" data-switch-audio="${esc(id)}">${svgIcon('audio')}<span class="watch-action-text">${currentLanguage() === 'he' ? 'אודיו' : 'Audio'}</span></button>`) : ''}
           <button class="watch-action" data-share-kind="video" data-share-id="${esc(id)}">${svgIcon('share')}<span class="watch-action-text">Share</span></button>
           <button class="watch-action" data-download-kind="video" data-download-id="${esc(id)}">${svgIcon('download')}<span class="watch-action-text">Download</span></button>
           ${offlineState ? `<button class="watch-action ${offlineState.cls}" data-save-offline-kind="video" data-save-offline-id="${esc(id)}">${offlineIconHtml('watch-offline-icon')}<span class="watch-action-text">${esc(offlineState.label)}</span>${offlineState.status==='downloading'?`<span class="offline-progress-badge">${Number(offlineState.job?.percent)>0?`${Number(offlineState.job.percent)}%`:'…'}</span>`:''}</button>` : ''}
@@ -5748,7 +5942,7 @@ function miniVideoHtml(includeFrame = true) {
   const v = state.watchVideo;
   if (!v || state.watchMode !== 'video') return '';
   const speaker = v._speakerLabel || v.speaker || 'Irgun Shiurai Torah';
-  const frameHtml = includeFrame ? `<iframe id="watchVimeoFrame" class="mini-video-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${v.sourceType === 'drive-library' ? 'about:blank' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>` : '';
+  const frameHtml = includeFrame ? `<iframe id="watchVimeoFrame" class="mini-video-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${Capacitor.getPlatform() === 'android' || v.sourceType === 'drive-library' ? 'about:blank' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>` : '';
   return `<div class="mini-video-player">
     <div class="mini-video-frame-wrap" data-expand-watch="1" role="button" aria-label="Open video">${frameHtml}</div>
     <div class="mini-video-copy" data-expand-watch="1" role="button" tabindex="0"><strong>${esc(displayShiurTitle(v.title, 'Shiur'))}</strong><span>${esc(speaker)}</span></div>
@@ -6328,7 +6522,12 @@ function preserveAuthFormDraft() {
 }
 
 function render() {
+  syncAndroidBottomNavigation();
+  syncAndroidVideoDisplay();
   if (tabSwipeRenderGate.shouldDefer()) return;
+  // Closing Audio or opening Video must replace the sheet immediately: the
+  // persistent Video host consumes the newly rendered overlay synchronously.
+  if (state.playerOpen && androidPlayerSheetRenderGate.shouldDefer()) return;
   // Keep the actual focused input/Android IME connection alive. Copying the
   // value into a replacement field still drops native keys queued for the old one.
   if (state.screen === 'home' && !state.loading && !state.error && document.activeElement?.id === 'homeLibrarySearch') {
@@ -6365,10 +6564,17 @@ function render() {
     : accountHtml();
   const restoreAuthDraft = preserveAuthFormDraft();
   const restoreSearchDraft = preserveHomeSearchDraft();
+  const restorePlayerSheetScroll=preserveAndroidPlayerSheetScroll({document,
+    isAndroid:()=>Capacitor.getPlatform()==='android'&&state.playerOpen,
+    playerKey:`${state.current?.kind||''}:${state.current?.id||''}`});
   app.innerHTML = shell(content + playlistPickerHtml());
   bind();
+  // Reconcile the native Android Video surface after every modal change.
+  // Physical PlayerView must never cover native WebView dialog controls.
+  state.watchVimeo?.updateFrame?.();
   restoreAuthDraft();
   restoreSearchDraft();
+  restorePlayerSheetScroll();
   syncLivePlaybackAnalytics();
   updatePlayerUi();
   refreshOfflineButtonsForKey();
@@ -6493,12 +6699,39 @@ function bindDonationControls(root=document) {
   qsa('[data-donation-back]').forEach(el => el.addEventListener('click', () => closeDonationCheckout(true)));
 }
 
-function bind() {
-  document.querySelectorAll('[data-retry-library]').forEach(el => el.addEventListener('click', () => bootstrap({ manual:true })));
-  document.querySelectorAll('[data-nav]').forEach(el => el.addEventListener('click', () => {
+function refreshAndroidPlayerSpeedChoices() {
+  document.querySelectorAll('[data-speed-choice]').forEach(button=>
+    button.classList.toggle('active',Number(button.dataset.speedChoice)===state.playbackSpeed));
+}
+function bindPlayerSpeedChoices() {
+  document.querySelectorAll('[data-speed-choice]').forEach(el=>el.addEventListener('click',()=>{
+    const refresh=()=>Capacitor.getPlatform()==='android'?refreshAndroidPlayerSpeedChoices():render();
+    // Updating Android's buttons in place keeps the scrolled settings and the
+    // next touch target alive while the same Media3 player applies its speed.
+    return PlaybackController.setSpeed(Number(el.dataset.speedChoice)||1).then(refresh).catch(refresh);
+  }));
+}
+let androidNavigationSequence=0;
+async function navigateToScreen(el) {
+    const sequence=++androidNavigationSequence;
+    if(Capacitor.getPlatform()==='android'&&el.closest('.android-floating-nav')){
+      state.screen=el.dataset.nav;
+      syncAndroidBottomNavigation();
+      await prepareAndroidTabNavigation({state,
+        exitFullscreen:()=>window.__irgunExitNativeVideoFullscreen(),
+        minimizeVideo:()=>minimizeWatchToPersistent(),closeAudioWatch:()=>closeWatch(true)});
+      if(sequence!==androidNavigationSequence)return;
+    }
     state.screen = el.dataset.nav;
     if (el.dataset.openPurchased) state.librarySection = 'purchased';
     if (el.dataset.openHistory) state.librarySection = 'history';
+    if (state.screen === 'library' && !state.user && !el.dataset.openPurchased &&
+        !el.dataset.openHistory &&
+        ['likes','later','history','following'].includes(state.librarySection)) {
+      // After an offline process restart, show the saved recordings instead
+      // of a Sign In placeholder. My Likes stays reachable by an explicit tab.
+      state.librarySection='downloads';
+    }
     if (state.screen === 'schedule') state.scheduleDataLoaded = false;
     if (state.screen === 'donate') { state.donationProvider = 'stripe'; closeDonationCheckout(false); }
     if (state.screen.startsWith('live')) { state.scheduleDataLoaded = false; state.liveStatusLoaded = false; }
@@ -6506,7 +6739,13 @@ function bind() {
     state.filterDialog = '';
     render();
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }));
+}
+function bind() {
+  document.querySelectorAll('[data-retry-library]').forEach(el => el.addEventListener('click', () => bootstrap({ manual:true })));
+  document.querySelectorAll('[data-nav]').forEach(el => {
+    if(Capacitor.getPlatform()==='android'&&el.closest('#androidBottomNavigationMount'))return;
+    el.addEventListener('click',()=>{void navigateToScreen(el);});
+  });
 
   document.querySelectorAll('[data-language-toggle]').forEach(el => el.addEventListener('click', async () => {
     if (state.watchVideo) await preserveWatchTime();
@@ -6857,11 +7096,7 @@ function bind() {
     playLibraryAudio(el.dataset.listenAudio);
   }));
 
-  document.querySelectorAll('[data-like]').forEach(el => el.addEventListener('click', async event => {
-    event.stopPropagation();
-    await preserveWatchTime();
-    toggleLike(el.dataset.like);
-  }));
+  bindLikeButtons(document);
   document.querySelectorAll('[data-save]').forEach(el => el.addEventListener('click', async event => {
     event.stopPropagation();
     await preserveWatchTime();
@@ -6914,6 +7149,7 @@ function bind() {
     }
   }));
   document.querySelectorAll('[data-player-sheet]').forEach(el => {
+    if(Capacitor.getPlatform()==='android')el.dataset.irgunPlayerKey=`${state.current?.kind||''}:${state.current?.id||''}`;
     el.addEventListener('click', event => event.stopPropagation());
     bindPlayerSwipeToClose(el);
   });
@@ -6928,24 +7164,32 @@ function bind() {
   if (seek) seek.addEventListener('input', () => {
     PlaybackController.seekTo(Number(seek.value) || 0).catch(()=>{});
   });
-  document.querySelectorAll('[data-speed-choice]').forEach(el => el.addEventListener('click', () => {
-    PlaybackController.setSpeed(Number(el.dataset.speedChoice) || 1).then(()=>render()).catch(()=>render());
-  }));
+  bindPlayerSpeedChoices();
   document.querySelectorAll('[data-sleep-choice]').forEach(el => el.addEventListener('click', () => setSleepTimer(el.dataset.sleepChoice)));
   const watchAudioSeek = document.getElementById('watchAudioSeek');
   if (watchAudioSeek) watchAudioSeek.addEventListener('input', () => {
     PlaybackController.seekTo(Number(watchAudioSeek.value) || 0).catch(()=>{});
   });
 
-  document.querySelectorAll('[data-close-watch]').forEach(el => el.addEventListener('click', () => closeWatch(true)));
-  document.querySelectorAll('[data-watch-mode]').forEach(el => el.addEventListener('click', () => switchWatchMode(el.dataset.watchMode)));
-  document.querySelectorAll('[data-switch-audio]').forEach(el => el.addEventListener('click', () => switchWatchMode('audio')));
-  document.querySelectorAll('[data-switch-video]').forEach(el => el.addEventListener('click', () => switchWatchMode('video')));
+  document.querySelectorAll('[data-close-watch]').forEach(el => bindWatchClick(el, () => closeWatch(true)));
+  document.querySelectorAll('[data-watch-mode]').forEach(el => bindWatchClick(el, () => switchWatchMode(el.dataset.watchMode)));
+  document.querySelectorAll('[data-switch-audio]').forEach(el => bindWatchClick(el, () => switchWatchMode('audio')));
+  document.querySelectorAll('[data-switch-video]').forEach(el => bindWatchClick(el, () => switchWatchMode('video')));
 
-  document.querySelectorAll('[data-minimize-watch]').forEach(el => el.addEventListener('click', minimizeWatchToPersistent));
-  document.querySelectorAll('[data-video-pip]').forEach(el => el.addEventListener('click', enterSystemPictureInPicture));
-  document.querySelectorAll('[data-expand-watch]').forEach(el => el.addEventListener('click', expandPersistentWatch));
-  document.querySelectorAll('[data-close-mini-video]').forEach(el => el.addEventListener('click', () => closeWatch(true)));
+  document.querySelectorAll('[data-minimize-watch]').forEach(el => bindWatchClick(el, minimizeWatchToPersistent));
+  document.querySelectorAll('[data-native-video-fullscreen]').forEach(el => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = '1';
+    el.addEventListener('click', event => {
+      event.stopPropagation();
+      setAndroidNativeVideoFullscreen(!nativeVideoFullscreen).catch(error => {
+        console.warn('Native video fullscreen toggle failed', error);
+      });
+    });
+  });
+  document.querySelectorAll('[data-video-pip]').forEach(el => bindWatchClick(el, enterSystemPictureInPicture));
+  document.querySelectorAll('[data-expand-watch]').forEach(el => bindWatchClick(el, expandPersistentWatch));
+  document.querySelectorAll('[data-close-mini-video]').forEach(el => bindWatchClick(el, () => closeWatch(true)));
   const downloadMount = document.getElementById('downloadManagerMount');
   if (downloadMount) bindDownloadManager(downloadMount);
 
@@ -7529,6 +7773,10 @@ async function startAudio(item, resumeAt = 0) {
   }
   state.current = effective;
   item = effective;
+  // Every Android playback request retries native Media3; it never activates
+  // WebView HTML audio when the native engine is unavailable.
+  if (Capacitor.getPlatform() === 'android' && state.nativePlaybackDisabled)
+    state.nativePlaybackDisabled = false;
 
   if (usesNativeUnifiedAudio()) {
     // Ask only on a real user playback action, never during app startup.
@@ -7558,7 +7806,7 @@ async function startAudio(item, resumeAt = 0) {
       nativeStarted = true;
     } catch (error) {
       disableNativePlayback(error);
-      setToast(currentLanguage()==='he'?'הנגן המובנה לא זמין; עברנו לנגן החלופי.':'Native playback is unavailable; switched to the fallback player.');
+      setToast(currentLanguage()==='he'?'נגן האודיו המובנה נכשל. לחצו על הפעלה כדי לנסות שוב.':'Native audio could not start. Tap Play to retry.');
     }
     if (nativeStarted) {
       state.nativePlayback.mode = 'AUDIO';
@@ -7570,6 +7818,14 @@ async function startAudio(item, resumeAt = 0) {
       updatePlayerUi();
       return;
     }
+  }
+  if (Capacitor.getPlatform() === 'android') {
+    // Do not silently create a second browser audio decoder on native failure.
+    state.nativePlayback.isPlaying = false;
+    try { audio.pause(); audio.removeAttribute('src'); audio.load(); } catch (_) {}
+    render();
+    updatePlayerUi();
+    return;
   }
 
   const same = state.current && state.current.kind === effective.kind && state.current.id === effective.id && audio.src === item.url;
@@ -7668,6 +7924,7 @@ async function enterSystemPictureInPicture() {
     // Keep the live Vimeo frame untouched while Android captures/resizes the
     // Activity. The native PiP callback applies the PiP layout only after entry.
     const result = await plugin.enter();
+    if (result?.nativeMessageShown) return;
     if (!result || !result.entered) {
       if (!state.watchVideoPlaying) setNativePipEligibility(false);
       setToast(currentLanguage() === 'he' ? 'הפעילו את הווידאו ואז נסו שוב.' : 'Start the video, then try Picture in Picture again.');
@@ -7681,6 +7938,13 @@ async function enterSystemPictureInPicture() {
 async function restoreAfterSystemPip() {
   if (!state.watchVideo || state.watchMode !== 'video' || !state.watchVimeo) return;
   const player = state.watchVimeo;
+  if (Capacitor.getPlatform() === 'android' && player.isIrgunNativeVideoPlayer) {
+    // Native PiP never transferred playback. Only restore surface geometry;
+    // legacy saved Vimeo time must not seek the continuously playing ExoPlayer.
+    await setNativeVideoFullscreen(false);
+    player.updateFrame?.();
+    return;
+  }
   const target = Math.max(0, Number(state.systemPipLastSeconds) || Number(state.watchResumeSeconds) || 0);
   try {
     // Give Android one frame to finish restoring the normal Activity size, then
@@ -7804,7 +8068,7 @@ function disableNativePlayback(error) {
     hasAudioSource:false
   };
   state.playbackAuthorityFence = null;
-  console.warn('[Playback] Native player disabled for this session; using HTML audio fallback', error || 'unknown error');
+  console.warn('[Playback] Native Media3 unavailable; Android HTML audio fallback is forbidden', error || 'unknown error');
   // Fully clear the native lecture/session before HTML audio takes over. Leaving
   // clearLecture=false can preserve stale metadata and an obsolete notification.
   try { plugin?.stopAudio?.({ clearLecture:true }).catch(()=>{}); } catch (_) {}
@@ -7822,11 +8086,11 @@ async function recoverFromNativePlaybackError(event = {}) {
   const mode = String(event?.mode || state.nativePlayback?.mode || '').toUpperCase();
   const message = event?.message || (currentLanguage()==='he'?'שגיאת ניגון.':'Playback error.');
 
-  // A shadow-source failure must never interrupt a healthy Vimeo video. Disable
-  // native playback for this session and keep the visible source authoritative.
+  // Android Video is also native Media3: do not disable its sole engine
+  // or report that a non-existent WebView/Vimeo decoder is still playing.
   if (mode === 'VIDEO') {
-    disableNativePlayback(message);
-    setToast(currentLanguage()==='he'?'הווידאו ממשיך לנגן. אודיו חלופי ישמש במקרה הצורך.':'Video is still playing. The fallback audio player will be used if needed.');
+    console.warn('[Playback] Native Media3 VIDEO error', message);
+    setToast(currentLanguage()==='he'?'לא ניתן להפעיל את הווידאו. נסו שוב.':'Video could not play. Please try again.');
     return;
   }
 
@@ -7871,47 +8135,21 @@ async function recoverFromNativePlaybackError(event = {}) {
       }
     }
 
-    const fallbackUrl = String(currentItem.networkUrl || currentItem.url || '');
     if (currentItem.kind === 'paid-audio') {
       await savePaidAudioProgress(false, true).catch(()=>{});
     } else if (state.user) {
       saveHistory(currentItem.id, 'audio', position, duration, false, { reconcile:true }).catch(()=>{});
     }
-
     disableNativePlayback(message);
-    if (!fallbackUrl) {
-      setToast(message);
-      return;
-    }
-
-    const fallbackItem = { ...currentItem, offline:false, url:fallbackUrl };
-    state.current = fallbackItem;
-    try { audio.pause(); } catch (_) {}
-    audio.src = fallbackUrl;
-    audio.preload = 'auto';
-    audio.playbackRate = state.playbackSpeed;
-    setupMediaSession(fallbackItem);
-    const applyResume = () => {
-      try {
-        const cap = Number.isFinite(audio.duration) && audio.duration > 1 ? Math.max(0, audio.duration - 1) : position;
-        audio.currentTime = Math.min(position, cap);
-      } catch (_) {}
-    };
-    if (audio.readyState >= 1) applyResume();
-    else audio.addEventListener('loadedmetadata', applyResume, { once:true });
-
+    state.watchResumeSeconds = position;
+    state.nativePlayback.currentPositionMs = Math.round(position * 1000);
+    state.nativePlayback.isPlaying = false;
     if (state.watchVideo && videoId(state.watchVideo) === String(currentItem.id || '')) {
       state.watchMode = 'audio';
-      state.watchResumeSeconds = position;
       state.watchVideoPlaying = false;
       parkHostedVideoForAudio();
     }
-
-    if (shouldPlay) {
-      try { await audio.play(); } catch (fallbackError) { console.warn('[Playback] HTML fallback needs a user tap', fallbackError); }
-    }
-    state.audioLastHistoryAt = 0;
-    setToast(currentLanguage()==='he'?'עברנו לנגן החלופי בלי לאבד את המקום.':'Switched to the fallback player without losing your place.');
+    setToast(currentLanguage()==='he'?'האודיו המובנה נעצר. לחצו על הפעלה כדי לנסות שוב.':'Native audio stopped. Tap Play to retry.');
     render();
     updatePlayerUi();
   } finally {
@@ -7957,7 +8195,15 @@ function nativeAudioPositionSeconds() {
 }
 
 function nativeAudioDurationSeconds() {
-  return Math.max(0, Number(state.nativePlayback?.durationMs) || 0) / 1000;
+  const id=String(state.nativePlayback?.lectureId||'');
+  const duration=Math.max(0,Number(state.nativePlayback?.durationMs)||Number(state.nativePlayback?.audioDurationMs)||0)/1000;
+  if(duration>0&&id) { state.nativeKnownDuration={id,seconds:duration}; return duration; }
+  // A network error may temporarily remove Media3's timeline. Keep the last
+  // actual duration for THIS lecture so its physical seek bar stays usable.
+  if(id&&state.nativeKnownDuration?.id===id) return state.nativeKnownDuration.seconds;
+  if(id&&state.watchVideo&&videoId(state.watchVideo)===id) return Math.max(0,Number(state.watchVideo.duration)||0);
+  if(id&&String(state.current?.id||'')===id) return Math.max(0,Number(state.current.duration)||0);
+  return 0;
 }
 
 function playbackPositionSeconds() {
@@ -8058,6 +8304,12 @@ function reconcileNativeWatchAudio(snapshot) {
   // Initial MP3 prewarming publishes AUDIO before Video can decode. That
   // metadata callback is not a user Audio selection or a completed Home handoff.
   if (state.watchMode === 'video' && snapshot.audioAuthorityCommitted !== true && !state.nativeBackgroundHandoff && !document.hidden) return;
+  // Home temporarily disables the video track; it does not change the user's
+  // chosen presentation. The Activity restores that track on foreground return.
+  if (snapshot.resumeVideoOnForeground && state.watchVimeo?.isIrgunNativeVideoPlayer) {
+    state.watchResumeSeconds = Math.max(0,Number(snapshot.currentPositionMs)||0)/1000;
+    return;
+  }
   const wasVideo = state.watchMode === 'video';
   ensureNativeAudioCurrentForWatch(snapshot);
   state.nativeBackgroundHandoff = false;
@@ -8192,6 +8444,16 @@ const PlaybackController = {
 
   async play() {
     if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo) return state.watchVimeo.play();
+    if (Capacitor.getPlatform() === 'android' && !usesNativeUnifiedAudio()) {
+      if (state.watchVideo && state.watchMode === 'video') {
+        setToast(currentLanguage()==='he'?'נסו שוב להפעיל את הווידאו.':'Try the video again to continue.');
+        return null;
+      }
+      if (!state.current) return null;
+      state.nativePlaybackDisabled = false;
+      const resume = Number(state.nativePlayback?.currentPositionMs || 0) / 1000;
+      return startAudio(state.current, Math.max(0, resume));
+    }
     if (usesNativeUnifiedAudio()) {
       const plugin = nativeMediaPlugin();
       // The old play() bridge resolved even when Media3 still owned VIDEO or
@@ -8221,6 +8483,7 @@ const PlaybackController = {
 
   async pause() {
     if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo) return state.watchVimeo.pause();
+    if (Capacitor.getPlatform() === 'android' && !usesNativeUnifiedAudio()) return null;
     if (usesNativeUnifiedAudio()) {
       const result = await nativeMediaPlugin().pause();
       return result;
@@ -8230,6 +8493,7 @@ const PlaybackController = {
 
   async seekTo(seconds) {
     const value = Math.max(0, Number(seconds)||0);
+    if (Capacitor.getPlatform() === 'android' && !usesNativeUnifiedAudio() && !state.watchVimeo) return;
     if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo) {
       await state.watchVimeo.setCurrentTime(value);
       state.watchResumeSeconds = value;
@@ -8245,6 +8509,7 @@ const PlaybackController = {
   },
 
   async seekBy(seconds) {
+    if (Capacitor.getPlatform() === 'android' && !usesNativeUnifiedAudio() && !state.watchVimeo) return;
     if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo) {
       const now = await state.watchVimeo.getCurrentTime().catch(()=>state.watchResumeSeconds||0);
       const duration = await state.watchVimeo.getDuration().catch(()=>0);
@@ -8264,7 +8529,7 @@ const PlaybackController = {
     state.playbackSpeed = value;
     localStorage.setItem(SPEED_KEY, String(value));
     if (usesNativeUnifiedAudio()) nativeMediaPlugin().setSpeed({ rate:value }).catch(()=>{});
-    else audio.playbackRate = value;
+    else if (Capacitor.getPlatform() !== 'android') audio.playbackRate = value;
     if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo && typeof state.watchVimeo.setPlaybackRate === 'function') {
       await state.watchVimeo.setPlaybackRate(value).catch(()=>{});
     }
@@ -8456,6 +8721,7 @@ function syncLoadedLibraryAudioDuration() {
 }
 
 function updatePlayerUi() {
+  syncAndroidVideoDisplay();
   if (!state.current) return;
   const duration = playbackDurationSeconds();
   const position = playbackPositionSeconds();
@@ -8526,7 +8792,7 @@ audio.addEventListener('ended', async () => {
   if (!advanced) updatePlayerUi();
 });
 audio.addEventListener('error', () => {
-  if (usesNativeUnifiedAudio()) return;
+  if (Capacitor.getPlatform() === 'android') return;
   console.warn('Audio playback error', audio.error);
   if (state.current?.offline && state.current?.networkUrl && navigator.onLine !== false) {
     const networkUrl = state.current.networkUrl;
@@ -8583,6 +8849,7 @@ async function openWatch(id, requestedTime = null, options = {}) {
   setPlaybackAuthorityFence('VIDEO', id, 5000);
   state.watchVideo = video;
   state.watchVideoForceVimeoId = '';
+  state.watchNativeVideoFailedId = '';
   state.pendingWatchMode = '';
   state.watchMode = 'video';
   state.watchAudioToVideoHandoff = Boolean(fromAudioWasPlaying);
@@ -8633,14 +8900,34 @@ async function preserveWatchTime() {
 
 async function closeWatch(save = true) {
   if (!state.watchVideo) return;
+  const closingVideo = state.watchVideo;
   const closingPlayer = state.watchVimeo;
-  const generation = state.watchVimeoGeneration;
+  // Small isolated playback tests do not provide the Capacitor bridge. In the
+  // real Android app it is always loaded; avoid throwing before cleanup in
+  // bare/other-platform environments.
+  const androidWatch = typeof Capacitor !== 'undefined' && Capacitor.getPlatform() === 'android';
+  // Invalidate an in-flight Android Media3 start as soon as Back is clicked.
+  // Otherwise a slow/erroring native video can replace closingPlayer while
+  // this async handler saves history, leaving the visible Watch stuck open.
+  // Preserve the existing iOS close behavior and generation timing.
+  const generation = androidWatch ? ++state.watchVimeoGeneration : state.watchVimeoGeneration;
+  const sameWatch = () => generation === state.watchVimeoGeneration &&
+    state.watchVideo === closingVideo && (androidWatch || closingPlayer === state.watchVimeo);
   const continuingAudioId = usesNativeUnifiedAudio() && state.watchMode === 'audio' && !playbackIsPaused()
     ? String(state.current?.id || '') : '';
   if (save) await preserveWatchTime();
   if (state.watchMode === 'video' && state.watchVideo && save) {
-    let duration = 0;
-    try { duration = state.watchVimeo ? await state.watchVimeo.getDuration() : Number(state.watchVideo.duration) || 0; } catch (_) {}
+    let duration = Number(closingVideo.duration) || 0;
+    if (closingPlayer) {
+      try {
+        // A failed Media3 source may never answer a native duration request.
+        // Do not block the physical Back button on a stalled bridge call.
+        duration = androidWatch ? await Promise.race([
+          Promise.resolve().then(() => closingPlayer.getDuration()).catch(() => duration),
+          new Promise(resolve => setTimeout(() => resolve(duration), 900))
+        ]) : await closingPlayer.getDuration();
+      } catch (_) {}
+    }
     // Queue the actual position before closing, but keep Back usable while
     // server history writes or reconciliation are slow.
     saveHistory(videoId(state.watchVideo), 'video', state.watchResumeSeconds || 0, duration, false, { reconcile:true }).catch(error =>
@@ -8653,20 +8940,30 @@ async function closeWatch(save = true) {
     if (snapshot) saveAudioHistorySnapshot(snapshot, false, { reconcile:true }).catch(error =>
       console.warn('Could not save Audio history after closing Watch', error));
   }
-  if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
-  try { if (closingPlayer) await closingPlayer.destroy(); } catch (_) {}
-  if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
+  if (!sameWatch()) return;
+  try {
+    if (closingPlayer) {
+      const teardown = Promise.resolve().then(() => closingPlayer.destroy());
+      // Video is additionally stopped by clearNativeMediaSession below. An
+      // unresponsive native close must not hold the Watch overlay indefinitely.
+      if (androidWatch && state.watchMode === 'video') await Promise.race([
+        teardown, new Promise(resolve => setTimeout(resolve, 1800))
+      ]);
+      else await teardown;
+    }
+  } catch (_) {}
+  if (!sameWatch()) return;
   if (continuingAudioId) {
     // Removing a parked WebView decoder can deliver AUDIO_FOCUS_LOSS to the
     // still-playing Media3 source. The native guard preserves explicit Pause.
     await new Promise(resolve => setTimeout(resolve,150));
-    if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
+    if (!sameWatch()) return;
     if (state.watchMode === 'audio' && String(state.current?.id || '') === continuingAudioId) {
       await nativeMediaPlugin().restoreAudioAfterVideoTeardown({lectureId:continuingAudioId}).catch(()=>{});
       await PlaybackController.refreshFromNative().catch(()=>{});
     }
   }
-  if (generation !== state.watchVimeoGeneration || closingPlayer !== state.watchVimeo) return;
+  if (!sameWatch()) return;
   if (state.watchMode === 'video') {
     clearCurrentAudioStateForVideo();
     clearNativeMediaSession();
@@ -8674,11 +8971,12 @@ async function closeWatch(save = true) {
   state.watchVimeo = null;
   state.watchVimeoReady = false;
   state.watchVideoPlaying = false;
-  state.watchVimeoGeneration += 1;
+  if (!androidWatch) state.watchVimeoGeneration += 1;
   setNativeVideoFullscreen(false);
   clearPersistentVideoMount();
   state.watchVideo = null;
   state.watchVideoForceVimeoId = '';
+  state.watchNativeVideoFailedId = '';
   if (!state.current) usageAnalytics.setMedia({isPlaying:false,mediaType:'none',playerState:'browsing',shiurId:''});
   state.pendingWatchMode = '';
   state.watchAudioToVideoHandoff = false;
@@ -8704,15 +9002,22 @@ async function performWatchModeSwitch(mode) {
     // stale clock, sound overlap or WebView handoff transaction.
     const player=state.watchVimeo;
     const previous=state.watchMode;
-    await player.setMode(mode);
+    const baseAudio=mode==='audio'?videoAudioPlaybackItem(video,id):null;
+    const offlineRecord=baseAudio?offlineRecordForAudioItem(baseAudio):null;
+    const offlineUri=offlineRecord?.uri||'';
+    // Merely hiding HLS's Video track does not use the downloaded MP3. When a
+    // verified offline copy exists, route the SAME Media3 ExoPlayer to that
+    // private file and retain the exact clock. Video restores original HLS.
+    await player.setMode(mode,{offlineUri});
     let observed=null;
     for(let attempt=0;attempt<12;attempt++){
       observed=await player.refresh();
       if(observed.active&&observed.videoSelected===(mode==='video'))break;
       await new Promise(resolve=>setTimeout(resolve,120));
     }
-    if(!observed?.active||observed.videoSelected!==(mode==='video')){
-      console.warn('[Media3 beta] native mode switch did not commit',observed);
+    if(!observed?.active||observed.videoSelected!==(mode==='video')||
+        (mode==='audio'&&offlineUri&&observed.sourceType!=='offline-mp3')){
+      console.warn('[Media3] native mode/file source switch did not commit',observed);
       await player.setMode(previous).catch(()=>{});
       return false;
     }
@@ -8723,8 +9028,25 @@ async function performWatchModeSwitch(mode) {
     state.watchAudioToVideoHandoffId='';
     state.watchAudioToVideoTargetSeconds=0;
     state.watchMinimized=false;
-    if(mode==='audio'){
-      if(!state.current || String(state.current.id)!==String(id)) state.current=videoAudioPlaybackItem(video,id);
+    // Media3 remains attached to the single permanent Watch host. A WebView
+    // Audio render deliberately creates an Audio overlay in #app. When the
+    // user returns to Video, set hostedExternally BEFORE render() so it does
+    // not create a second full-size Watch overlay on top of the mini player.
+    // Previous emulator runs saw two overlays and a visually blocked mini
+    // Expand control even though ExoPlayer kept moving.
+    if(mode==='video'){
+      if(!restoreParkedHostedVideo()){
+        throw new Error('Native Media3 Video cannot restore its single persistent Watch host');
+      }
+      clearCurrentAudioStateForVideo();
+    }else{
+      parkHostedVideoForAudio();
+      const networkUrl=baseAudio?.url||'';
+      const localUrl=offlineFileUrl(offlineRecord);
+      state.current=offlineRecord
+        ? { ...baseAudio, url:localUrl, networkUrl,
+            nativeBackgroundUrl:offlineUri, offline:true, offlineKey:offlineRecord.key }
+        : { ...baseAudio, networkUrl, offline:false };
       setNativePipEligibility(false);
     }
     await PlaybackController.refreshFromNative().catch(()=>{});
@@ -8742,7 +9064,7 @@ async function performWatchModeSwitch(mode) {
     state.watchAudioToVideoTargetSeconds = 0;
     const switched = await switchVideoToAudioSeamlessly(video, id);
     if (!switched) {
-      if (usesNativeUnifiedAudio()) {
+      if (Capacitor.getPlatform() === 'android' || usesNativeUnifiedAudio()) {
         setToast(currentLanguage()==='he'?'האודיו עדיין לא מוכן. הווידאו ממשיך לנגן.':'Audio is not ready yet. Video is still playing.');
         return false;
       }
@@ -8793,7 +9115,7 @@ async function performWatchModeSwitch(mode) {
     render();
     const ok = await resumeParkedVideoFromAudio(video, id, keepAudioUntilVideoStarts);
     if (!ok) {
-      if (usesNativeUnifiedAudio()) {
+      if (Capacitor.getPlatform() === 'android' || usesNativeUnifiedAudio()) {
         state.watchMode = 'audio';
         setPlaybackAuthorityFence('AUDIO', id, 2500);
         parkHostedVideoForAudio();
@@ -8913,6 +9235,34 @@ async function finishInitializedNativeVideoHandoff(player, video, videoKey) {
   return transferred;
 }
 
+function showAndroidNativeVideoError(frame, detail) {
+  const container = frame?.parentElement;
+  if (!container) return;
+  frame.src = 'about:blank';
+  frame.style.visibility = 'hidden';
+  container.querySelector('[data-native-video-error]')?.remove();
+  const notice = document.createElement('div');
+  notice.dataset.nativeVideoError = '1';
+  notice.className = 'watch-video-error';
+  notice.setAttribute('role','alert');
+  const message = document.createElement('p');
+  message.textContent = detail?.code==='VIDEO_NOT_READY'
+    ? (currentLanguage()==='he'?'הווידאו עדיין לא זמין. נסו שוב מאוחר יותר.':'This video is not available yet. Please try again later.')
+    : (currentLanguage()==='he'?'לא ניתן לטעון את הווידאו. בדקו את החיבור ונסו שוב.':'Video could not load. Check your connection and try again.');
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.textContent = currentLanguage()==='he'?'נסו שוב':'Try video again';
+  retry.addEventListener('click', () => {
+    notice.remove();
+    state.watchNativeVideoFailedId = '';
+    void initWatchVimeo(true);
+  });
+  notice.append(message,retry);
+  container.append(notice);
+  state.watchVimeo?.updateFrame?.();
+  console.warn('[Media3] Native-only Video failed, no WebView fallback',detail);
+}
+
 function initWatchVimeo(userInitiated = false) {
   if (state.watchVimeo) return Promise.resolve();
   const generation = state.watchVimeoGeneration;
@@ -8934,70 +9284,70 @@ async function initWatchVimeoOnce(userInitiated = false) {
   const frame = document.getElementById('watchVimeoFrame');
   if (!video || !frame || state.watchMode !== 'video') return;
   const directOnly = video.sourceType === 'drive-library';
+  const androidVimeoOnly = Capacitor.getPlatform()==='android' && isAndroidVimeoOnlyVideo(video);
   // Android HLS must start even if the optional Vimeo SDK is blocked or late.
   if (!directOnly && Capacitor.getPlatform() !== 'android' && !window.Vimeo?.Player) return;
   const generation = state.watchVimeoGeneration;
   const videoKey = videoId(video);
   let player = null;
   try {
-    if (state.watchVideoForceVimeoId !== videoKey) {
+    if (Capacitor.getPlatform() === 'android' && !androidVimeoOnly) {
+      // Android playback uses native Media3 exclusively. No WebView HLS.js,
+      // Vimeo iframe or second audio decoder is allowed, even on an error.
+      frame.src = 'about:blank';
+      frame.style.visibility = 'hidden';
+      if (state.watchNativeVideoFailedId === videoKey && !userInitiated) return;
+      frame.parentElement?.querySelector('[data-native-video-error]')?.remove();
       try {
-        if (Capacitor.getPlatform() === 'android' && nativeMedia3BetaEnabled()) {
-          try {
-            player = await createNativeMedia3VideoPlayer({
-              apiBase:API,videoId:videoKey,iframe:frame,
-              resumeSeconds:Math.max(0,Number(state.watchResumeSeconds)||0),
-              title:displayShiurTitle(video.title,'Shiur'),
-              speaker:video._speakerLabel||video.speaker||'Irgun Shiurai Torah',
-              image:video.thumbnail||video.image||'',
-              audioUrl:video.hasAudio?audioUrl(mediaApiId(video,videoKey)):'',
-              speed:Number(state.playbackSpeed)||1,
-              onError:error=>console.warn('[Media3 beta] native Video failed',error)
-            });
-          } catch (nativeError) {
-            console.warn('[Media3 beta] falling back to the existing WebView player',nativeError);
-          }
-        }
-        if (!player) player = await createAndroidHlsPlayer({
-          apiBase: API,
-          platform: Capacitor.getPlatform(),
-          videoId: videoKey,
-          iframe: frame,
-          resumeSeconds: Math.max(0, Number(state.watchResumeSeconds) || 0),
-          isPictureInPicture: () => state.systemPipActive,
-          onSpeedChange: rate => {
-            if (generation === state.watchVimeoGeneration && videoId(state.watchVideo) === videoKey) {
-              void PlaybackController.setSpeed(rate);
-            }
+        player = await createNativeMedia3VideoPlayer({
+          apiBase: API,videoId:videoKey,iframe:frame,
+          resumeSeconds:Math.max(0,Number(state.watchResumeSeconds)||0),
+          title:displayShiurTitle(video.title,'Shiur'),
+          speaker:video._speakerLabel||video.speaker||'Irgun Shiurai Torah',
+          image:video.thumbnail||video.image||'',
+          audioUrl:video.hasAudio?audioUrl(mediaApiId(video,videoKey)):'',
+          speed:Number(state.playbackSpeed)||1,
+          onRecovered:()=>{
+            if (generation!==state.watchVimeoGeneration || state.watchMode!=='video') return;
+            state.watchNativeVideoFailedId='';
+            frame.parentElement?.querySelector('[data-native-video-error]')?.remove();
+            state.watchVimeo?.updateFrame?.();
           },
-          onMinimize: () => {
-            if (generation === state.watchVimeoGeneration && state.watchMode === 'video' && !state.systemPipActive && !state.watchMinimized && videoId(state.watchVideo) === videoKey) {
-              void minimizeWatchToPersistent();
+          onError:error=>{
+            if (generation===state.watchVimeoGeneration && state.watchMode==='video') {
+              state.watchNativeVideoFailedId=videoKey;
+              if (!frame.parentElement?.querySelector('[data-native-video-error]'))
+                showAndroidNativeVideoError(frame,error);
             }
-          },
-          onError: async (error, position, autoplay, failedPlayer) => {
-            if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video' || videoId(state.watchVideo) !== videoKey) return;
-            if (directOnly) { console.error('[Playback] Drive video HLS and MP4 failed:', error); return; }
-            console.warn('[Playback] HLS and MP4 failed; switching to Vimeo:', error);
-            state.watchVideoForceVimeoId = videoKey;
-            state.watchVimeoGeneration += 1;
-            const fallbackGeneration = state.watchVimeoGeneration;
-            state.watchVimeo = null;
-            state.watchVimeoReady = false;
-            state.watchResumeSeconds = Math.max(0, Number(position) || state.watchResumeSeconds || 0);
-            try { await (failedPlayer || player)?.destroy?.(); } catch (_) {}
-            if (fallbackGeneration !== state.watchVimeoGeneration || state.watchMode !== 'video' || videoId(state.watchVideo) !== videoKey) return;
-            frame.style.display = '';
-            frame.src = watchVimeoEmbedSrc(video, state.watchResumeSeconds);
-            await initWatchVimeo(Boolean(autoplay));
           }
         });
-      } catch (error) {
-        if (directOnly) { console.error('[Playback] Drive video unavailable:', error); frame.style.display='none'; frame.parentElement?.insertAdjacentHTML('beforeend', '<p class="watch-video-error">Video is processing or temporarily unavailable. Please try again later.</p>'); return; }
-        console.warn('[Playback] Direct HLS unavailable; using Vimeo:', error);
+        if (!player?.isIrgunNativeVideoPlayer)
+          throw new Error('Native Media3 is not available for this video');
+      } catch (nativeError) {
+        if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video') return;
+        state.watchNativeVideoFailedId = videoKey;
+        showAndroidNativeVideoError(frame,nativeError);
+        return;
       }
     }
+    if (!player && androidVimeoOnly) {
+      player=await createAndroidVimeoPlayer({video,iframe:frame,
+        resumeSeconds:Math.max(0,Number(state.watchResumeSeconds)||0),
+        nativeVideo:IrgunNativeVideo,playback:IrgunPlayback,
+        isCurrent:()=>generation===state.watchVimeoGeneration&&state.watchMode==='video'&&
+          videoId(state.watchVideo)===videoKey,
+        loadSdk:async()=>{
+          if(!window.Vimeo?.Player)await loadWatchVimeoSdk();
+          return window.Vimeo;
+        }});
+      if(!player)return;
+      state.watchAudioToVideoHandoff=false;
+      state.watchAudioToVideoHandoffId='';
+      state.watchAudioToVideoTargetSeconds=0;
+    }
     if (!player) {
+      if (Capacitor.getPlatform() === 'android')
+        throw new Error('Android Video requires native Media3');
       if (directOnly) return;
       if (!frame.src || frame.src === 'about:blank' || !frame.src.includes('player.vimeo.com') || frame.src.includes('autoplay=0')) {
         frame.src = watchVimeoEmbedSrc(video, Math.max(0, Number(state.watchResumeSeconds) || 0));
@@ -9029,6 +9379,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
     // Audio -> Video handoff without a silent gap or a period of double audio.
     player.on('timeupdate', data => {
       if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video') return;
+      syncAndroidVideoDisplay();
       state.watchResumeSeconds = Number(data.seconds) || 0;
       if (state.systemPipActive && state.watchResumeSeconds > 0 && (state.systemPipLastSeconds < 3 || state.watchResumeSeconds >= state.systemPipLastSeconds - 3)) {
         state.systemPipLastSeconds = state.watchResumeSeconds;
@@ -9049,8 +9400,10 @@ async function initWatchVimeoOnce(userInitiated = false) {
       if (state.watchMode !== 'video' || (document.hidden && !state.systemPipActive) || state.nativeBackgroundHandoff) {
         // A play event queued before Home can arrive after Audio owns playback.
         // It must not prewarm at the stale Video clock or claim audio focus.
-        setVimeoHandoffMuted(player, true).catch(() => {});
-        Promise.resolve(player.pause()).catch(() => {});
+        if (!player.isIrgunNativeVideoPlayer) {
+          setVimeoHandoffMuted(player, true).catch(() => {});
+          Promise.resolve(player.pause()).catch(() => {});
+        }
         return;
       }
       state.watchVideoPlaying = true;
@@ -9109,7 +9462,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
     // The iframe itself already contains #t=<seconds>s, so Vimeo requests the
     // middle of the video from the beginning instead of loading 0:00 and then
     // performing a second network seek. Queue play immediately as well.
-    if (userInitiated && !audioToVideoHandoff) player.play().catch(() => {});
+    if (userInitiated && !audioToVideoHandoff && !player.isIrgunNativeVideoPlayer) player.play().catch(() => {});
 
     await player.ready();
     if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video' || !state.watchVideo || videoId(state.watchVideo) !== videoKey || state.watchVimeo !== player) {
@@ -9185,7 +9538,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
           await finishAudioToVideoHandoff(videoKey, player);
         }
       }
-    } else if (userInitiated) {
+    } else if (userInitiated && !player.isIrgunNativeVideoPlayer) {
       await player.play().catch(() => {});
     }
 
@@ -9204,6 +9557,17 @@ async function initWatchVimeoOnce(userInitiated = false) {
       } catch (_) {}
     }
   } catch (error) {
+    if (Capacitor.getPlatform() === 'android') {
+      if (generation === state.watchVimeoGeneration) {
+        if (state.watchVimeo===player) state.watchVimeo=null;
+        state.watchVimeoReady=false;
+        state.watchVideoPlaying=false;
+        state.watchNativeVideoFailedId=videoKey;
+        try { await player?.destroy?.(); } catch (_) {}
+        showAndroidNativeVideoError(frame,error);
+      }
+      return;
+    }
     if (generation === state.watchVimeoGeneration) {
       state.watchVimeoReady = false;
       if (!directOnly && player?.isIrgunHlsPlayer && state.watchVideoForceVimeoId !== videoKey && Capacitor.getPlatform() === 'android') {
@@ -9425,14 +9789,14 @@ if (Capacitor.getPlatform() === 'android' && Capacitor.isNativePlatform()) {
   bindTabSwipes(app, {
     onGestureState: active => tabSwipeRenderGate.setActive(active),
     getActiveTab: () => state.screen,
-    getTabs: () => Array.from(app.querySelectorAll('.bottom-nav [data-nav]'))
+    getTabs: () => Array.from(document.querySelectorAll('.bottom-nav [data-nav]'))
       .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
       .map(button => button.dataset.nav),
     canNavigate: () => ['home','shiurim','live','library','account'].includes(state.screen)
       && !state.loading && !state.error && !state.playerOpen && !state.filterDialog
       && (!state.watchVideo || state.watchMinimized)
       && !document.querySelector('[aria-modal="true"], .admin-editor-backdrop, .sheet-backdrop, .playlist-picker-backdrop, .download-manager-backdrop'),
-    navigate: tab => app.querySelector(`.bottom-nav [data-nav="${tab}"]`)?.click()
+    navigate: tab => document.querySelector(`.bottom-nav [data-nav="${tab}"]`)?.click()
   });
 }
 

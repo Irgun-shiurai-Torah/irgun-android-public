@@ -56,7 +56,9 @@ public class IrgunPictureInPicturePlugin extends Plugin {
         }
         activity.runOnUiThread(() -> {
             JSObject result = new JSObject();
-            result.put("entered", activity.enterIrgunPictureInPicture());
+            boolean entered=activity.enterIrgunPictureInPicture();
+            result.put("entered",entered);
+            result.put("nativeMessageShown",!entered);
             call.resolve(result);
         });
     }

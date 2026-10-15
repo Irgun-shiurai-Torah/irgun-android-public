@@ -26,6 +26,7 @@ public class MainActivity extends BridgeActivity {
     private boolean videoFullscreen = false;
     private boolean irgunPipActive = false;
     private OnBackPressedCallback fullscreenBackCallback;
+    private IrgunVideoDisplayController videoDisplay;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -39,6 +40,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(IrgunPictureInPicturePlugin.class);
         registerPlugin(IrgunAnalyticsPlugin.class);
         super.onCreate(savedInstanceState);
+        videoDisplay = new IrgunVideoDisplayController(this);
         fullscreenBackCallback = new OnBackPressedCallback(false) {
             @Override public void handleOnBackPressed() {
                 if (!videoFullscreen) {
@@ -50,7 +52,9 @@ public class MainActivity extends BridgeActivity {
                 // Consume Back here so Android cannot destroy the moving player.
                 if (getBridge() != null && getBridge().getWebView() != null) {
                     getBridge().getWebView().evaluateJavascript(
-                        "window.__irgunExitDocumentFullscreen && window.__irgunExitDocumentFullscreen().catch(e => console.warn('Fullscreen exit failed', e));",
+                        "Promise.resolve(window.__irgunExitNativeVideoFullscreen && window.__irgunExitNativeVideoFullscreen())" +
+                        ".then(() => window.__irgunExitDocumentFullscreen && window.__irgunExitDocumentFullscreen())" +
+                        ".catch(e => console.warn('Fullscreen exit failed', e));",
                         null
                     );
                 }
@@ -84,6 +88,11 @@ public class MainActivity extends BridgeActivity {
      * screen and the exit-fullscreen control stays tappable.
      */
     public void setVideoFullscreen(boolean enabled) {
+        setVideoFullscreen(enabled, false);
+    }
+
+    public void setVideoFullscreen(boolean enabled, boolean fromSensor) {
+        if (videoDisplay != null) videoDisplay.fullscreenChanged(enabled, fromSensor);
         videoFullscreen = enabled;
         if (fullscreenBackCallback != null) fullscreenBackCallback.setEnabled(enabled);
         if (enabled) {
@@ -91,6 +100,23 @@ public class MainActivity extends BridgeActivity {
         } else if (!isIrgunPipVisible()) {
             restoreNormalSystemBars();
         }
+    }
+
+    public void setVideoDisplayPresentation(boolean active, boolean playing, boolean expanded, boolean nativeEngine) {
+        if (videoDisplay != null) videoDisplay.presentation(active, playing, expanded, nativeEngine);
+    }
+
+    public void setNativeVideoTabletTilt(int direction) {
+        // Video presentation only: no media source, MediaSession or settings
+        // mutations. This is a fallback when Android locks tablet rotation.
+        IrgunNativeVideoPlugin.tabletSensorTilt(direction);
+    }
+
+    public void applySensorVideoFullscreen(boolean enabled) {
+        setVideoFullscreen(enabled, true);
+        if (getBridge() != null && getBridge().getWebView() != null)
+            getBridge().getWebView().evaluateJavascript(
+                "window.__irgunSetVideoFullscreenFromRotation && window.__irgunSetVideoFullscreenFromRotation("+enabled+");", null);
     }
 
     private void hideSystemBarsForVideo() {
@@ -141,13 +167,15 @@ public class MainActivity extends BridgeActivity {
 
     /** Enter Android system Picture-in-Picture for the currently playing video. */
     public boolean enterIrgunPictureInPicture() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) { explainUnavailablePip(); return false; }
         try {
             // Mark PiP as active BEFORE Android begins the transition. onPause() can
             // run before onPictureInPictureModeChanged(); without this guard the app
             // may hand video playback to the background-audio service during the PiP
             // transition and the floating video never appears or immediately stops.
             irgunPipActive = true;
+            if (videoDisplay != null) videoDisplay.pip(true);
+            IrgunNativeVideoPlugin.systemPipChanged(true);
             // Do not resize/reflow the WebView before Android captures the current
             // video frame for PiP. The PiP callback applies the compact layout after
             // entry, which avoids the black-frame regression seen on WebView/Vimeo.
@@ -159,14 +187,37 @@ public class MainActivity extends BridgeActivity {
             boolean entered = enterPictureInPictureMode(builder.build());
             if (!entered) {
                 irgunPipActive = false;
+                if (videoDisplay != null) videoDisplay.pip(false);
+                IrgunNativeVideoPlugin.systemPipChanged(false);
                 prepareWebForPip(false);
+                explainUnavailablePip();
             }
             return entered;
         } catch (Exception ignored) {
             irgunPipActive = false;
+            if (videoDisplay != null) videoDisplay.pip(false);
+            IrgunNativeVideoPlugin.systemPipChanged(false);
             prepareWebForPip(false);
+            explainUnavailablePip();
             return false;
         }
+    }
+
+    private void explainUnavailablePip() {
+        boolean supported=Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            && getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE);
+        android.app.AlertDialog.Builder dialog=new android.app.AlertDialog.Builder(this)
+            .setTitle("Picture-in-Picture").setNegativeButton("Close",null);
+        if(supported){
+            dialog.setMessage("Picture-in-Picture could not open. Check that it is allowed for this app in Android settings.")
+                .setPositiveButton("Open settings",(d,which)->{
+                    try {
+                        startActivity(new android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            android.net.Uri.parse("package:"+getPackageName())));
+                    } catch(Exception ignored) {}
+                });
+        }else dialog.setMessage("This device does not report support for Android Picture-in-Picture. You can keep playing with the in-app Mini player or background audio.");
+        dialog.show();
     }
 
     private boolean isIrgunPipVisible() {
@@ -235,6 +286,8 @@ public class MainActivity extends BridgeActivity {
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
         irgunPipActive = isInPictureInPictureMode;
+        if (videoDisplay != null) videoDisplay.pip(isInPictureInPictureMode);
+        IrgunNativeVideoPlugin.systemPipChanged(isInPictureInPictureMode);
         IrgunAnalyticsReporter.get(this).setPictureInPictureActive(isInPictureInPictureMode);
         prepareWebForPip(isInPictureInPictureMode);
         if (!isInPictureInPictureMode) {
@@ -259,6 +312,7 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onPause() {
+        if (videoDisplay != null) videoDisplay.foreground(false);
         // Stop generic Media3 -> Capacitor events as soon as the Activity pauses.
         // The explicit Home handoff is still allowed to issue its one Vimeo pause
         // command until onStop(), but ticker/state callbacks no longer race WebView
@@ -285,12 +339,23 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
+    public void onStart() {
+        super.onStart();
+        // Begin fetching/decoding the video track as soon as the Activity is
+        // visible. Do not wait for onResume or a later WebView state poll.
+        // The service restores only a Home-backgrounded Video presentation;
+        // it keeps the existing player, MediaItem, clock and Pause choice.
+        IrgunPlaybackService.restoreNativeVideoOnForeground();
+    }
+
+    @Override
     public void onResume() {
         super.onResume();
         // Mark the Activity visible, but do not push JavaScript into the WebView here.
         // Android may call onResume while Capacitor is still restoring/replacing the
         // WebView after Home or a notification tap. The live JS page proves it is
         // ready by calling IrgunPlayback.getState() from visibilitychange/init.
+        IrgunPlaybackService.restoreNativeVideoOnForeground();
         IrgunPlaybackPlugin.setAppForeground(true);
         IrgunAnalyticsReporter.get(this).setForeground(true);
 
@@ -313,10 +378,12 @@ public class MainActivity extends BridgeActivity {
                 });
             }
         }
+        if (videoDisplay != null) videoDisplay.foreground(true);
     }
 
     @Override
     public void onDestroy() {
+        if (videoDisplay != null) videoDisplay.destroy();
         instanceAlive = false;
         IrgunPlaybackPlugin.setAppForeground(false);
         IrgunAnalyticsReporter.get(this).setForeground(false);

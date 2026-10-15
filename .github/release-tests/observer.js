@@ -56,3 +56,13 @@ window.ISTReleaseQA = { snapshot() {
     isLoggedIn: !!state.user
   };
 }};
+
+// Read the real Vimeo SDK clock; never inject playback actions for this test.
+window.ISTReleaseQA.vimeoStatus=async()=>{
+  const player=state.watchVimeo;
+  if(!player?.isAndroidVimeoFallback)return {active:false,watchId:videoId(state.watchVideo)};
+  return {active:true,watchId:videoId(state.watchVideo),
+    seconds:await player.getCurrentTime(),paused:await player.getPaused(),
+    iframeSources:[...document.querySelectorAll('iframe')].map(frame=>frame.src),
+    htmlAudioSilent:[...document.querySelectorAll('audio')].every(a=>a.paused||a.muted||a.volume===0)};
+};

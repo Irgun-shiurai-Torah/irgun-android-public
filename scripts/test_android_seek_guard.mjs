@@ -7,8 +7,30 @@ import {join} from 'node:path';
 
 test('actual native network recovery retains the engine, source, authority and user Pause with bounded attempts',()=>{
  const source=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java','utf8');
- const start=source.indexOf('    private void cancelNetworkRecovery()'),end=source.indexOf('    @Override\n    public void onCreate()',start);
- const methods=source.slice(start,end);assert.ok(methods.includes('ERROR_CODE_IO_NETWORK_CONNECTION_FAILED'));
+ // Extract only the original network-recovery methods. The application
+ // now has independent video-stall watchdog methods in this class; copying
+ // every helper before onCreate() into this minimal mock accidentally pulls
+ // in unrelated Media3/Video fields and makes the network test uncompilable.
+ const method=signature=>{
+  const start=source.indexOf(signature);
+  assert.ok(start>0,'Native network method not found: '+signature);
+  const brace=source.indexOf('{',start);
+  assert.ok(brace>start);
+  let depth=0;
+  for(let n=brace;n<source.length;n++){
+   if(source[n]==='{')depth++;
+   else if(source[n]==='}'&&--depth===0)return source.slice(start,n+1);
+  }
+  throw new Error('Unclosed native network method: '+signature);
+ };
+ const methods=[
+  method('private void cancelNetworkRecovery()'),
+  method('private boolean scheduleNetworkRecovery(int errorCode)'),
+  method('private void queueNetworkRecovery(long delayMs)')
+ ].join('\n');
+ assert.ok(methods.includes('ERROR_CODE_IO_NETWORK_CONNECTION_FAILED'));
+ assert.doesNotMatch(methods,/nativeVideoStallWatch|scheduleNativeVideoStallWatch/,
+  'Isolated network harness must never silently absorb the unrelated silent-buffer watchdog');
  assert.match(source,/if \(scheduleNetworkRecovery\(error.errorCode\)\) return;/);
  assert.match(source,/if \(networkRecoveryPending && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST\)/);
  assert.match(source,/if \(networkRecoveryPending && player.getPlayerError\(\) == null\) cancelNetworkRecovery\(\)/);
@@ -25,6 +47,7 @@ test('actual native network recovery retains the engine, source, authority and u
    static class Log {static void d(String tag,String text){}}
    static final String TAG="test";ExoPlayer player=new ExoPlayer();Handler mainHandler=new Handler();
    String lectureId="lecture",audioUrl="https://api.example/audio/lecture";PlaybackMode playbackMode=PlaybackMode.VIDEO;
+   boolean nativeVideoSourceActive=false;
    boolean networkRecoveryPending,networkRecoveryWanted,syncingVideoShadow,externalVideoPlaying=true;float logicalVolume=1;long networkRecoveryPositionMs,networkRecoveryGeneration,externalVideoPositionMs=28690;int networkRecoveryAttempts;Runnable networkRecoveryRunnable;
    void suppressVideoMirrorCallbacks(){}void setCandidateAudioFocus(boolean value){}void publishNativeState(){}void refreshMediaNotification(){}
    ${methods}
@@ -44,6 +67,13 @@ test('actual native network recovery retains the engine, source, authority and u
     s.scheduleNetworkRecovery(2001);stale=s.mainHandler.pending;s.audioUrl="https://api.example/audio/another";stale.run();require(s.player.prepares==before,"Stale callbacks cannot restart another source");s.cancelNetworkRecovery();
     require(!s.scheduleNetworkRecovery(2004)&&!s.scheduleNetworkRecovery(2005),"HTTP/file failures are not fabricated network successes");
     s.audioUrl="file:///private/lecture.mp3";require(!s.scheduleNetworkRecovery(2001),"File corruption cannot be retried as transport failure");
+    s.nativeVideoSourceActive=true;s.playbackMode=PlaybackMode.VIDEO;s.player.position=91000;s.player.wanted=true;
+    s.scheduleNetworkRecovery(2002);s.networkRecoveryWanted=false;s.run();
+    require(s.player==engine&&s.player.position==91000&&!s.player.wanted&&s.player.volume==1,
+      "Native Video transport retries the exact engine/clock with audible volume and respects user Pause");
+    s.cancelNetworkRecovery();s.player.wanted=true;s.player.position=120000;s.scheduleNetworkRecovery(2001);s.run();
+    require(s.player.position==120000&&s.player.wanted&&s.player.volume==1,
+      "Native Video recovery must not use stale external Vimeo position or silence native audio");
     System.out.println("passed");
    }
   }`);
@@ -82,7 +112,7 @@ test('actual native Home readiness accepts an advancing shadow and rebinds only 
    static class IrgunPlaybackPlugin {static int requests;static void requestPauseVimeoForBackground(long id){requests++;}}
    static class Handler {Runnable pending;void postDelayed(Runnable run,long delay){pending=run;}}
    final String TAG="QA";final long DRIFT_LIMIT_MS=750;final Handler mainHandler=new Handler();
-   boolean pendingBackgroundHandoff=true,backgroundPauseRequested=false,backgroundWebViewStopped=false;long pendingBackgroundPositionMs=734122,backgroundHandoffStartedMs=0,backgroundHandoffId=11;
+   boolean taskRemoved=false,pendingBackgroundHandoff=true,backgroundPauseRequested=false,backgroundWebViewStopped=false;long pendingBackgroundPositionMs=734122,backgroundHandoffStartedMs=0,backgroundHandoffId=11;
    boolean pendingBackgroundWasPlaying=true;float logicalSpeed=1;Player player=new Player(),sessionPlayer;MediaSession mediaSession=new MediaSession();
    PlaybackMode playbackMode=PlaybackMode.VIDEO,sessionPlayerMode=PlaybackMode.VIDEO;int notifications;
    boolean isSessionAdded(MediaSession s){return true;}void addSession(MediaSession s){}void triggerNotificationUpdate(){notifications++;}
@@ -111,6 +141,8 @@ test('actual native Home readiness accepts an advancing shadow and rebinds only 
       "Ready native Audio must take over immediately after the Video surface stops");
     s.backgroundWebViewStopped=false;s.onBackgroundWebViewStoppedInternal();
     require(!s.backgroundWebViewStopped,"Unrelated lifecycle stop cannot restart an already completed handoff");
+    int notifications=s.notifications;s.taskRemoved=true;s.refreshMediaNotification();
+    require(s.notifications==notifications,"Dismissed task cannot recreate its media notification");
     System.out.println("passed");
    }
   }`);
@@ -209,7 +241,8 @@ public final class NativeMetadataRegression {
   String vimeoId,title,speaker,image,mediaKind,sourceId,paidAudioId,trackId,videoSource;
   float logicalSpeed=1,logicalVolume=1;
   boolean syncingVideoShadow;
-  boolean nativeVideoSourceActive=false,nativeVideoSelected=false;
+  boolean nativeVideoSourceActive=false,nativeVideoSelected=false,nativeVideoOfflineAudioActive=false;
+  boolean resumeVideoOnForeground=false;
   PlaybackMode playbackMode=PlaybackMode.AUDIO;
   FakePlayer player=new FakePlayer();
   static final class FakePlayer {
@@ -331,11 +364,27 @@ public final class OfflineSourceRegression {
   }
   final String TAG="QA";Player player=new Player();String audioUrl=player.uri;
   long externalVideoPositionMs=201465;boolean externalVideoPlaying=true,syncingVideoShadow=false,focus;
+  boolean nativeVideoSourceActive=false,nativeVideoOfflineAudioActive=false;
+  String nativeVideoNetworkAudioUrl="";
   PlaybackMode playbackMode=PlaybackMode.VIDEO;float logicalVolume=1;
   static String cleanStatic(String s){return s==null?"":s.trim();}
   void suppressVideoMirrorCallbacks(){}void publishNativeState(){}
   void setCandidateAudioFocus(boolean value){focus=value;}
   void ensureAudioMediaItemInternal(long position){player.uri=audioUrl;player.position=position;player.items=1;}
+  // Stub ONLY the private native-video handoff which is separately
+  // exercised against the complete Android Media3 implementation. In this
+  // isolated test the exact production replaceOfflineAudioSourceInternal is
+  // injected above; preserve its choice of legacy vs active native source.
+  void switchNativeVideoPresentationInternal(boolean showVideo,String local,boolean forceNetworkAudio){
+    require(nativeVideoSourceActive&&nativeVideoOfflineAudioActive,
+      "Native deletion must operate on the actual active offline source");
+    require(!showVideo&&local.isEmpty()&&forceNetworkAudio,
+      "Only explicit deletion may force downloaded Audio back to network");
+    long position=player.position;boolean wanted=player.wanted;
+    audioUrl=nativeVideoNetworkAudioUrl;player.uri=audioUrl;
+    player.position=position;player.wanted=wanted;player.volume=logicalVolume;
+    nativeVideoOfflineAudioActive=false;playbackMode=PlaybackMode.AUDIO;
+  }
   ${method}
   static void require(boolean value,String message){if(!value)throw new AssertionError(message);}
   public static void main(String[] args) {
@@ -351,7 +400,19 @@ public final class OfflineSourceRegression {
     require(!s.player.wanted&&s.player.position==711560&&s.player.volume==1,"Paused Audio must keep its actual position and Pause intent");
     s=new OfflineSourceRegression();try{s.replaceOfflineAudioSourceInternal(s.audioUrl,"file:///other.mp3");throw new AssertionError("Invalid replacement accepted");}catch(IllegalArgumentException expected){}
     require(s.player.uri.startsWith("file:")&&s.player.items==1,"Invalid replacement must retain the existing saved source");
-    System.out.println("Actual offline source swap, post-deletion seek, one player, silent shadow and Pause preservation passed");
+    // NEW production branch: deleting an MP3 while native HLS/MP4 is active
+    // uses a same-ExoPlayer source transition, not the old Vimeo shadow.
+    s=new OfflineSourceRegression();s.nativeVideoSourceActive=true;
+    s.nativeVideoOfflineAudioActive=true;s.playbackMode=PlaybackMode.AUDIO;
+    s.player.position=706200;s.player.wanted=false;s.player.volume=1;
+    Player original=s.player;
+    require(s.replaceOfflineAudioSourceInternal(s.audioUrl,network),
+      "Active native offline Audio must replace its file before unlinking");
+    require(s.player==original&&s.player.uri.equals(network)&&
+      s.player.position==706200&&!s.player.wanted&&s.player.volume==1&&
+      !s.nativeVideoOfflineAudioActive,
+      "Native downloaded MP3 deletion must restore network audio in SAME Media3 player without losing Pause/clock");
+    System.out.println("Actual offline source swap, post-deletion seek, native Media3 restoration, one player and Pause preservation passed");
   }
 }`);
     execFileSync('java',['-m','jdk.compiler/com.sun.tools.javac.Main','-d',dir,path],{stdio:'pipe'});

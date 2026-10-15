@@ -152,6 +152,7 @@ public class IrgunPlaybackPlugin extends Plugin {
         out.put("audioIsPlaying", s.audioIsPlaying);
         out.put("audioPlayWhenReady", s.audioPlayWhenReady);
         out.put("audioAuthorityCommitted", s.audioAuthorityCommitted);
+        out.put("resumeVideoOnForeground", s.resumeVideoOnForeground);
         out.put("networkRecoveryPending", s.networkRecoveryPending);
         return out;
     }

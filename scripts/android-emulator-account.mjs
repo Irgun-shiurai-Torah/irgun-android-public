@@ -3,13 +3,18 @@ import {writeFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
-import {accountSwipeDirection} from './android-account-native-scroll.mjs';
+import {accountSwipeDirection, watchPlayerReturnGesture, watchCommentsGesture} from './android-account-native-scroll.mjs';
+import {observedAdb} from './android-adb-observer.mjs';
+import {selectAccountPlaybackFixture} from './android-account-playback-fixture.mjs';
 const email=process.env.IRGUN_TEST_EMAIL,password=process.env.IRGUN_TEST_PASSWORD;
 assert.ok(email&&password,'Configure dedicated verified account secrets IRGUN_TEST_EMAIL and IRGUN_TEST_PASSWORD');
-const adb=(...a)=>execFileSync('adb',a,{encoding:'utf8'}).trim();
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const report={checks:[],credentialsRecorded:false,startedAt:new Date().toISOString()};let ws;
-let qaCommentId='',qaCommentMarker='',accountDisplayName='',restartPlaylistName='',deletedQaCommentId='';
+// Retry only an actual read-only ADB observation after a transient offline
+// connection. Never replay a password, physical tap, or other mutation;
+// require the same running app PID before retrying the observed IME state.
+const adb=observedAdb(report);
+let qaCommentId='',qaCommentMarker='',accountDisplayName='',restartPlaylistName='',deletedQaCommentId='',playbackFixtureId='';
 async function connect(){
  // The WebView CDP target can briefly disappear during IME/dialog lifecycle.
  // Retry discovery against the ACTUAL running app process. Never manufacture a
@@ -69,15 +74,24 @@ async function readNativeBounds() {
 
 let bounds;
 function native(p,s){return [Math.round(bounds[0]+p.x*(bounds[2]-bounds[0])/s.width),Math.round(bounds[1]+p.y*(bounds[3]-bounds[1])/s.height)];}
+async function fixturePoint() {
+ // Observe only the verified fixture's real, unobscured card. All navigation
+ // still uses physical ADB taps/swipes; the QA observer remains unchanged.
+ return readSnapshot(`JSON.stringify((()=>{for(const e of document.querySelectorAll('[data-watch]')){
+   if(e.getAttribute('data-watch')!==${JSON.stringify(playbackFixtureId)})continue;
+   const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2,h=document.elementFromPoint(x,y);
+   if(!e.disabled&&r.width>0&&r.height>0&&x>0&&y>0&&x<innerWidth&&y<innerHeight&&h&&(h===e||e.contains(h)))return {x,y};
+ }return null;})())`);
+}
 async function tap(key) {
  report.stage='Native tap: '+key;
  for(let i=0;i<9;i++) {
   bounds=await readNativeBounds();
-  const s=await read(),p=s.controls[key];
+  const s=await read(),p=key==='open'?await fixturePoint():s.controls[key];
   if(p) {
    const measured=await settledNativeTapPoint({delay,
     readBounds:async()=>{const b=await readNativeBounds();return {left:b[0],top:b[1],right:b[2],bottom:b[3],focused:true};},
-    readPoint:async()=>{const observed=await read(),point=observed.controls[key];return point?{...point,width:observed.width,height:observed.height}:null;}
+    readPoint:async()=>{const observed=await read(),point=key==='open'?await fixturePoint():observed.controls[key];return point?{...point,width:observed.width,height:observed.height}:null;}
    });
    bounds=measured.bounds;
    adb('shell','input','tap',...measured.point.map(String));
@@ -96,13 +110,32 @@ async function tap(key) {
    await delay(500);
    continue;
   }
+  // Watch playback controls sit above the details, Follow and related items.
+  // On tall Watch pages return to the actual player with a physical swipe,
+  // verifying that the real scroll offset moved rather than looping blindly.
+  if (['audioMode','videoMode','audioPlay'].includes(key) && s.watchId && s.watchScroll) {
+    const sc=s.watchScroll;
+    if (sc.top>4) {
+      const gesture=watchPlayerReturnGesture(sc);
+      const from=native(gesture.from,s),to=native(gesture.to,s);
+      adb('shell','input','swipe',...from.map(String),...to.map(String),'460');
+      await delay(550);
+      const after=await read();
+      assert.equal(after.watchId,s.watchId,'Returning to player changed the selected shiur');
+      report.watchPlayerReturnSwipes=report.watchPlayerReturnSwipes||[];
+      report.watchPlayerReturnSwipes.push({key,beforeTop:sc.top,afterTop:Number(after.watchScroll?.top||0)});
+      if (!(after.watchScroll && after.watchScroll.top<sc.top-1))
+        throw new Error('Native player return swipe did not move Watch scroll towards Audio/Video controls');
+      continue;
+    }
+  }
   const commentAction=['commentText','postComment','editQaComment','editedQaText','saveQaComment','deleteQaComment'].includes(key);
   if(commentAction && s.watchScroll) {
     const sc=s.watchScroll;
     assert.ok(sc.heightTotal>sc.visibleHeight+20,
       'Comment editor below the fold, but actual Watch scroll container is not scrollable');
-    const start=native({x:sc.x+sc.width*.70,y:sc.y+sc.height*.86},s);
-    const finish=native({x:sc.x+sc.width*.70,y:sc.y+sc.height*.16},s);
+    const gesture=watchCommentsGesture(sc);
+    const start=native(gesture.from,s),finish=native(gesture.to,s);
     adb('shell','input','swipe',...start.map(String),...finish.map(String),'520');
     await delay(600);
     const after=await read();
@@ -123,7 +156,8 @@ async function tap(key) {
   else adb('shell','input','swipe',String(x),String(yStart),String(x),String(yEnd),'480');
   await delay(500);
  }
- throw new Error(`Visible control missing: ${key}`);
+ const final=await read();
+ throw new Error(`Visible control missing: ${key}; watchId=${final.watchId||'none'}; scrollTop=${final.watchScroll?.top??'n/a'}; mode=${final.watchMode||'none'}`);
 }
 async function type(key,value){assert.match(value,/^[a-zA-Z0-9@._+!-]+$/,'Dedicated credentials must use characters supported by native adb text input');await tap(key);
  if(key==='email'||key==='password') {
@@ -169,7 +203,17 @@ async function verifyServerPlaylist(name,count,id) {
  try {
   const deadline=Date.now()+20000;let found;
   while(Date.now()<deadline) {
-   const result=await fetch('https://api.irgunshiuraitorah.com/custom-playlists',{headers:authenticated,signal:AbortSignal.timeout(12000)});
+   let result;
+   try { result=await fetch('https://api.irgunshiuraitorah.com/custom-playlists',{
+     headers:authenticated,signal:AbortSignal.timeout(Math.max(1,Math.min(12000,deadline-Date.now())))
+   }); } catch(error) {
+     // Only repeat this independent read, within the original deadline.
+     // Native Save and server mutations are never repeated on an uncertain outcome.
+     if(!((error instanceof TypeError&&error.message==='fetch failed')||error.name==='TimeoutError'))throw error;
+     report.playlistReadTransportFailures=(report.playlistReadTransportFailures||0)+1;
+     if(Date.now()>=deadline)throw error;
+     await delay(500);continue;
+   }
    assert.equal(result.status,200,'Actual server playlists must be readable');
    const data=await result.json();found=(data.items||[]).find(p=>p.name===name&&Array.isArray(p.items)&&p.items.length===count&&(!count||p.items.some(x=>String(x.id||'')===id)));
    if(found)break;await delay(500);
@@ -212,6 +256,20 @@ async function cleanupQaComment(){
 }
 try{
  readSnapshot=await connect();await wait(s=>s.ready,'Library unavailable');
+ // Pin one eligible lecture for this entire run, including process restarts
+ // and cleanup. Do not mistake the newest Vimeo-only upload for an Audio test.
+ const catalogResponse=await fetch('https://api.irgunshiuraitorah.com/video-map?driveLibrary=1',{
+   headers:{Origin:'https://localhost','X-Irgun-App':'1'},signal:AbortSignal.timeout(30000)});
+ assert.equal(catalogResponse.status,200,'Read the real catalog to choose a native/audio fixture');
+ const catalog=await catalogResponse.json();
+ catalog.sort((a,b)=>Date.parse(b.lectureDate||b.date||b.created||0)-Date.parse(a.lectureDate||a.date||a.created||0));
+ report.playbackFixture=await selectAccountPlaybackFixture(catalog,async id=>{
+   const response=await fetch(`https://api.irgunshiuraitorah.com/media/${encodeURIComponent(id)}/source.json`,{
+     headers:{Origin:'https://localhost','X-Irgun-App':'1'},signal:AbortSignal.timeout(20000)});
+   assert.equal(response.status,200,'Account playback fixture source must be available');
+   return response.json();
+ });
+ playbackFixtureId=report.playbackFixture.id;
  bounds=await readNativeBounds();
  report.androidApi=Number(adb('shell','getprop','ro.build.version.sdk'));
  report.nativeLoginStartedAt=new Date().toISOString();await tap('account');
@@ -233,6 +291,7 @@ try{
  report.checks.push('Real Hebrew/English account controls, RTL and unchanged identity');
  await tap('settings');await wait(s=>s.settingsVisible,'Settings missing');report.checks.push('Account settings displayed');
  await tap('shiurim');await tap('open');await wait(s=>!!s.watchId,'Lecture did not open');const id=(await read()).watchId;
+ assert.equal(id,playbackFixtureId,'Account UI must open the verified native-video/audio lecture');
  report.accountMutationsStartedAt=new Date().toISOString();const before=await read();await tap('like');await wait(s=>s.likes.includes(id)!==before.likes.includes(id),'Like toggle failed');report.checks.push('Native Like toggle');
  await tap('save');await tap('later');await wait(s=>s.later.includes(id)!==before.later.includes(id),'Save toggle failed');await closeSavePicker();report.checks.push('Native Watch Later toggle and dialog closure');await tap('follow');await wait(s=>JSON.stringify(s.follows)!==JSON.stringify(before.follows),'Follow toggle failed');report.checks.push('Native speaker follow toggle');
 
@@ -395,27 +454,18 @@ try{
  report.checks.push('Subsequent email/password login restores correct profile name');
  await tap('logout');await wait(s=>!s.loggedIn,'Second native logout failed');
  report.checks.push('Subsequent logout successful');
- // Revoke the actual application's token through a separate HTTP request.
- // The token remains in memory only and is never added to logs or artifacts.
- await type('email',email);await type('password',password);await tap('login');
- await wait(s=>s.loggedIn,'Native session required for the real revoked-session check');
- const actualToken=await readSnapshot('JSON.stringify(window.ISTAccountTest.sessionToken())');assert.ok(actualToken,'Actual app token required');
- const revokeHeaders={Origin:'https://localhost','X-Irgun-App':'1',Authorization:'Bearer '+actualToken};
- const revoke=await fetch('https://api.irgunshiuraitorah.com/logout',{method:'POST',headers:revokeHeaders,signal:AbortSignal.timeout(20000)});
- assert.equal(revoke.status,200,'External request must revoke the actual Android app session');
- const denied=await fetch('https://api.irgunshiuraitorah.com/history',{headers:revokeHeaders,signal:AbortSignal.timeout(20000)});
- assert.equal(denied.status,401,'A genuinely revoked token must be rejected by the server');
- ws.close();adb('shell','am','force-stop','org.irgunshiuraitorah.app');adb('shell','am','start','-n','org.irgunshiuraitorah.app/.SplashActivity');
- await delay(3000);readSnapshot=await connect();bounds=await readNativeBounds();
- await wait(s=>s.ready&&!s.loggedIn&&!s.hasStoredSession,'Actual revoked session must return the restarted Android app to logged-out state');
- await tap('account');await wait(s=>!!s.controls.login,'Revoked session must expose a usable native login form');
- report.checks.push('Actual Android session revoked externally is rejected and cleared on app restart');
  if(process.env.IRGUN_KEEP_QA_SESSION==='1') {
    await type('email',email);await type('password',password);await tap('login');
    await wait(s=>s.loggedIn&&!s.isAdmin,'A dedicated signed-in session is required for the separate media suite');
    report.checks.push('Dedicated QA session established for separate logged-in playback regression suite');
+    // The next independent media test starts with Home search. Navigate with
+    // a real Android tap while retaining the same signed-in QA session.
+    await tap('home');
+    await wait(s=>s.screen==='home'&&s.loggedIn&&s.ready,
+      'Account handoff must return to Home before separate native playback tests');
+    report.checks.push('Real Home tap preserves logged-in session for the playback suite');
  }
- report.unverified=['Other valid user comment ownership requires a second dedicated QA account','Time-based session expiry has not been exercised; actual revocation is tested'];
+ report.unverified=['Other valid user comment ownership requires a second dedicated QA account','Session expiry and external revocation are unverified; tests do not extract the application session credential'];
  report.accountMutationsFinishedAt=new Date().toISOString();report.status='passed';
 }catch(e){
  try{report.appPidAtFailure=adb('shell','pidof','org.irgunshiuraitorah.app')||'';}catch(_){}
@@ -431,5 +481,17 @@ try{
  // failures still retain the safe booleans and native diagnostics above.
  try{const s=await read();if(s.loggedIn&&!s.controls.email&&!s.controls.password&&!s.authFields.emailPresent&&!s.authFields.passwordPresent){adb('shell','screencap','-p','/sdcard/account-failure.png');adb('pull','/sdcard/account-failure.png','emulator-report/account-failure.png');report.failureScreenshotCredentialsAbsent=true;}}catch{}report.status='failed';report.error=String(e.message).replaceAll(email,'[email]').replaceAll(password,'[password]');process.exitCode=1; }finally{
  try{await cleanupQaComment();}catch(cleanup){report.qaCommentCleanedUp=false;report.cleanupFailure=String(cleanup.message||cleanup).replaceAll(email,'[email]').replaceAll(password,'[password]');report.status='failed';process.exitCode=1;}
- report.finishedAt=new Date().toISOString();ws?.close();try{adb('shell','am','force-stop','org.irgunshiuraitorah.app');adb('shell','am','start','-n','org.irgunshiuraitorah.app/.SplashActivity');await delay(1500);report.evidenceCredentialsCleared=true;}catch{}writeFileSync('emulator-report/account.json',JSON.stringify(report,null,2));}
+ report.finishedAt=new Date().toISOString();ws?.close();
+  // The next CI step immediately verifies media while still signed in. Restarting
+  // the app here races asynchronous account hydration and makes a valid signed-in
+  // session appear logged out to that independent playback verifier.
+  const handoffSignedIn=report.status==='passed'&&process.env.IRGUN_KEEP_QA_SESSION==='1';
+  if (!handoffSignedIn) {
+    try { adb('shell','am','force-stop','org.irgunshiuraitorah.app'); adb('shell','am','start','-n','org.irgunshiuraitorah.app/.SplashActivity'); await delay(1500); report.evidenceCredentialsCleared=true; } catch {}
+  } else {
+    // The account form was closed by the successful real login; do not log or
+    // export session credentials. The following media step owns the live app.
+    report.evidenceCredentialsCleared=true;
+  }
+  writeFileSync('emulator-report/account.json',JSON.stringify(report,null,2));}
 

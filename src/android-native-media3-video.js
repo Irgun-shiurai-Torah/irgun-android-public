@@ -1,18 +1,15 @@
-// Android-only opt-in native Media3 video adapter.
+// Android-only native Media3 video adapter. No WebView video fallback.
 // No WebView <video>, HLS.js, or second audio output is created by this module.
 // Native Audio/Video are two track presentations of ONE ExoPlayer MediaItem.
 import {registerPlugin} from '@capacitor/core';
-import {getAndroidHlsSource} from './android-hls-video.js';
+import {getAndroidHlsSource} from './android-media-source.js';
 
 const native = registerPlugin('IrgunNativeVideo');
 const delay = ms => new Promise(resolve => setTimeout(resolve,ms));
-export const nativeMedia3BetaEnabled = () =>
-  import.meta.env.VITE_ANDROID_MEDIA3_VIDEO_BETA === 'true';
-
 export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
   resumeSeconds=0,title='Shiur',speaker='',image='',audioUrl='',speed=1,
-  onError=()=>{}}={}) {
-  if (!nativeMedia3BetaEnabled() || !iframe || !videoId) return null;
+  onError=()=>{},onRecovered=()=>{}}={}) {
+  if (!iframe || !videoId) throw new Error('Native Media3 Video requires a real lecture and host');
   const source = await getAndroidHlsSource(String(apiBase).replace(/\/$/,''),String(videoId));
   if (!source?.hls && !source?.mp4) throw new Error('Media3 source lookup returned no video URL');
   const callbacks = new Map();
@@ -28,15 +25,76 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
   placeholder.style.visibility='hidden';
   let destroyed=false,mode='video',last=null,lastPlaying=false;
   let ticking=false,layoutRequested=false,observedFrame=null;
+  let framePlacedOnScreen=false;
+  let reportedError='',failedFrames=0;
+  const viewportFrame=()=>{
+    // Query ALL matching nodes: during Audio -> Video the old persistent
+    // iframe can still be connected while transformed 12,000px off-screen.
+    // document.getElementById() or placeholder.isConnected alone is unsafe.
+    return [...document.querySelectorAll('#watchVimeoFrame')].find(element=>{
+      const r=element.getBoundingClientRect();
+      return r.width>40&&r.height>40&&r.right>0&&r.bottom>0&&
+        r.left<innerWidth&&r.top<innerHeight;
+    })||null;
+  };
   const cleanups=[];
   const positionFrame=async()=>{
     if(destroyed || mode!=='video')return;
-    const current=placeholder.isConnected?placeholder:document.getElementById('watchVimeoFrame');
-    if(!current)return;
+    const nativeBounds={viewportWidth:innerWidth,viewportHeight:innerHeight,
+      mini:document.body.classList.contains('irgun-watch-mini-hosted')};
+    if(nativeBounds.mini){
+      const button=document.querySelector('#persistentVideoMount [data-mini-video-play-toggle]');
+      const r=button?.getBoundingClientRect();
+      if(r&&r.width>0&&r.height>0&&r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight)
+        nativeBounds.miniPlay={x:r.x,y:r.y,width:r.width,height:r.height};
+    }
+    if(document.querySelector('.playlist-picker-backdrop')||document.querySelector('[data-native-video-error]')){
+      // Hide the native view without stopping the SAME Media3 playback clock.
+      framePlacedOnScreen=false;
+      await native.frame({width:0,height:0,...nativeBounds});
+      return;
+    }
+    const host=document.getElementById('persistentVideoMount');
+    if(host?.classList.contains('watch-audio-parked') &&
+       document.querySelector('.media-switch [data-watch-mode="video"].active')){
+      // Previous iframe parking is for Vimeo/WebView, not native PlayerView.
+      // The emulator showed frames increasing with frame.x=-12000 after a
+      // real Audio -> Video tap. Restore the visible host BEFORE measuring it.
+      host.classList.remove('watch-audio-parked');
+      host.classList.add('watch-full-host');
+      document.body.classList.remove('irgun-watch-mini-hosted');
+    }
+    const current=viewportFrame();
+    if(!current){
+      // Never place a native surface beyond the actual Android viewport:
+      // a playing ExoPlayer with an offscreen PlayerView is BLACK video.
+      framePlacedOnScreen=false;
+      await native.frame({width:0,height:0,...nativeBounds});
+      return;
+    }
     const rect=current.getBoundingClientRect();
-    if(rect.width<=0||rect.height<=0)return;
-    await native.frame({x:rect.x,y:rect.y,width:rect.width,height:rect.height,
-      viewportWidth:innerWidth,viewportHeight:innerHeight}).catch(()=>{});
+    const scroll=current.closest?.('.watch-scroll')?.getBoundingClientRect();
+    const navigation=document.querySelector('#androidBottomNavigationMount .bottom-nav')?.getBoundingClientRect();
+    const navigationTop=navigation?.width>0&&navigation?.height>0 ? navigation.top-8 : innerHeight;
+    const left=Math.max(0,rect.left,scroll?.left??0),top=Math.max(0,rect.top,scroll?.top??0);
+    const right=Math.min(innerWidth,rect.right,scroll?.right??innerWidth);
+    const bottom=Math.min(innerHeight,rect.bottom,scroll?.bottom??innerHeight,navigationTop);
+    if(right<=left||bottom<=top){
+      framePlacedOnScreen=false;
+      await native.frame({width:0,height:0,...nativeBounds});return;
+    }
+    // Keep the original video size; clip only the part covered by the scroll
+    // viewport. Resizing the decoder view would change the picture's framing.
+    nativeBounds.clip={left:left-rect.left,top:top-rect.top,
+      right:right-rect.left,bottom:bottom-rect.top};
+    try{
+      await native.frame({x:rect.x,y:rect.y,width:rect.width,height:rect.height,
+        ...nativeBounds});
+      framePlacedOnScreen=true;
+    }catch(error){
+      framePlacedOnScreen=false;
+      if(!destroyed)console.warn('[Media3] unable to position visible native frame',error);
+    }
   };
   const scheduleFrame=()=>{
     if(layoutRequested||destroyed)return;
@@ -44,7 +102,7 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     requestAnimationFrame(()=>{layoutRequested=false;void positionFrame();});
   };
   const trackFrame=()=>{
-    const current=document.getElementById('watchVimeoFrame');
+    const current=viewportFrame()||document.getElementById('watchVimeoFrame');
     if(current!==observedFrame){
       observer.disconnect();observedFrame=current;
       if(current)observer.observe(current);
@@ -63,10 +121,27 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     try{
       const s=await refresh();
       if(!s.active)return;
+      // A native root can resize/rotate after the WebView has laid out. The
+      // DOM placeholder may look visible while Android's REAL PlayerView is
+      // still offscreen. Keep remeasuring until native visibility recovers.
+      if(mode==='video'&&s.videoSelected&&
+          (!framePlacedOnScreen||!s.surfaceVisibleOnScreen))scheduleFrame();
       const playing=s.videoSelected && s.playing;
       if(playing!==lastPlaying){lastPlaying=playing;emit(playing?'play':'pause',{seconds:s.positionMs/1000,duration:s.durationMs/1000});}
       emit('timeupdate',{seconds:s.positionMs/1000,duration:s.durationMs/1000,frames:s.frames});
-      if(s.error)onError(new Error('Native Media3 '+s.error),s.positionMs/1000,s.playWhenReady,adapter);
+      if(s.error){
+        failedFrames=s.frames;
+        if(s.error!==reportedError){
+          reportedError=s.error;
+          onError(new Error('Native Media3 '+s.error),s.positionMs/1000,s.playWhenReady,adapter);
+        }
+      }else if(reportedError&&mode==='video'&&s.videoSelected&&s.playing&&s.frames>failedFrames){
+        // Network recovery keeps the same player. Remove its old error UI only
+        // after this source is actually rendering new frames, then reveal it.
+        reportedError='';failedFrames=0;
+        onRecovered(adapter);
+        framePlacedOnScreen=false;trackFrame();
+      }
       if(mode==='video'&&!s.videoSelected){
         // Android Home was pressed; its media service switched to audio-only
         // using this same HLS MediaItem, so remove the picture surface.
@@ -95,11 +170,15 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     setVolume:async volume=>{await native.playback({operation:'volume',volume});return volume;},
     play:async()=>native.playback({operation:'play'}),
     pause:async()=>native.playback({operation:'pause'}),
-    setMode:async next=>{
+    setMode:async (next, options={})=>{
       if(!['audio','video'].includes(next))throw new Error('Invalid Media3 mode');
-      await native.mode({mode:next});
+      // The downloaded local MP3 may replace HLS only in AUDIO, using the same
+      // native ExoPlayer and validated private file path. VIDEO reopens its
+      // original HLS/MP4 source at the shared live clock.
+      await native.mode({mode:next,offlineUri:next==='audio'?String(options.offlineUri||''):''});
       mode=next;
-      if(next==='video'){trackFrame();await positionFrame();}
+      if(next==='video'){framePlacedOnScreen=false;trackFrame();await positionFrame();}
+      else framePlacedOnScreen=false;
       return next;
     },
     updateFrame:trackFrame,

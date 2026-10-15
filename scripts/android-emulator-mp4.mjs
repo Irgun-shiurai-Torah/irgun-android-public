@@ -158,12 +158,26 @@ try {
     await delay(650);
   }
   assert.ok(search,'Home search must be visible');
-  await tapVisible('#homeLibrarySearch');
   const code=String(target.shiurCode||target.title.match(/IST-[A-Z]+\d+/)?.[0]||'');
   assert.ok(/^IST-[A-Z]+\d+$/.test(code),'Reported shiur search code required');
   const searchState=async()=>JSON.parse(await evaluate("JSON.stringify({screen:window.ISTReleaseQA?.snapshot?.().screen,focused:document.activeElement?.id||'',value:document.getElementById('homeLibrarySearch')?.value??null,query:window.ISTReleaseQA?.snapshot?.().searchQuery??null})"));
   let observedSearch;
-  for(let i=0;i<30;i++) {observedSearch=await searchState();if(observedSearch.focused==='homeLibrarySearch')break;await delay(150);}
+  // On API34 after restoring account state, the Home catalog reflows after
+  // our first native touch; that initial coordinate can land on a different
+  // card instead of focusing Search. Re-measure and physically tap the SAME
+  // visible input again. Do NOT use CDP focus() or synthetic keyboard events.
+  for(let attempt=0;attempt<3;attempt++){
+    await tapVisible('#homeLibrarySearch');
+    for(let i=0;i<20;i++){
+      observedSearch=await searchState();
+      if(observedSearch.focused==='homeLibrarySearch')break;
+      await delay(150);
+    }
+    if(observedSearch.focused==='homeLibrarySearch')break;
+    report.searchFocusRetryObservations||=[];
+    report.searchFocusRetryObservations.push({attempt:attempt+1,state:observedSearch});
+    await delay(450);
+  }
   report.searchBeforeTyping=observedSearch;
   assert.equal(observedSearch.focused,'homeLibrarySearch','Actual Android tap must focus Home search before sending text');
   await typeObservedNativeText({value:code,delay,
@@ -191,6 +205,155 @@ try {
   }
   await tapVisible(selector);
   report.afterWatchTap=await read();
+
+  // This production build now uses a single native Media3 surface. An HTML
+  // video node is intentionally absent: observing it as the playback engine
+  // falsely failed all four API levels before a single playback assertion.
+  let firstNative;
+  // Native attach is asynchronous after a physical Watch tap. Observe whichever
+  // real decoder actually appears; do not misclassify a preparing native player
+  // as a failed WebView player from one early snapshot.
+  for(let attempt=0;attempt<75;attempt++) {
+    firstNative=await evaluate("window.Capacitor.nativePromise('IrgunNativeVideo','snapshot',{})");
+    if(firstNative.active || (await readDOM()).video)break;
+    await delay(400);
+  }
+  if(firstNative.active) {
+    const sample=async()=>({...(await read()),
+      media3:await evaluate("window.Capacitor.nativePromise('IrgunNativeVideo','snapshot',{})")});
+    const waitMedia3=async(test,message,timeoutMs=60000)=>{
+      const deadline=Date.now()+timeoutMs;let last;
+      while(Date.now()<deadline){last=await sample();if(test(last))return last;await delay(400);}
+      throw new Error(message+'; actual native state='+JSON.stringify(last));
+    };
+    const ready=await waitMedia3(s=>s.activeMode==='video'&&s.native.mode==='VIDEO'&&
+      s.media3.active&&s.media3.videoSelected&&s.media3.playing&&s.media3.firstFrame&&
+      s.media3.frames>=8&&s.media3.width>0&&s.media3.height>0&&s.media3.positionMs>0,
+      'Real moving native Video must start for the exact searched lecture');
+    assert.equal(ready.video,null,'Native Media3 must not open a second WebView decoder');
+    assert.equal(ready.iframeSrc,'about:blank','Native Video must never load a Vimeo iframe');
+    assert.ok(!ready.media3.error,'Native Media3 decoder must have no error');
+    assert.ok(['hls','mp4'].includes(ready.media3.sourceType),'Actual native HLS/MP4 transport required');
+    assert.ok(ready.media3.bufferedPositionMs>ready.media3.positionMs,
+      'Actual native video must be buffered beyond its clock');
+    assert.ok(Math.abs(ready.native.playbackSpeed-1)<.02,'Default Media3 speed must be 1x');
+    assert.ok(ready.native.audioOutputVolume>0,'Actual native Media3 VIDEO audio must not be muted');
+    assert.equal(Boolean(await evaluate('window.ISTReleaseQA.snapshot().isLoggedIn')),
+      process.env.IRGUN_EXPECT_SIGNED_IN==='1','Actual baseline must use declared account');
+    report.checks.push({label:'Real native video selected, audible and buffered at default 1x',native:ready.native,media3:ready.media3});
+    const later=await sample();await delay(3200);const moving=await sample();
+    assert.ok(moving.media3.positionMs>later.media3.positionMs+1600,
+      'Actual native Video clock must continue moving');
+    assert.ok(moving.media3.frames>=later.media3.frames+10,
+      'Decoded native Video frames must continue moving');
+    assert.equal(moving.media3.sourceType,ready.media3.sourceType,'Playback transport changed unexpectedly');
+    report.checks.push({label:'Real native frames and clock advance without another decoder',
+      before:later.media3,after:moving.media3});
+    // Physical Android MediaSession media keys, not injected JavaScript control calls.
+    adb('shell','input','keyevent','KEYCODE_MEDIA_PAUSE');
+    const paused=await waitMedia3(s=>!s.media3.playing,'Physical Pause must pause native Media3');
+    await delay(1400);const held=await sample();
+    assert.ok(Math.abs(held.media3.positionMs-paused.media3.positionMs)<500,
+      'Physical Pause must hold the native clock');
+    adb('shell','input','keyevent','KEYCODE_MEDIA_PLAY');
+    const resumed=await waitMedia3(s=>s.media3.playing&&s.media3.videoSelected,
+      'Physical Play must resume native VIDEO');
+    await delay(1800);const continued=await sample();
+    assert.ok(continued.media3.positionMs>resumed.media3.positionMs+800,
+      'Physical Play must advance native video again');
+    report.checks.push({label:'Physical Android media Pause and Play preserve native position',
+      paused:paused.media3.positionMs,resumed:continued.media3.positionMs});
+    const beforeAudio=await sample();
+    await tapVisible('[data-watch-mode="audio"]');
+    const audio=await waitMedia3(s=>s.activeMode==='audio'&&s.native.mode==='AUDIO'&&
+      s.native.audioIsPlaying&&s.media3.active&&!s.media3.videoSelected&&s.media3.playing,
+      'Physical Video to Audio must continue in the same native Media3 engine');
+    assert.ok(audio.media3.positionMs>=beforeAudio.media3.positionMs-1500,
+      'Audio handoff must not rewind');
+    await delay(2300);const advancingAudio=await sample();
+    assert.ok(advancingAudio.media3.positionMs>audio.media3.positionMs+1200,
+      'Audio must advance automatically');
+    report.checks.push({label:'Native Video to Audio continues without duplicate decoder or rewind',
+      videoMs:beforeAudio.media3.positionMs,audioMs:advancingAudio.media3.positionMs});
+    // Reproduce a real physical ten-minute range seek, including RTL geometry.
+    let seekOffset=0,seeked;
+    for(let n=0;n<8;n++){
+      const measured=await freshPoint(async()=>JSON.parse(await evaluate(`JSON.stringify((()=>{
+        const e=document.querySelector('#watchAudioSeek'),r=e?.getBoundingClientRect();if(!r)return null;
+        const max=Number(e.max),usable=r.width-16,rtl=getComputedStyle(e).direction==='rtl';
+        const x=r.left+8+usable*(rtl?1-600/max:600/max)+${seekOffset},y=r.top+r.height/2;
+        return document.elementFromPoint(x,y)===e?{x,y,width:innerWidth,height:innerHeight,rtl,usable,max}:null;
+      })())`)));
+      adb('shell','input','tap',...measured.point.map(String));
+      await delay(350);seeked=await sample();
+      report.gestures.push({label:'Physical native ten-minute seek',point:measured.point,
+        timeMs:seeked.media3.positionMs,range:seeked.seek?.value});
+      if(Math.abs(seeked.media3.positionMs-600000)<6500)break;
+      assert.ok(Number.isFinite(Number(seeked.seek?.value)),'Audio slider range must remain observable');
+      seekOffset+=(600-Number(seeked.seek.value))*measured.domPoint.usable/measured.domPoint.max*
+        (measured.domPoint.rtl?-1:1);
+    }
+    assert.ok(Math.abs(seeked.media3.positionMs-600000)<8000,
+      'Physical seek must reach ten minutes in real Media3 audio');
+    // Seeking to an unbuffered HLS segment legitimately enters Media3 BUFFERING
+    // with playWhenReady=true. Observed API 30/34/35 traces resumed in about
+    // two seconds; an immediate 1.5-second assertion mistook this for a stall.
+    // Require ACTUAL resumed audio and advancing media time within 25 seconds.
+    // No test clock is synthesized and a persistent stall remains a failure.
+    const seekRecoveryStart=Date.now();
+    let sought,seekLast;
+    while(Date.now()-seekRecoveryStart<25000) {
+      seekLast=await sample();
+      if(seekLast.native.mode==='AUDIO' && seekLast.native.audioIsPlaying &&
+        seekLast.native.audioOutputVolume>0 && seekLast.media3.active &&
+        seekLast.media3.playing &&
+        seekLast.media3.positionMs>seeked.media3.positionMs+1100) {
+        sought=seekLast;
+        break;
+      }
+      await delay(450);
+    }
+    assert.ok(sought,'Unbuffered physical HLS seek did not recover audible moving Audio within 25 seconds; last='+JSON.stringify({
+      native:seekLast?.native,media3:seekLast?.media3
+    }));
+    assert.ok(sought.media3.positionMs<seeked.media3.positionMs+26000,
+      'Physical seek unexpectedly jumped ahead of the playing HLS clock');
+    report.checks.push({label:'Unbuffered physical seek to ten minutes recovers audible advancing native Audio',
+      start:seeked.media3.positionMs,end:sought.media3.positionMs,
+      actualRecoveryMs:Date.now()-seekRecoveryStart});
+    await tapVisible('[data-watch-mode="video"]');
+    const videoAgain=await waitMedia3(s=>s.activeMode==='video'&&s.native.mode==='VIDEO'&&
+      s.media3.active&&s.media3.videoSelected&&s.media3.playing&&s.media3.firstFrame&&
+      s.media3.frames>sought.media3.frames+5,
+      'Audio to Video must restore visibly moving native decoded frames');
+    assert.ok(videoAgain.media3.positionMs>=sought.media3.positionMs-1800,
+      'Native Audio to Video must not rewind the ten-minute lecture');
+    const restoredAt=Date.now();
+    await delay(10000);
+    const ten=await waitMedia3(s=>s.media3.playing&&s.media3.videoSelected&&
+      s.media3.positionMs>videoAgain.media3.positionMs+7000&&
+      s.media3.frames>videoAgain.media3.frames+10,
+      'Native Video must resume its advancing clock and decoded frames after buffering',15000);
+    assert.ok(ten.media3.positionMs>videoAgain.media3.positionMs+7000&&
+      ten.media3.frames>videoAgain.media3.frames+10,
+      'Restored native Video must advance decoded frames and clock');
+    assert.equal(ten.media3.playerIdentity,videoAgain.media3.playerIdentity,'Video buffering must not replace ExoPlayer');
+    assert.equal(ten.media3.mediaItemIdentity,videoAgain.media3.mediaItemIdentity,'Video buffering must not replace its MediaItem');
+    report.checks.push({label:'Ten-minute Audio to Video restores moving frames and advancing clock',
+      recoveryMs:Date.now()-restoredAt,start:videoAgain.media3,end:ten.media3});
+    await tapVisible('[data-watch-mode="audio"]');
+    const audioAgain=await waitMedia3(s=>s.activeMode==='audio'&&s.native.mode==='AUDIO'&&
+      s.native.audioIsPlaying&&!s.media3.videoSelected&&s.media3.playing,
+      'Ten-second Video to Audio must continue automatically');
+    assert.ok(audioAgain.media3.positionMs>=ten.media3.positionMs-1800,
+      'Return to Audio must not rewind the moving video clock');
+    await delay(1800);const finalAudio=await sample();
+    assert.ok(finalAudio.media3.positionMs>audioAgain.media3.positionMs+800,
+      'Returned Audio must continue playing');
+    report.checks.push({label:'Native Video to Audio returns at same clock with one engine',
+      start:audioAgain.media3,end:finalAudio.media3});
+    report.engine='native-media3-single-exoplayer';
+  } else {
   await wait(s=>s.video?.ready>=2 && s.video.width>0);
   const loaded=await read();report.loaded=loaded;
   assert.ok(Math.abs(loaded.video.rate-1)<.02,'A fresh actual video must start at 1x before any speed setting');
@@ -328,6 +491,8 @@ try {
   screenshot('audio-after-ten-seconds-of-video');
   report.checks.push({label:'Switch back to Audio after 10 seconds keeps position, playing, and a single audible source',before:videoAfterTenSeconds,start:returnedAudio,after:returnedAudioMoving});
   writeFileSync('emulator-report/reported-shiur.png',execFileSync('adb',['exec-out','screencap','-p']));
+
+  }
   report.result='passed';
 } catch (error) {
   report.result = 'failed'; report.error = String(error.stack || error);

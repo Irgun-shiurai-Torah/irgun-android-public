@@ -3,8 +3,11 @@ import { writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {observedAdb} from './android-adb-observer.mjs';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
-import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {fullscreenEducationTapPoint} from './android-system-ui-observation.mjs';
+import {settledNativeTapPoint,waitForNativeWindowFocus} from './android-native-tap-point.mjs';
 import {typeObservedNativeText} from './android-native-text-entry.mjs';
+import {verifyAndroidVideoDisplay,assertAndroidVideoTimes,nativeControllerRevealPoint,nativeDoubleTapPoint} from './android-video-display-regression.mjs';
+import {verifyAndroidTaskDismissal} from './android-task-dismissal-regression.mjs';
 
 // Read the real WebView through CDP, but perform every navigation gesture with
 // Android input events. No DOM clicks or synthetic touch events stand in for UI.
@@ -127,21 +130,21 @@ try {
   let [left,top,right,bottom]=measuredBounds;
   report.nativeBounds=measuredBounds;
   const nativePoint=p=>[Math.round(left+p.x*(right-left)/p.width),Math.round(top+p.y*(bottom-top)/p.height)];
-  const visiblePoint=async selector=>JSON.parse(await evaluate(`JSON.stringify((()=>{
+  const visiblePoint=async (selector,allowHeader=false,allowFooter=false)=>JSON.parse(await evaluate(`JSON.stringify((()=>{
     // A card has several Watch targets. Its cover center can be obscured by
     // sibling Watch/Listen buttons; choose a genuinely visible target instead.
     for(const b of document.querySelectorAll(${JSON.stringify(selector)})) {
       const r=b.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
       const hit=document.elementFromPoint(x,y);
-      if(y>70 && y<innerHeight-75 && (hit===b || b.contains(hit)))
+      if(y>${allowHeader?0:70} && y<innerHeight-${allowFooter?0:75} && (hit===b || b.contains(hit)))
         return {x,y,width:innerWidth,height:innerHeight};
     }
     return null;
   })())`));
-  const tapVisible=async selector=>{
+  const tapVisible=async (selector,allowHeader=false,allowFooter=false)=>{
     const measured=await settledNativeTapPoint({
       readBounds:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),
-      readPoint:()=>visiblePoint(selector),delay
+      readPoint:()=>visiblePoint(selector,allowHeader,allowFooter),delay
     });
     [left,top,right,bottom]=measured.bounds;
     adb('shell','input','tap',...measured.point.map(String));report.gestures.push({selector,...measured});
@@ -168,7 +171,11 @@ try {
   assert.equal(observedSearch.focused,'homeLibrarySearch','Actual Android tap must focus Home search before sending text');
   await typeObservedNativeText({value:code,delay,
     readValue:async()=>{const s=await searchState();assert.equal(s.focused,'homeLibrarySearch','Each real native key must target the focused Home search');return s.value;},
-    typeCharacter:character=>adb('shell','input','text',character)
+    typeCharacter:character=>{
+      const result=adb('shell','am','instrument','-w','-r','-e','text',character,
+        'org.irgunshiuraitorah.qa/.NativeText');
+      assert.match(result,/INSTRUMENTATION_CODE: -1/,'Android must accept the actual native key pair');
+    }
   });
   observedSearch=await searchState();report.searchAfterTyping=observedSearch;
   assert.equal(observedSearch.focused,'homeLibrarySearch','Feed refresh must preserve Home input focus');
@@ -208,10 +215,43 @@ try {
     }
     throw new Error(label+'; last='+JSON.stringify(result));
   };
+  const captureVisibleNativePicture=async(snapshot,name)=>{
+    // Measure the picture after the actual controller scrim has disappeared.
+    // With most of a scrolled stage clipped, every visible pixel can belong
+    // to a transport/seek control. Wait for the real eight-second auto-hide;
+    // tapping an assumed empty point there could accidentally seek the lecture.
+    await waitNative(s=>!s.media3.controllerFullyVisible&&!s.media3.qualityButtonVisible,
+      'Native controller must auto-hide before measuring unobscured picture pixels',12000);
+    await delay(500);
+    snapshot=await sample();
+    const m=snapshot.media3;
+    assert.ok(m.surfaceVisibleOnScreen && m.surfaceVisibleWidth>120 &&
+      m.surfaceVisibleHeight>65 && m.surfaceX>=0 && m.surfaceY>=0,
+      'Native decoded frames are NOT enough: Android PlayerView must be physically visible, not parked at x=-12000; '+JSON.stringify(m));
+    const png='emulator-report/'+name+'.png';
+    writeFileSync(png,execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));
+    const w=Math.max(10,Math.round(m.surfaceVisibleWidth*.56));
+    const h=Math.max(10,Math.round(m.surfaceVisibleHeight*.55));
+    const x=Math.round(m.surfaceX+(m.surfaceVisibleWidth-w)/2);
+    const y=Math.round(m.surfaceY+(m.surfaceVisibleHeight-h)/2);
+    // This fixed HLS fixture shows a well-lit beis midrash. An entirely black
+    // Android screencap is a failed Video test even if ExoPlayer decodes frames.
+    // -alpha off avoids counting PNG alpha as 50% brightness for BLACK pixels.
+    const mean=Number(execFileSync('convert',[png,'-crop',w+'x'+h+'+'+x+'+'+y,
+      '+repage','-alpha','off','-colorspace','Gray','-format','%[fx:mean]','info:'],
+      {encoding:'utf8'}).trim());
+    assert.ok(Number.isFinite(mean)&&mean>.075,
+      'SCREEN BLACK: real Android video viewport has luminance '+mean+
+      ' despite a moving ExoPlayer clock; screenshot='+png+'; native='+JSON.stringify(m));
+    report.checks.push({label:'Real Android screenshot shows nonblack VIDEO pixels',
+      image:png,physicalViewport:{x,y,w,h},meanLuminance:mean});
+    return mean;
+  };
   const first=await waitNative(s=>s.activeMode==='video'&&
     s.media3.active&&s.media3.videoSelected&&s.media3.playing&&
     s.media3.sourceType==='hls'&&s.media3.firstFrame&&
-    s.media3.width>0&&s.media3.height>0&&s.media3.frames>=8,
+     s.media3.width>0&&s.media3.height>0&&s.media3.frames>=8&&
+    s.media3.surfaceVisibleOnScreen&&s.media3.surfaceVisibleWidth>120,
     'Native Media3 must render real moving HLS video, without MP4/WebView fallback');
   assert.equal(first.native.mode,'VIDEO','Media3 session must own VIDEO playback');
   assert.equal(first.iframeSrc,'about:blank','Vimeo must not load while native Media3 owns Video');
@@ -219,7 +259,7 @@ try {
   assert.ok(first.media3.positionMs>0&&first.media3.bufferedPositionMs>first.media3.positionMs,
     'Native ExoPlayer must have real prepared media');
   report.checks.push({label:'Native HLS decodes visible frames with exactly one Media3 player',snapshot:first.media3});
-  writeFileSync('emulator-report/media3-first-frames.png',execFileSync('adb',['exec-out','screencap','-p']));
+  await captureVisibleNativePicture(first,'media3-first-frames');
   await delay(3000);
   const moved=await sample();
   assert.ok(moved.media3.positionMs>first.media3.positionMs+1800,'Native VIDEO clock must progress');
@@ -235,29 +275,491 @@ try {
   assert.ok(audioStart>=moved.media3.positionMs-1250,
     'Changing presentation must not restart the lecture or rewind the shared clock');
   await delay(4500);
-  const audioProgress=await sample();
+  const audioProgress=await waitNative(s=>s.media3.playing&&!s.media3.videoSelected&&
+    s.media3.positionMs>audioStart+2500,
+    'The same HLS Audio clock must advance after a bounded buffering interval',20000);
   assert.ok(audioProgress.media3.playing&&!audioProgress.media3.videoSelected,
     'Native Audio must continue without pressing Play again');
   assert.ok(audioProgress.media3.positionMs>audioStart+2500,
     'The same Media3 HLS audio clock must keep moving after Video is hidden');
   assert.equal(audioProgress.media3.sourceType,'hls','Switching to Audio must not replace the HLS MediaItem');
+  assert.equal(audioProgress.media3.playerIdentity,audio.media3.playerIdentity,'Audio buffering must retain the same ExoPlayer');
+  assert.equal(audioProgress.media3.mediaItemIdentity,audio.media3.mediaItemIdentity,'Audio buffering must retain the same MediaItem');
   report.checks.push({label:'Video to Audio switches only the video track, no new decoder/clock',before:audio.media3,after:audioProgress.media3});
   await tapVisible('[data-watch-mode="video"]');
   const resumed=await waitNative(s=>s.activeMode==='video'&&s.media3.active&&
     s.media3.videoSelected&&s.media3.playing&&s.media3.firstFrame&&
-    s.native.mode==='VIDEO'&&s.media3.frames>audioProgress.media3.frames+12,
+    s.native.mode==='VIDEO'&&s.media3.frames>audioProgress.media3.frames+12&&
+    s.media3.surfaceVisibleOnScreen&&s.media3.surfaceVisibleWidth>120,
     'Physical Audio to Video switch must display freshly rendered native frames');
   assert.ok(resumed.media3.positionMs>=audioProgress.media3.positionMs-1250,
     'Returning to Video must preserve the SAME advancing Media3 clock');
   assert.equal(resumed.media3.sourceType,'hls','Track-only Video restore must retain original HLS');
   assert.equal(resumed.video,null,'No second WebView video player may be created during mode switches');
   report.checks.push({label:'Audio to Video resumes moving decoded frames in the same Media3 engine',snapshot:resumed.media3});
-  writeFileSync('emulator-report/media3-video-restored.png',execFileSync('adb',['exec-out','screencap','-p']));
+  const restoredLuminance=await captureVisibleNativePicture(resumed,'media3-video-restored');
+  report.restoredVisiblePicture={luminance:restoredLuminance,frameCount:resumed.media3.frames,
+    surfaceX:resumed.media3.surfaceX,surfaceY:resumed.media3.surfaceY};
+
+  // Every action below is a physical Android touch. CDP only observes state.
+  const tapNativeLabel=async (description, text, {holdMs=0}={}) => {
+    const controlKey={
+      'Choose video quality':'qualityButtonRect',
+      'Choose playback speed':'speedButtonRect',
+      'Enter Picture-in-Picture':'pipButtonRect',
+      'Enter video fullscreen':'sizeButtonRect',
+      'Exit video fullscreen':'sizeButtonRect',
+      'Expand mini video':'miniExpandRect',
+      'Pause mini video':'miniPlayPauseRect',
+      'Play mini video':'miniPlayPauseRect'
+    }[description];
+    if (controlKey) {
+      for (let attempt=0;attempt<12;attempt++) {
+        // Two fresh native geometry reads replace the expensive whole-window
+        // hierarchy scan for app-owned buttons. That scan could return a stale
+        // visible node just as the 8-second native controller timer expired.
+        const first=(await sample()).media3[controlKey];
+        await delay(80);
+        const state=(await sample()).media3, second=state[controlKey];
+        if (first && second && Math.abs(first.x-second.x)<=1 &&
+            Math.abs(first.y-second.y)<=1 && second.width>0 && second.height>0) {
+          const point=[Math.round(second.x+second.width/2),Math.round(second.y+second.height/2)];
+          if(holdMs){
+            const touch=adb('shell','am','instrument','-w','-r','-e','gesture','hold',
+              '-e','holdMs',String(holdMs),'-e','x',String(point[0]),'-e','y',String(point[1]),
+              'org.irgunshiuraitorah.qa/.NativeTouch');
+            assert.match(touch,/INSTRUMENTATION_CODE: -1/,'Actual held touchscreen event must succeed');
+          }else adb('shell','input','tap',...point.map(String));
+          report.gestures.push({nativeDescription:description,point,nativeRect:second,holdMs});
+          if(description==='Choose video quality')await waitNative(s=>s.media3.qualityMenuVisible,
+            'Physical quality button must open its actual native menu',10000);
+          if(description==='Choose playback speed')await waitNative(s=>s.media3.speedMenuVisible,
+            'Physical speed icon must open its native menu',10000);
+          return;
+        }
+        if (!['Expand mini video','Pause mini video','Play mini video'].includes(description)) await showNativeControls();
+        else await delay(200);
+      }
+      throw new Error('Actual native control has no stable visible rectangle: '+description);
+    }
+    let xml;
+    for (let attempt=0; attempt<12; attempt++) {
+      xml=nativeHierarchy();
+      const nodes=xml.match(/<node\b[^>]*>/g)||[];
+      const node=nodes.find(n=>(description && n.includes('content-desc="'+description+'"')) ||
+        (text && n.includes('text="'+text+'"')));
+      const b=node?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+      if (b && Number(b[3])>Number(b[1]) && Number(b[4])>Number(b[2])) {
+        const x=Math.round((Number(b[1])+Number(b[3]))/2);
+        const y=Math.round((Number(b[2])+Number(b[4]))/2);
+        adb('shell','input','tap',String(x),String(y));
+        report.gestures.push({nativeDescription:description,text,point:[x,y]});
+        return;
+      }
+      if (['Choose video quality','Enter video fullscreen','Exit video fullscreen',
+          'Enter Picture-in-Picture'].includes(description)) {
+        // The hierarchy observer may take longer than Media3's control timeout.
+        // Reopen the actual controls with a physical video tap when observation
+        // confirms they disappeared; never inject a controller visibility setter.
+        await showNativeControls();
+      }
+      await delay(300);
+    }
+    throw new Error('Actual native control not visible: '+description+' / '+text+'; '+xml);
+  };
+  let fullscreenEducationDismissed=false;
+  const showNativeControls=async({fresh=false}={})=>{
+    if((await sample()).media3.fullscreen&&!fullscreenEducationDismissed){
+      // Android's first immersive-mode tip is not focusable on every version;
+      // it can intercept taps even while the app still reports window focus.
+      await delay(1200);
+      const education=fullscreenEducationTapPoint(nativeHierarchy(undefined,{allWindows:true}));
+      if(education){
+        adb('shell','input','tap',...education.map(String));
+        fullscreenEducationDismissed=true;await delay(250);
+      }
+    }
+    const observeWindow=()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+    // Window focus can lag the actual physical rotation animation. Wait for
+    // real focus first; an unknown persistent dialog still fails below.
+    for(let i=0;i<15&&!(await observeWindow()).focused;i++)await delay(200);
+    if(!(await observeWindow()).focused){
+      const education=fullscreenEducationTapPoint(nativeHierarchy(undefined,{allWindows:true}));
+      assert.ok(education,'An unexpected native window blocks video controls; ANR and other dialogs are failures');
+      adb('shell','input','tap',...education.map(String));
+      await waitForNativeWindowFocus({readBounds:observeWindow,delay});
+    }
+    const s=await sample(), m=s.media3;
+    // Previously 48% of the player overlapped the real seek bar on a
+    // 320x640 emulator, silently seeking a 1:42 lecture to ~1:40.
+    // Read the actual seek rectangle and reveal controls above it.
+    const point=nativeControllerRevealPoint(m);
+    const hasTimeRow=m.elapsedTimeRect&&m.durationTimeRect&&m.seekBarRect;
+    if(m.controllerFullyVisible&&(fresh||!hasTimeRow)){
+      // A visible control may have only milliseconds left on its timer.
+      // Physically hide/show it before launching the held-touch instrument,
+      // whose process startup must not consume that remaining timeout.
+      adb('shell','input','tap',...point);
+      await waitNative(s=>!s.media3.controllerFullyVisible,'Physical tap must hide controls',10000);
+      // Separate these controller taps beyond Android's double-tap window.
+      // The same right-edge pair must not become a +15-second user gesture.
+      await delay(500);
+    }
+    if (fresh||!m.controllerFullyVisible||!hasTimeRow) {
+      adb('shell','input','tap',...point);
+    }
+    const shown=await waitNative(s=>s.media3.controllerFullyVisible&&s.media3.pipButtonVisible&&s.media3.qualityButtonVisible&&
+      s.media3.elapsedTimeRect&&s.media3.durationTimeRect&&s.media3.seekBarRect,
+      'Native controls, elapsed time, total duration and seek bar must all be visible after layout settles',10000);
+    assert.equal(shown.media3.settingsButtonVisible,false,
+      'The duplicate bottom settings gear must stay removed whenever controls appear');
+    assertAndroidVideoTimes(shown.media3);
+    if(fresh)assert.equal(shown.media3.doubleTapSeekCount,m.doubleTapSeekCount,
+      'Physically refreshing controls must not trigger a double-tap seek');
+    return shown;
+  };
+  const samePlayback=(before,after,label,elapsed)=>{
+    assert.equal(after.playerIdentity,before.playerIdentity,label+' created/replaced ExoPlayer');
+    assert.equal(after.mediaItemIdentity,before.mediaItemIdentity,label+' replaced the MediaItem');
+    assert.ok(after.positionMs>=before.positionMs-1250,label+' rewound playback');
+    const rate=Math.max(1,before.playbackSpeed||1,after.playbackSpeed||1);
+    assert.ok(after.positionMs<=before.positionMs+elapsed*rate+5000,label+' jumped playback forward');
+    assert.equal(after.sourceType,'hls',label+' changed the source');
+  };
+  await verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,delay,report,
+    capturePicture:captureVisibleNativePicture,
+    showControls:()=>showNativeControls(),tapExit:()=>tapNativeLabel('Exit video fullscreen')});
+  if(process.env.IRGUN_VIDEO_DISPLAY_ONLY==='1') {
+    report.scope='Physical tablet video rotation and screen wake; separate from full media/account suite';
+  } else {
+  // Real footer taps navigate while the SAME video continues in Mini. DOM
+  // protocol node IDs prove feed/page renders do not replace the navigation.
+  const navDocument=await command('DOM.getDocument',{depth:0});
+  const navIdentity=async()=> (await command('DOM.querySelector',{
+    nodeId:navDocument.root.nodeId,selector:'.bottom-nav'})).nodeId;
+  const navState=()=>evaluate(`(()=>{
+    const nav=document.querySelector('.bottom-nav'),r=nav?.getBoundingClientRect();
+    const b=nav?.querySelector('[aria-current="page"]'),p=b?.getBoundingClientRect();
+    const hit=p?document.elementFromPoint(p.left+p.width/2,p.top+p.height/2):null;
+    const mini=document.querySelector('#persistentVideoMount.watch-mini-host .watch-overlay')?.getBoundingClientRect();
+    return {screen:window.ISTReleaseQA.snapshot().screen,active:b?.dataset.nav,
+      visible:!!r&&r.width>0&&r.height>0,unobscured:!!hit&&(hit===b||b.contains(hit)),
+      count:document.querySelectorAll('.bottom-nav').length,top:r?.top,miniBottom:mini?.bottom};
+  })()`);
+  const originalNav=await navIdentity();assert.ok(originalNav,'A real persistent navigation node is required');
+  const navBefore=(await sample()).media3,navStarted=Date.now();
+  for(const tab of ['library','home']){
+    await tapVisible('.bottom-nav [data-nav="'+tab+'"]',false,true);
+    const continued=await waitNative(s=>s.media3.mini&&s.media3.playing&&s.media3.frames>navBefore.frames+5,
+      'A real bottom-tab tap must keep moving video in the existing Mini player');
+    const page=await navState();assert.equal(page.screen,tab);assert.equal(page.active,tab);
+    assert.equal(page.count,1);assert.equal(page.unobscured,true);assert.equal(page.visible,true);
+    assert.ok(page.miniBottom<=page.top-4,'Mini video and its controls must sit above the floating navigation');
+    assert.equal(await navIdentity(),originalNav,'Page rendering must preserve the actual navigation element');
+    samePlayback(navBefore,continued.media3,'Persistent navigation to '+tab,Date.now()-navStarted);
+    report.checks.push({label:'Physical floating navigation to '+tab+' highlights the active tab and preserves same-player Mini',page});
+  }
+  writeFileSync('emulator-report/floating-navigation-mini.png',execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));
+  await tapNativeLabel('Expand mini video');
+  await waitNative(s=>!s.media3.mini&&s.media3.playing,'The same Mini player must expand after bottom-tab navigation');
+  let controls=await showNativeControls();
+  assert.ok(controls.media3.availableResolutions.length>=2,
+    'Quality integration fixture must contain at least two actual HLS resolutions');
+  const resolutions=controls.media3.availableResolutions;
+  for (const height of [resolutions.at(-1),resolutions[0]]) {
+    const before=(await showNativeControls()).media3,started=Date.now();
+    await tapNativeLabel('Choose video quality');
+    await tapNativeLabel('',height+'p');
+    const selected=await waitNative(s=>s.media3.qualityHeight===height&&
+      s.media3.height===height&&s.media3.playing&&s.media3.frames>before.frames+5,
+      'Actual Media3 decoder must change to selected HLS resolution '+height+'p',65000);
+    samePlayback(before,selected.media3,'Quality '+height+'p',Date.now()-started);
+    report.checks.push({label:'Physical quality menu selects real decoded HLS '+height+'p with same player/item/clock',
+      before,after:selected.media3});
+  }
+  controls=await showNativeControls({fresh:true});
+  const autoStarted=Date.now();
+  // Hold the real button beyond the eight-second hide timeout. It must still
+  // receive UP and open the quality menu, without a visibility setter.
+  await tapNativeLabel('Choose video quality',null,{holdMs:8500});
+  await tapNativeLabel('','Auto');
+  const auto=await waitNative(s=>s.media3.qualityHeight===0&&s.media3.playing,'Auto must restore adaptive Media3 selection');
+  samePlayback(controls.media3,auto.media3,'Auto after held quality control',Date.now()-autoStarted);
+  report.checks.push({label:'Held physical quality control survives its hide timeout and Auto preserves same player/item/clock',holdMs:8500,after:auto.media3});
+
+  for(const [rate,label] of [[1.25,'1.25×'],[1,'1×']]){
+    const before=(await showNativeControls()).media3,started=Date.now();
+    await tapNativeLabel('Choose playback speed');
+    await tapNativeLabel('',label);
+    const changed=await waitNative(s=>Math.abs(s.media3.playbackSpeed-rate)<.01&&
+      s.media3.playing&&s.media3.frames>before.frames+5,'Native speed menu must change real Media3 speed');
+    samePlayback(before,changed.media3,'Speed '+rate+'x',Date.now()-started);
+    report.checks.push({label:'Physical speed icon changes same Media3 player to '+rate+'x',before,after:changed.media3});
+  }
+
+  // Two actual native taps on each side must seek exactly once on the same engine.
+  for(const direction of [1,-1]) {
+    await delay(500);
+    const before=(await sample()).media3,started=Date.now();
+    // Use unobstructed VIDEO pixels. Old height/2 was physically inside the
+    // Media3 progress bar on Android 11 and jumped the lecture to 94 minutes.
+    const [x,y]=nativeDoubleTapPoint(before,direction).map(Number);
+    const pid=adb('shell','pidof','org.irgunshiuraitorah.app');
+    const touch=adb('shell','am','instrument','-w','-r','-e','x',String(x),'-e','y',String(y),
+      'org.irgunshiuraitorah.qa/.NativeTouch');
+    assert.match(touch,/INSTRUMENTATION_CODE: -1/,'Actual touchscreen injection must succeed');
+    const interval=Number(touch.match(/tapIntervalMs=(\d+)/)?.[1]);
+    assert.ok(interval>0&&interval<=250,'Both real Android taps must fit the actual double-tap interval');
+    assert.equal(adb('shell','pidof','org.irgunshiuraitorah.app'),pid,'Touch test may not restart Irgun');
+    report.gestures.push({nativeDoubleTap:[x,y],tapIntervalMs:interval});
+    const sought=await waitNative(s=>s.media3.doubleTapSeekCount===before.doubleTapSeekCount+1&&
+      s.media3.playing&&s.media3.frames>before.frames+3&&
+      s.media3.positionMs>=s.media3.doubleTapSeekTargetMs-1250&&
+      s.media3.positionMs<=s.media3.doubleTapSeekTargetMs+s.media3.doubleTapSeekAgeMs+2000,
+      'Physical Video double tap must seek '+direction*15+' seconds once',12000);
+    const expected=Math.max(0,before.positionMs+direction*15000);
+    assert.ok(sought.media3.doubleTapSeekTargetMs>=expected-1250&&
+      sought.media3.doubleTapSeekTargetMs<=expected+Date.now()-started+1250,
+      'Touch must request the actual current position plus exactly 15 seconds once');
+    assert.equal(sought.media3.playerIdentity,before.playerIdentity,'Double tap must keep ExoPlayer');
+    assert.equal(sought.media3.mediaItemIdentity,before.mediaItemIdentity,'Double tap must keep MediaItem');
+    report.checks.push({label:'Physical Video double tap seeks '+direction*15+' seconds on same player',before,after:sought.media3});
+  }
+
+  // Scroll from below the video to avoid the separate downward-to-mini gesture.
+  const beforeScroll=(await sample()).media3;
+  const scrollViewport=JSON.parse(await evaluate('JSON.stringify((()=>{const e=document.querySelector("#persistentVideoMount.watch-full-host .watch-scroll"),r=e?.getBoundingClientRect();return e&&r?{height:e.clientHeight,contentHeight:e.scrollHeight,top:r.top,bottom:r.bottom,viewport:innerHeight,scrollTop:e.scrollTop,dvh:CSS.supports("height","100dvh")}:null;})())'));
+  assert.ok(scrollViewport&&scrollViewport.height>100&&scrollViewport.height<=scrollViewport.viewport&&
+    scrollViewport.contentHeight>scrollViewport.height,
+    'Watch must have a bounded scrollable viewport on old and current Android WebViews');
+  report.scrollViewport=scrollViewport;
+  const scrollX=Math.round(beforeScroll.surfaceX+beforeScroll.surfaceVisibleWidth*.95);
+  const scrollY=Math.round(beforeScroll.surfaceY+beforeScroll.surfaceVisibleHeight+90);
+  adb('shell','input','swipe',String(scrollX),String(scrollY),String(scrollX),
+    String(scrollY-Math.round(beforeScroll.surfaceVisibleHeight*.65)),'700');
+  const partial=await waitNative(s=>s.media3.playing&&s.media3.surfaceVisibleOnScreen&&
+    s.media3.surfaceVisibleHeight>20&&s.media3.surfaceVisibleHeight<beforeScroll.surfaceVisibleHeight*.9,
+    'Partly scrolled video must retain a visible native picture');
+  await delay(1200);const partialMoved=await sample();
+  assert.ok(partialMoved.media3.frames>partial.media3.frames+5,'Clipped Video must keep rendering frames');
+  await captureVisibleNativePicture(partialMoved,'media3-partially-scrolled');
+  adb('shell','input','swipe',String(scrollX),String(scrollY-Math.round(beforeScroll.surfaceVisibleHeight*.65)),
+    String(scrollX),String(scrollY),'700');
+  await waitNative(s=>s.media3.surfaceVisibleHeight>=beforeScroll.surfaceVisibleHeight-3&&s.media3.playing,
+    'Scrolling back must restore the same whole native picture');
+  report.checks.push({label:'Physical scroll clips the visible picture without removing or restarting it',before:beforeScroll,partial:partialMoved.media3});
+
+  // Swipe the actual native picture, not a WebView proxy behind it.
+  const beforeSwipe=(await sample()).media3,swipeStart=Date.now();
+  const sx=Math.round(beforeSwipe.surfaceX+beforeSwipe.surfaceVisibleWidth*.5);
+  const sy=Math.round(beforeSwipe.surfaceY+beforeSwipe.surfaceVisibleHeight*.5);
+  adb('shell','input','swipe',String(sx),String(sy),String(sx),
+    String(sy+Math.max(110,Math.round(beforeSwipe.surfaceVisibleHeight*.9))),'480');
+  report.gestures.push({nativeSwipeDown:[sx,sy]});
+  const mini=await waitNative(s=>s.media3.mini&&s.media3.miniHitTargetVisible&&
+    s.media3.playing&&s.media3.surfaceVisibleOnScreen,'Real downward video swipe must open mini player');
+  samePlayback(beforeSwipe,mini.media3,'Swipe to mini',Date.now()-swipeStart);
+  await delay(2000);
+  const miniMoved=await sample();
+  assert.ok(miniMoved.media3.positionMs>mini.media3.positionMs+900&&
+    miniMoved.media3.frames>mini.media3.frames+5,'Mini must keep playing real moving video');
+  const originalLang=await evaluate('document.documentElement.lang');
+  for (let language=0;language<2;language++) {
+    if(language===1){
+      await tapVisible('[data-language-toggle]',true);
+      for(let n=0;n<30&&(await evaluate('document.documentElement.lang'))===originalLang;n++)await delay(150);
+      assert.notEqual(await evaluate('document.documentElement.lang'),originalLang,'Physical language toggle must change real layout direction');
+    }
+    const rtl=await evaluate('document.documentElement.dir === "rtl"');
+    await waitNative(s=>s.media3.mini&&s.media3.miniExpandRect&&s.media3.miniPlayPauseRect&&
+      (rtl ? s.media3.miniExpandRect.x>s.media3.miniPlayPauseRect.x+s.media3.miniPlayPauseRect.width :
+        s.media3.miniExpandRect.x+s.media3.miniExpandRect.width<s.media3.miniPlayPauseRect.x),
+      'Actual English/Hebrew native thumbnail and Pause must occupy separate visible grid columns');
+    for(let cycle=0;cycle<2;cycle++) {
+      const before=(await sample()).media3,started=Date.now();
+      assert.ok(before.miniPlayPauseRect,'Mini must expose a visible native Pause button');
+      assert.equal(before.miniPlayPauseLabel,'Pause mini video');
+      assert.ok(before.miniPlayPauseZ>before.miniExpandZ,
+        'Native Pause must remain above the thumbnail hit target, including RTL overlap');
+      await tapNativeLabel('Pause mini video');
+      const paused=await waitNative(s=>s.media3.mini&&!s.media3.playWhenReady&&!s.media3.playing&&
+        s.media3.miniPlayPauseLabel==='Play mini video','Physical Mini Pause must stop real Media3 playback without expanding');
+      await delay(1300);const stopped=await sample();
+      assert.ok(!stopped.media3.playWhenReady&&!stopped.media3.playing,'Mini must remain explicitly paused');
+      assert.ok(Math.abs(stopped.media3.positionMs-paused.media3.positionMs)<250,'Actual Mini Pause must freeze the native clock');
+      samePlayback(before,stopped.media3,'Mini Pause',Date.now()-started);
+      await tapNativeLabel('Play mini video');
+      const continued=await waitNative(s=>s.media3.mini&&s.media3.playWhenReady&&s.media3.playing&&
+        s.media3.positionMs>stopped.media3.positionMs+500&&s.media3.frames>stopped.media3.frames+5&&
+        s.media3.miniPlayPauseLabel==='Pause mini video','Physical Mini Play must resume moving video at saved position');
+      samePlayback(before,continued.media3,'Mini Resume',Date.now()-started);
+      report.checks.push({label:'Actual Mini Pause/Play stops and resumes one native clock without expansion',
+        language:await evaluate('document.documentElement.lang'),cycle,before,paused:stopped.media3,after:continued.media3});
+    }
+  }
+  await tapVisible('[data-language-toggle]',true);
+  for(let n=0;n<30&&(await evaluate('document.documentElement.lang'))!==originalLang;n++)await delay(150);
+  assert.equal(await evaluate('document.documentElement.lang'),originalLang,'Restore actual original language after Mini controls');
+  await tapNativeLabel('Expand mini video');
+  const expanded=await waitNative(s=>!s.media3.mini&&s.media3.surfaceVisibleWidth>120&&
+    s.media3.playing,'Physical mini thumbnail tap must expand the existing video');
+  samePlayback(beforeSwipe,expanded.media3,'Mini expand',Date.now()-swipeStart);
+  report.checks.push({label:'Physical swipe minimizes and physical mini thumbnail expands with continuous same-player playback',
+    before:beforeSwipe,mini:mini.media3,after:expanded.media3});
+
+  controls=await showNativeControls();
+  await tapNativeLabel('Enter video fullscreen');
+  await waitNative(s=>s.media3.fullscreen,'Native fullscreen control must expand video');
+  await delay(900);
+  const education=fullscreenEducationTapPoint(nativeHierarchy(undefined,{allWindows:true}));
+  if (education) adb('shell','input','tap',...education.map(String));
+  await showNativeControls();
+  await tapNativeLabel('Exit video fullscreen');
+  await waitNative(s=>!s.media3.fullscreen,'Native Shrink control must exit fullscreen');
+
+  const beforePip=(await showNativeControls()).media3,pipStart=Date.now();
+  await tapNativeLabel('Enter Picture-in-Picture');
+  const pip=await waitNative(s=>s.media3.systemPip&&s.media3.videoSelected&&s.media3.playing,
+    'PiP button must enter Android system PiP without switching to Audio');
+  assert.match(adb('shell','dumpsys','activity','activities'),/mode=pinned/,
+    'Android ActivityManager must confirm a real pinned PiP task');
+  assert.equal(pip.media3.pipButtonVisible,false,'App controls must hide in system PiP');
+  await delay(3000);
+  const pipMoved=await sample();
+  assert.ok(pipMoved.media3.positionMs>pip.media3.positionMs+1500&&
+    pipMoved.media3.frames>pip.media3.frames+5,'System PiP must keep decoding and advancing');
+  samePlayback(beforePip,pipMoved.media3,'PiP entry',Date.now()-pipStart);
+  writeFileSync('emulator-report/native-system-pip.png',execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));
+  adb('shell','am','start','-W','-n','org.irgunshiuraitorah.app/.MainActivity');
+  const afterPip=await waitNative(s=>!s.media3.systemPip&&s.media3.videoSelected&&
+    s.media3.playing&&s.media3.surfaceVisibleWidth>120,'Returning from PiP must restore actual moving video');
+  samePlayback(beforePip,afterPip.media3,'PiP return',Date.now()-pipStart);
+  assert.equal(afterPip.video,null,'PiP must never create a WebView video decoder');
+  assert.ok(afterPip.webAudio.every(a=>a.paused||a.muted||a.volume===0),'No second audible WebView audio in PiP');
+  report.checks.push({label:'Physical PiP button enters real Android pinned task and returns without player/item/clock change',
+    before:beforePip,pip:pipMoved.media3,after:afterPip.media3});
+
+  const headerPipStart=Date.now(),headerBefore=(await sample()).media3;
+  await tapVisible('[data-video-pip]',true);
+  await waitNative(s=>s.media3.systemPip&&s.media3.playing,'Header PiP icon must enter system PiP');
+  assert.match(adb('shell','dumpsys','activity','activities'),/mode=pinned/);
+  adb('shell','am','start','-W','-n','org.irgunshiuraitorah.app/.MainActivity');
+  await delay(1300);
+  if ((await sample()).media3.systemPip) {
+    // A second pinned task on Android 16 sometimes ignores an explicit Main
+    // activity intent. Reopen using the real LAUNCHER path rather than faking
+    // PiP state or restarting a second player.
+    adb('shell','am','start','-W','-a','android.intent.action.MAIN',
+      '-c','android.intent.category.LAUNCHER',
+      '-n','org.irgunshiuraitorah.app/.SplashActivity');
+    report.gestures.push({reopenedPipThroughActualLauncher:true});
+  }
+  const headerAfter=await waitNative(s=>!s.media3.systemPip&&s.media3.surfaceVisibleOnScreen&&s.media3.playing,
+    'Header PiP return must restore the same visible player');
+  samePlayback(headerBefore,headerAfter.media3,'Header PiP',Date.now()-headerPipStart);
+  report.checks.push({label:'Visible header PiP icon enters real pinned mode and preserves one player',before:headerBefore,after:headerAfter.media3});
+
+  if (process.env.IRGUN_NATIVE_MEDIA3_SOAK === '1') {
+    // A REAL wall-clock 15-minute Media3 HLS soak, not a mock clock or a
+    // WebView/HLS.js precondition. Keep checking one ExoPlayer and its decoded
+    // frames, native Audio position, media notification and Android lifecycle.
+    const soakStart=Date.now(),initialPid=adb('shell','pidof','org.irgunshiuraitorah.app').trim();
+    const memory=()=>{
+      const raw=adb('shell','dumpsys','meminfo','org.irgunshiuraitorah.app');
+      const value=raw.match(/TOTAL PSS:\s*(\d+)/)?.[1]||raw.match(/^\s*TOTAL\s+(\d+)\s/m)?.[1];
+      assert.ok(value,'Android must expose native app memory during Media3 soak');
+      return Number(value);
+    };
+    report.soak={requiredMinutes:15,startedAt:new Date(soakStart).toISOString(),samples:[],events:[]};
+    await tapVisible('[data-watch-mode="audio"]');
+    let last=await waitNative(s=>s.media3.active && s.media3.playing &&
+      !s.media3.videoSelected && s.native.mode==='AUDIO',
+      'Soak must start with audible Media3 Audio in the same HLS source');
+    assert.equal(last.media3.sourceType,'hls','Native soak must not use MP4 fallback');
+    const baselinePss=memory();
+    report.soak.samples.push({minute:0,positionMs:last.media3.positionMs,pssKb:baselinePss});
+    for(let minute=1;minute<=15;minute++) {
+      // Start time is the FIRST native Audio snapshot; waits use actual time.
+      await delay(Math.max(0,soakStart+minute*60000-Date.now()));
+      if ([4,9,13].includes(minute)) {
+        adb('shell','input','keyevent','KEYCODE_POWER');
+        await delay(2500);
+        assert.ok(adb('shell','dumpsys','media_session').includes('org.irgunshiuraitorah.app'),
+          'Native MediaSession must remain registered with the screen locked');
+        adb('shell','input','keyevent','KEYCODE_POWER');
+        adb('shell','input','keyevent','KEYCODE_MENU');
+        await delay(1200);
+        report.soak.events.push({minute,action:'screen lock/unlock and native MediaSession'});
+      }
+      if ([6,12].includes(minute)) {
+        adb('shell','input','keyevent','KEYCODE_HOME');
+        await delay(2600);
+        assert.ok(adb('shell','dumpsys','notification','--noredact').includes('org.irgunshiuraitorah.app'),
+          'Native Media3 notification must remain posted during Home');
+        assert.ok(adb('shell','dumpsys','media_session').includes('org.irgunshiuraitorah.app'),
+          'Media3 session must survive Home');
+        adb('shell','am','start','-W','-n','org.irgunshiuraitorah.app/.MainActivity');
+        await delay(1600);
+        report.soak.events.push({minute,action:'Home, media notification, reopen'});
+      }
+      if ([2,7,11].includes(minute)) {
+        const beforeVideo=await sample();
+        assert.ok(beforeVideo.media3.active && beforeVideo.media3.playing,
+          'Native Audio must still be playing before Video presentation change');
+        await tapVisible('[data-watch-mode="video"]');
+        const video=await waitNative(s=>s.media3.active&&s.media3.videoSelected&&s.media3.playing&&
+          s.media3.sourceType==='hls'&&s.media3.frames>beforeVideo.media3.frames+12,
+          'Soak Video must resume with freshly decoded native HLS frames');
+        assert.ok(video.media3.positionMs>=beforeVideo.media3.positionMs-1250,
+          'Native video track enable must never rewind the same Media3 clock');
+        await delay(1400);
+        const frames=await sample();
+        assert.ok(frames.media3.frames>video.media3.frames+3&&
+          frames.media3.positionMs>video.media3.positionMs+650,
+          'Soak needs real moving native frames, not only Media3 READY state');
+        await tapVisible('[data-watch-mode="audio"]');
+        const audio=await waitNative(s=>s.media3.active&&!s.media3.videoSelected&&s.media3.playing&&
+          s.native.mode==='AUDIO'&&s.media3.sourceType==='hls',
+          'Soak Video-to-Audio must keep the SAME native HLS stream playing');
+        assert.ok(audio.media3.positionMs>=frames.media3.positionMs-1250,
+          'Changing to Audio must preserve the original Media3 position');
+        report.soak.events.push({minute,action:'physical Video to Audio with native decoded frames'});
+      }
+      assert.equal(adb('shell','pidof','org.irgunshiuraitorah.app').trim(),initialPid,
+        'Android process must not crash or restart during the true 15-minute soak');
+      const current=await sample();
+      assert.ok(current.media3.active && current.media3.playing &&
+        !current.media3.videoSelected && current.native.mode==='AUDIO',
+        'Audible native HLS Audio must remain playing after minute '+minute);
+      assert.equal(current.media3.sourceType,'hls',
+        '15-minute soak must never fall back to MP4 or WebView video');
+      assert.equal(current.video,null,'No HTML video decoder may appear during native soak');
+      assert.ok(current.media3.positionMs>last.media3.positionMs+22000,
+        'Native Media3 playback position froze or rewound at minute '+minute);
+      const pss=memory();
+      report.soak.samples.push({minute,positionMs:current.media3.positionMs,pssKb:pss,
+        source:current.media3.sourceType});
+      last=current;
+      console.log('Native Media3 soak minute '+minute+' OK, HLS seconds '+(current.media3.positionMs/1000).toFixed(1));
+    }
+    assert.ok(Date.now()-soakStart>=15*60*1000,
+      'This must be at least 15 minutes of genuine wall-clock playback');
+    const peak=Math.max(...report.soak.samples.map(s=>s.pssKb));
+    report.soak.memoryBudget={baselineKb:baselinePss,peakKb:peak,
+      maxGrowthKb:131072,maxPssKb:393216};
+    assert.ok(peak<=393216&&peak-baselinePss<=131072,
+      '15-minute native Media3 player must stay within app memory limits');
+    report.soak.actualElapsedMs=Date.now()-soakStart;
+    report.checks.push({label:'Real 15-minute native Media3 HLS, lock/Home/reopen, Audio/Video and memory',
+      minutes:15,samples:report.soak.samples.length,events:report.soak.events.length});
+  }
+  await verifyAndroidTaskDismissal({adb,sample,delay,report});
+  }
   report.result='passed';
 
 } catch (error) {
   report.result='failed';report.error=String(error.stack||error);
-  try {writeFileSync('emulator-report/media3-video-failure.png',execFileSync('adb',['exec-out','screencap','-p']));}catch{}
+  try {writeFileSync('emulator-report/media3-video-failure.png',execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));}catch{}
   process.exitCode=1;
 } finally {
   ws?.close();

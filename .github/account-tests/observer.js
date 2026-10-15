@@ -1,8 +1,5 @@
 // Read-only observations appended to disposable debug builds; no credentials or UI setters.
 window.ISTAccountTest = {
-  // Actual session for external revocation; never included in snapshots or logs.
-  // This read-only accessor is appended only to disposable QA APKs.
-  sessionToken() { return state.token; },
   snapshot() {
   const qaComment = state.watchComments?.find(c =>
     String(c.user_id) === String(state.user?.id) && String(c.text || '').startsWith('IRGUN-QA-')
@@ -15,7 +12,7 @@ window.ISTAccountTest = {
     editedQaText:qaCommentId ? '#editCommentText-'+qaCommentId : '#irgun-qa-comment-unavailable',
     saveQaComment:qaCommentId ? '[data-save-comment="'+qaCommentId+'"]' : '#irgun-qa-comment-unavailable',
     deleteQaComment:qaCommentId ? '[data-delete-comment="'+qaCommentId+'"]' : '#irgun-qa-comment-unavailable',
-    account: '.bottom-nav [data-nav="account"]', shiurim: '.bottom-nav [data-nav="shiurim"]',
+    home: '.bottom-nav [data-nav="home"]', account: '.bottom-nav [data-nav="account"]', shiurim: '.bottom-nav [data-nav="shiurim"]',
     library: '.bottom-nav [data-nav="library"]', email: '#authEmail', password: '#authPassword',
     login: '#authForm button[type="submit"]', logout: '[data-logout]',
     profile: '[data-account-section="profile"]', settings: '[data-account-section="settings"]',
@@ -37,7 +34,9 @@ window.ISTAccountTest = {
   };
   const scroll=document.querySelector('.watch-overlay .watch-scroll');
   const watchScroll=scroll ? (()=>{const r=scroll.getBoundingClientRect();
+    const nav=document.querySelector('#androidBottomNavigationMount .bottom-nav')?.getBoundingClientRect();
     return {x:r.x,y:r.y,width:r.width,height:r.height,top:scroll.scrollTop,
+      visibleBottom:Math.min(innerHeight,r.bottom,nav?.height>0?nav.top-8:innerHeight),
       heightTotal:scroll.scrollHeight,visibleHeight:scroll.clientHeight,
       touchAction:getComputedStyle(scroll).touchAction};})() : null;
   const video = state.watchVimeo?.getVideoElement?.()

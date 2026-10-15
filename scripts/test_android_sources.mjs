@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createAndroidHlsPlayer } from '../src/android-hls-video.js';
 import { audioDownloadPath, isPlausibleOfflineAudio, minimumOfflineAudioBytes } from '../src/offline-validation.js';
 import { downloadOfflineAudio } from '../src/offline-download.js';
+import {preserveAndroidPlayerSheetScroll} from '../src/android-player-controls.js';
 
 class Element extends EventTarget {
   constructor(tag) {
@@ -409,8 +410,14 @@ function offlineSaveFixture({failure,actualBytes=60268750}={}) {
     offlineKeyFor:()=>key,usageAnalytics:{event(){}},videoId:()=>id,mediaApiId:()=>id,
     itemTitle:()=> 'Shiur',itemSubtitle:()=> 'Speaker',document:{querySelector:()=>null},
     refreshOfflineButtonsForKey(){},refreshInteractiveUi(){},persistOfflineDownloads(){},setToast(){},currentLanguage:()=> 'en'};
-  const start=mainSource.indexOf('async function saveOffline(');
-  runInNewContext(mainSource.slice(start,mainSource.indexOf('async function deleteOffline(',start))+'\nthis.save=saveOffline;',context);
+  // Exercise the ACTUAL production prebuffer helper together with Save,
+  // rather than extracting Save without the helper and failing before any
+  // real HTTP retry / incomplete-file assertions run. In this test fixture
+  // video is not actively playing, so the production helper returns normally.
+  const prepare=mainSource.indexOf('async function prepareNativeVideoBufferForOfflineTransfer()');
+  const start=mainSource.indexOf('async function saveOffline(',prepare);
+  assert.ok(prepare>=0&&start>prepare,'Offline Save must include its real HLS prebuffer prerequisite');
+  runInNewContext(mainSource.slice(prepare,mainSource.indexOf('async function deleteOffline(',start))+'\nthis.save=saveOffline;',context);
   return {state,events,key,save:()=>context.save('video',id),calls:()=>calls,removed:()=>removed,bytes:()=>bytes};
 }
 test('the actual Offline Save recovers the observed 4.3MB interruption and records only the complete MP3',async()=>{
@@ -434,7 +441,8 @@ function authRenderFixture({busy=false,mode='login'}={}) {
   const document={activeElement:fields.get('authPassword'),getElementById:id=>id==='authForm'?form():fields.get(id)};
   fields.get('authEmail').value='qa@example.test';fields.get('authPassword').value='typed-in-dom';
   const app={set innerHTML(_){fields=new Map(['authEmail','authPassword'].map(id=>[id,field(id)]));document.activeElement=null;}};
-  const context={state,document,app,homeSearchRenderDeferred:false,tabSwipeRenderGate:{shouldDefer:()=>false},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
+  const context={state,document,app,syncAndroidBottomNavigation(){},syncAndroidVideoDisplay(){},homeSearchRenderDeferred:false,tabSwipeRenderGate:{shouldDefer:()=>false},
+    androidPlayerSheetRenderGate:{shouldDefer:()=>false},preserveAndroidPlayerSheetScroll,Capacitor:{getPlatform:()=> 'android'},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
     accountHtml:()=>'',shell:x=>x,playlistPickerHtml:()=>'',bind(){},syncLivePlaybackAnalytics(){},updatePlayerUi(){},refreshOfflineButtonsForKey(){}};
   const start=mainSource.indexOf('function preserveHomeSearchDraft(');
   const renderStart=mainSource.indexOf('function render()');
@@ -515,6 +523,7 @@ test('Android Video-to-Audio handoff preserves user Play intent during MP4 primi
       watchResumeSeconds:605,user:null,current:null,nativePlayback:{}};
     const starts=[],items=[];
     const context={state,setTimeout,console:{debug(){},warn:(_message,error)=>errors.push(String(error?.stack||error))},usesNativeUnifiedAudio:()=>true,
+      nativeMediaPlugin:()=>({getState:async()=>({mode:'VIDEO',audioAuthorityCommitted:false,lectureId:'lecture'})}),
       quickVimeoTime:async()=>605,
       videoAudioPlaybackItem:(_video,id)=>({id,url:'https://media.example.test/audio.mp3'}),
       offlineRecordForAudioItem:()=>null,offlineFileUrl:()=>'',setPlaybackAuthorityFence:()=>{},
@@ -1140,7 +1149,8 @@ function homeSearchRenderFixture() {
   let input=field();input.value='IST-DL6067';
   const document={activeElement:input,getElementById:id=>id==='homeLibrarySearch'?input:null};
   const app={set innerHTML(_){input=field();document.activeElement=null;}};
-  const context={state,document,app,homeSearchRenderDeferred:false,tabSwipeRenderGate:{shouldDefer:()=>false},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
+  const context={state,document,app,syncAndroidBottomNavigation(){},syncAndroidVideoDisplay(){},homeSearchRenderDeferred:false,tabSwipeRenderGate:{shouldDefer:()=>false},
+    androidPlayerSheetRenderGate:{shouldDefer:()=>false},preserveAndroidPlayerSheetScroll,Capacitor:{getPlatform:()=> 'android'},usageAnalytics:{setScreen(){}},analyticsScreenLabel:()=>'',
     homeHtml:()=>'',accountHtml:()=>'',shiurimHtml:()=>'',shell:x=>x,playlistPickerHtml:()=>'',bind(){},
     syncLivePlaybackAnalytics(){},updatePlayerUi(){},refreshOfflineButtonsForKey(){},setTimeout(){}};
   const start=mainSource.indexOf('function preserveHomeSearchDraft('),end=mainSource.indexOf('function syncOpenFilterChecks(',start);
@@ -1429,15 +1439,13 @@ for(const buffered of [true,false])test('observed HLS 4x catch-up clock stall us
  assert.equal(element.playbackRate,1,'Internal recovery must restore the chosen rate');
 });
 
-test('actual QA session accessor reads the module token without putting it in the account snapshot',()=>{
+test('account QA observations and fixture selection never expose the application session credential',()=>{
  const source=readFileSync('.github/account-tests/observer.js','utf8');
- const start=source.indexOf('sessionToken()'),end=source.indexOf('  snapshot()',start);
- const state={token:'real-session-in-memory'},context={state};
- runInNewContext('this.observer={'+source.slice(start,end)+'};',context);
- assert.equal(context.observer.sessionToken(),state.token);state.token='new-actual-session';assert.equal(context.observer.sessionToken(),state.token);
- assert.doesNotMatch(source.slice(end),/sessionToken:|token:state\.token|return state\.token/);
+ assert.doesNotMatch(source,/sessionToken|return state\.token|token:state\.token/);
+ assert.match(source,/hasStoredSession:!!state\.token/,'Only a session-presence boolean may appear in observations');
  const script=readFileSync('scripts/android-emulator-account.mjs','utf8');
- assert.match(script,/window\.ISTAccountTest\.sessionToken\(\)/);assert.doesNotMatch(script,/JSON\.stringify\(state\.token\)/);
+ assert.doesNotMatch(script,/ISTAccountTest\.sessionToken|JSON\.stringify\(state\.token\)|const actualToken=/);
+ assert.match(script,/external revocation are unverified/,'Do not claim external revocation coverage without exercising it');
 });
 
 test('HLS manifest and fatal-error listeners install before any playlist request',()=>{
