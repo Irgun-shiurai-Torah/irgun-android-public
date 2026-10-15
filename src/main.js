@@ -3810,8 +3810,67 @@ async function togglePersistentMiniVideoPlayback(event) {
   } catch (_) {}
 }
 
+// Android Watch can be swiped down from the lecture information BELOW the
+// native video, not just the native player/controller. This is a pull-to-mini
+// gesture only when the detail scroller is at its top: ordinary scrolling,
+// horizontal swipes, comment fields and action buttons keep their own touches.
+function bindAndroidWatchDetailsSwipeToMini(overlay) {
+  if (Capacitor.getPlatform() !== 'android' || !overlay || overlay.dataset.detailsMiniSwipeBound) return;
+  const scroller = overlay.querySelector('.watch-scroll');
+  if (!scroller) return;
+  overlay.dataset.detailsMiniSwipeBound = '1';
+  let startX=0,startY=0,startAt=0,down=0,tracking=false,dragging=false;
+  const reset=()=>{tracking=false;dragging=false;down=0;};
+  const available=()=>Boolean(state.watchVideo && state.watchMode==='video' &&
+    !state.watchMinimized && !state.systemPipActive && !nativeVideoFullscreen &&
+    !document.querySelector('.admin-editor-backdrop, .playlist-picker-backdrop, .sheet-backdrop'));
+  scroller.addEventListener('touchstart',event=>{
+    reset();
+    if(!available() || event.touches.length!==1 || scroller.scrollTop>3 ||
+       event.target.closest('button, a, input, select, textarea, [contenteditable="true"], [role="button"], .watch-player-card, .watch-audio-panel'))
+      return;
+    const touch=event.touches[0];
+    startX=touch.clientX;startY=touch.clientY;startAt=performance.now();
+    tracking=true;
+  },{passive:true});
+  scroller.addEventListener('touchmove',event=>{
+    if(!tracking)return;
+    if(event.touches.length!==1 || !available() || scroller.scrollTop>3){reset();return;}
+    const touch=event.touches[0],dy=touch.clientY-startY,dx=Math.abs(touch.clientX-startX);
+    if(dy<0 || dx>Math.max(26,dy*0.75)){reset();return;}
+    if(dy<18)return;
+    dragging=true;down=dy;
+    // Don't overscroll the detail page while intentionally pulling Watch down.
+    event.preventDefault();
+  },{passive:false});
+  scroller.addEventListener('touchend',()=>{
+    if(tracking && dragging && available()){
+      const velocity=down/Math.max(1,performance.now()-startAt);
+      if(down>=110 || (down>=68 && velocity>=0.7)){
+        reset();
+        void minimizeWatchToPersistent();
+        return;
+      }
+    }
+    reset();
+  },{passive:true});
+  scroller.addEventListener('touchcancel',reset,{passive:true});
+}
+
+function syncAndroidMiniDialogVisibility() {
+  if(Capacitor.getPlatform()!=='android')return;
+  // Mini playback continues, but dialogs must own the ENTIRE screen. Native
+  // PlayerView is separately hidden by positionFrame() while one is present.
+  const modal=Boolean(document.querySelector(
+    '.admin-editor-backdrop, .playlist-picker-backdrop, .paid-modal-backdrop, ' +
+    '.paid-pdf-backdrop, .sheet-backdrop, .download-dialog-backdrop, ' +
+    '.download-manager-backdrop, [aria-modal="true"]'));
+  document.body.classList.toggle('irgun-mini-modal-open',modal);
+}
+
 function bindPersistentVideoChrome() {
   if (!persistentVideoMount) return;
+  bindAndroidWatchDetailsSwipeToMini(persistentVideoMount.querySelector('.watch-overlay'));
   persistentVideoMount.querySelectorAll('[data-expand-watch]').forEach(expand => {
     if (expand.dataset.bound) return;
     expand.dataset.bound = '1';
@@ -3880,6 +3939,12 @@ function hostCurrentWatchOverlay(mode = 'full') {
     persistentVideoMount.appendChild(overlay);
   }
   state.watchHostedExternally = true;
+  // Audio mode can render a temporary Watch UI inside #app while its real
+  // Media3 video host remains parked outside #app. When VIDEO becomes active
+  // again, remove that stale Audio-mode Watch overlay. It is NOT the native
+  // player: the actual iframe/PlayerView stays in persistentVideoMount.
+  if (Capacitor.getPlatform() === 'android')
+    document.querySelector('#app .watch-overlay')?.remove();
   const mini = mode === 'mini';
   state.watchMinimized = mini;
   persistentVideoMount.className = `persistent-video-mount watch-video-host ${mini ? 'watch-mini-host' : 'watch-full-host'}`;
@@ -5049,20 +5114,56 @@ function relatedVideos(video) {
   }).slice(0, 8);
 }
 
+function followButtonText(following, label) {
+  // Keep the real website /follows/toggle identity and translate the action,
+  // not the speaker's stable account key. Hebrew Watch pages must show עקבו אחרי.
+  return `${esc(tr(following ? 'Following' : 'Follow'))} ${esc(label)}`;
+}
+
+function followSpeakerIdsForLecture(video) {
+  const ids = [...new Set((Array.isArray(video?._speakerIds) ? video._speakerIds : [])
+    .map(String).filter(Boolean))];
+  if (ids.length) return ids;
+
+  // The app's Drive-backed catalog sometimes has a Hebrew speaker/title but
+  // no speakerIds. Website metadata can still identify the SAME speaker key.
+  // Try all language variants rather than only the current video.title.
+  for (const title of [video?.titleHe, video?.titleEn, video?.title]) {
+    if (!String(title || '').trim()) continue;
+    const id = resolveSpeakerFromTitle(title);
+    if (id) { video._speakerIds = [String(id)]; return video._speakerIds; }
+  }
+  for (const value of [
+    video?.speakerHe, video?.speakerEn, video?.speaker, video?.rabbi,
+    video?.lecturer, video?._speakerLabel
+  ]) {
+    const name = bareSpeakerName(cleanSpeakerDisplayName(value));
+    const normalized = normalizeText(name);
+    if (!normalized || /^(irgun shiurai torah|unknown|various speakers|speaker|magid shiur)$/i.test(normalized)) continue;
+    const canonical = state.speakerAliasToId.get(normalized);
+    // Don't invent a speaker for an unnamed shiur or a single vague word.
+    const id = canonical || (normalized.split(' ').length >= 2 && normalized.split(' ').length <= 7
+      ? resolveSpeakerFromTitle(`Rav ${name} - Shiur`) : '');
+    if (id) { video._speakerIds = [String(id)]; return video._speakerIds; }
+  }
+  return [];
+}
+
 function currentFollowButtons(video) {
   if (!video) return '';
   const buttons = [];
-  for (const speakerId of video._speakerIds || []) {
-    const label = speakerLabel(speakerId);
+  for (const speakerId of followSpeakerIdsForLecture(video)) {
+    const label = speakerLabel(speakerId) ||
+      cleanSpeakerDisplayName(video._speakerLabel || video.speakerHe || video.speakerEn || video.speaker || '');
     if (!label) continue;
     const following = state.follows.has(`speaker:${speakerId}`);
-    buttons.push(`<button class="follow-chip ${following ? 'active' : ''}" data-follow-type="speaker" data-follow-key="${esc(speakerId)}" data-follow-label="${esc(label)}">${following ? 'Following' : 'Follow'} ${esc(label)}</button>`);
+    buttons.push(`<button class="follow-chip ${following ? 'active' : ''}" dir="auto" data-follow-type="speaker" data-follow-key="${esc(speakerId)}" data-follow-label="${esc(label)}">${followButtonText(following, label)}</button>`);
   }
   if (video._topicId) {
-    const label = topicLabel(video._topicId);
+    const label = topicLabel(video._topicId) || video._topicLabel;
     if (label) {
       const following = state.follows.has(`topic:${video._topicId}`);
-      buttons.push(`<button class="follow-chip ${following ? 'active' : ''}" data-follow-type="topic" data-follow-key="${esc(video._topicId)}" data-follow-label="${esc(label)}">${following ? 'Following' : 'Follow'} ${esc(label)}</button>`);
+      buttons.push(`<button class="follow-chip ${following ? 'active' : ''}" dir="auto" data-follow-type="topic" data-follow-key="${esc(video._topicId)}" data-follow-label="${esc(label)}">${followButtonText(following, label)}</button>`);
     }
   }
   return buttons.join('');
@@ -5483,6 +5584,12 @@ function restoreParkedHostedVideo() {
   document.body.classList.remove('irgun-watch-mini-hosted');
   state.watchHostedExternally = true;
   state.watchMinimized = false;
+  // During AUDIO an in-page Watch panel can coexist with the parked external
+  // native VIDEO host. Its markup must be detached synchronously on return,
+  // even if the full app render is temporarily deferred (e.g. settings sheet).
+  // Otherwise two Watch overlays can steal physical Mini/Fullscreen taps.
+  if (Capacitor.getPlatform() === 'android')
+    document.querySelector('#app .watch-overlay')?.remove();
   return true;
 }
 
@@ -6622,6 +6729,9 @@ function render() {
     isAndroid:()=>Capacitor.getPlatform()==='android'&&state.playerOpen,
     playerKey:`${state.current?.kind||''}:${state.current?.id||''}`});
   app.innerHTML = shell(content + playlistPickerHtml());
+  // Isolated render regressions execute only this function, without helpers.
+  // In the Android app the helper is always defined and updates mini layering.
+  if (typeof syncAndroidMiniDialogVisibility === 'function') syncAndroidMiniDialogVisibility();
   bind();
   // Reconcile the native Android Video surface after every modal change.
   // Physical PlayerView must never cover native WebView dialog controls.
@@ -7232,6 +7342,7 @@ function bind() {
   document.querySelectorAll('[data-switch-video]').forEach(el => bindWatchClick(el, () => switchWatchMode('video')));
 
   document.querySelectorAll('[data-minimize-watch]').forEach(el => bindWatchClick(el, minimizeWatchToPersistent));
+  document.querySelectorAll('.watch-overlay').forEach(bindAndroidWatchDetailsSwipeToMini);
   document.querySelectorAll('[data-native-video-fullscreen]').forEach(el => {
     if (el.dataset.bound) return;
     el.dataset.bound = '1';
@@ -7294,7 +7405,7 @@ function refreshInteractiveUi() {
     const following = state.follows.has(identity);
     button.classList.toggle('active', following);
     const label = button.dataset.followLabel || '';
-    button.innerHTML = `${following ? 'Following' : 'Follow'} ${esc(label)}`;
+    button.innerHTML = followButtonText(following, label);
   });
 }
 

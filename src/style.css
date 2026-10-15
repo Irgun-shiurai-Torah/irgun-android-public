@@ -2844,3 +2844,19 @@ body.irgun-android .android-floating-nav .nav-btn > span:last-child {
 .irgun-android #paidQuestionMore[hidden]{display:none}
 @media(max-width:390px){.irgun-android .paid-index-searchbar{grid-template-columns:minmax(0,1fr)}.irgun-android .paid-folder-overview{padding:10px}.irgun-android .paid-folder-children{padding-inline-start:8px}}
 @media(prefers-reduced-motion:reduce){.irgun-android .paid-folder-chevron{transition:none}}
+
+
+/* Android: modal editors must cover the WHOLE mini-player. The native Media3
+   PlayerView has a separate physical Android layer and is suppressed by the
+   frame adapter at the same time. Neither change pauses or resets playback. */
+body.irgun-android.irgun-mini-modal-open #persistentVideoMount.watch-mini-host,
+body.irgun-android.irgun-mini-modal-open .mini-video-player,
+body.irgun-android.irgun-mini-modal-open .mini-player {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+/* Detail swipe-to-mini works only at scrollTop=0 (script); keep ordinary
+   vertical scroll and horizontal carousels touch-native everywhere else. */
+body.irgun-android #persistentVideoMount.watch-full-host .watch-scroll {
+  touch-action: pan-y;
+}

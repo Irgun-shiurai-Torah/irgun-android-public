@@ -3,7 +3,7 @@ import {writeFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
-import {accountSwipeDirection, watchPlayerReturnGesture, watchCommentsGesture} from './android-account-native-scroll.mjs';
+import {accountSwipeDirection, watchPlayerReturnGesture, watchCommentsGesture, watchFollowTargetGesture} from './android-account-native-scroll.mjs';
 import {observedAdb} from './android-adb-observer.mjs';
 import {selectAccountPlaybackFixture} from './android-account-playback-fixture.mjs';
 const email=process.env.IRGUN_TEST_EMAIL,password=process.env.IRGUN_TEST_PASSWORD;
@@ -128,6 +128,25 @@ async function tap(key) {
         throw new Error('Native player return swipe did not move Watch scroll towards Audio/Video controls');
       continue;
     }
+  }
+  if(key==='follow' && s.watchId && s.watchScroll) {
+    if(!s.followTarget?.rendered)throw new Error(
+      'Speaker Follow button was not rendered for Watch lecture '+s.watchId+
+      ' (missing canonical speaker metadata or UI control)');
+    const gesture=watchFollowTargetGesture(s.watchScroll,Number(s.followTarget.y));
+    const from=native(gesture.from,s),to=native(gesture.to,s);
+    adb('shell','input','swipe',...from.map(String),...to.map(String),'480');
+    await delay(550);
+    const after=await read();
+    assert.equal(after.watchId,s.watchId,'Seeking Follow changed the selected lecture');
+    report.followPhysicalScroll=report.followPhysicalScroll||[];
+    report.followPhysicalScroll.push({direction:gesture.direction,from,to,
+      beforeTop:s.watchScroll.top,afterTop:after.watchScroll?.top,
+      targetBefore:s.followTarget.y,targetAfter:after.followTarget?.y});
+    if(i>=3 && Math.abs(Number(after.watchScroll?.top||0)-Number(s.watchScroll.top||0))<1)
+      throw new Error('Follow exists but a native swipe could not reveal it: '+
+        JSON.stringify(report.followPhysicalScroll.slice(-4)));
+    continue;
   }
   const commentAction=['commentText','postComment','editQaComment','editedQaText','saveQaComment','deleteQaComment'].includes(key);
   if(commentAction && s.watchScroll) {
