@@ -4165,7 +4165,8 @@ const androidPaidQuestionIndex=createAndroidPaidQuestionController({
 function androidPaidFolderHtml(item, expanded) {
   const tree=paidFolderTreeHtml(item,{esc,openFolders:state.paidOpenFolders,isHebrew:currentLanguage()==='he'});
   if(!item.owned)return tree;
-  return '<div class="paid-album" '+(expanded?'':'hidden')+'><div class="paid-track-head"><strong>Your Audio</strong><span>Protected personal listening</span></div>'+tree+paidMaterialsHtml(item)+'</div>';
+  const he=currentLanguage()==='he';
+  return '<div class="paid-album" '+(expanded?'':'hidden')+'><div class="paid-track-head"><strong>'+(he?'ההקלטות שלכם':'Your Audio')+'</strong><span>'+(he?'האזנה פרטית ומאובטחת':'Protected personal listening')+'</span></div>'+tree+paidMaterialsHtml(item)+'</div>';
 }
 function paidProductCard(item) {
   const id = String(item.id || '');
@@ -4176,7 +4177,7 @@ function paidProductCard(item) {
   const status = item.owned ? tr('Purchased') : item.available ? tr('Available now') : tr('Coming Soon');
   const statusClass = item.owned ? 'owned' : item.available ? 'available' : 'coming';
   const coverHtml = images.length ? `<div class="paid-cover paid-cover-carousel" data-paid-carousel="${esc(id)}"><div class="paid-cover-track">${images.map((url,index)=>`<div class="paid-cover-slide" data-paid-slide="${index}"><img src="${esc(url)}" alt="${esc(paidProductTitle(item, 'Paid shiur'))}${images.length>1?` ${index+1}`:''}" loading="${index===0?'eager':'lazy'}" ${index===0?'fetchpriority="high"':''} decoding="async"></div>`).join('')}</div>${images.length>1?`<div class="paid-cover-dots">${images.map((_,index)=>`<button type="button" class="paid-cover-dot ${index===0?'active':''}" data-paid-image-dot="${index}" aria-label="Show picture ${index+1}"></button>`).join('')}</div>`:''}<button type="button" class="paid-cover-zoom" data-paid-image-open="${esc(id)}">View</button>${item.featured ? '<span class="paid-featured">FEATURED</span>' : ''}${item.owned ? '<span class="paid-owned">PURCHASED</span>' : ''}</div>` : `<div class="paid-cover">${logoArtworkHtml()}${item.featured ? '<span class="paid-featured">FEATURED</span>' : ''}${item.owned ? '<span class="paid-owned">PURCHASED</span>' : ''}</div>`;
-  return `<article class="paid-card ${item.featured ? 'featured' : ''} ${item.owned ? 'owned' : ''}">
+  return `<article class="paid-card ${item.featured ? 'featured' : ''} ${item.owned ? 'owned' : ''} ${expanded && Capacitor.getPlatform()==='android' ? 'expanded' : ''}" data-paid-collection-id="${esc(id)}">
     ${coverHtml}
     <div class="paid-body"><div class="paid-card-topline"><span class="paid-category">${esc(item.category || 'Audio Collection')}</span><span class="paid-status-chip ${statusClass}">${esc(status)}</span></div><h2>${esc(paidProductTitle(item))}</h2>${item.speaker ? `<strong class="paid-speaker">${esc(item.speaker)}</strong>` : ''}<div class="paid-meta">${esc([item.catalogDetails, item.audience].filter(Boolean).join(' • '))}</div>
       <div class="paid-price-row"><strong>${esc(paidProductPriceLabel(item))}</strong><span>${item.trackCount ? `${Number(item.trackCount)} tracks` : ''}</span></div>
@@ -5120,31 +5121,63 @@ function followButtonText(following, label) {
   return `${esc(tr(following ? 'Following' : 'Follow'))} ${esc(label)}`;
 }
 
+function websiteFallbackSpeakerFromTitle(title) {
+  // Exact website watch.js fallback. A Follow made from the title must use
+  // auto-<slug>, NOT the app's old auto-speaker:<name>, or website and Android
+  // subscribe to different keys even when the user follows the same Rav.
+  const match=String(title || '').match(/(?:^|[-–—]\s*)(?:Rabbi|Rav|הרב|רבי|ר[׳'])\s+(.+?)(?=\s+[-–—#|]|$)/i);
+  if (!match) return '';
+  const name=match[1].replace(/\s+/g,' ').trim();
+  const key=name.toLowerCase().replace(/[^a-z0-9\u0590-\u05ff]+/g,'-').replace(/^-|-$/g,'').slice(0,150);
+  if (!key) return '';
+  const id='auto-'+key;
+  if (!state.speakerById.has(id)) {
+    const hebrew=/[\u0590-\u05ff]/.test(name);
+    const en=hebrew ? generatedEnglishSpeakerName(name) : name;
+    const he=hebrew ? name : generatedHebrewSpeakerName(name);
+    state.speakerById.set(id,{id,
+      nameEn:en||'',nameHe:he||'',
+      displayEn:en ? 'Rav '+en : name,
+      displayHe:hebrew ? 'הרב '+name : (he ? 'הרב '+he : name),
+      auto:true});
+  }
+  return id;
+}
+
 function followSpeakerIdsForLecture(video) {
   const ids = [...new Set((Array.isArray(video?._speakerIds) ? video._speakerIds : [])
     .map(String).filter(Boolean))];
+
+  // Use the website's reviewed lecture-to-speaker mapping first. The website
+  // loads library-metadata.json and checks lectures[video.id].speakerIds.
+  const reviewed=state.metadata?.lectures?.[videoId(video)]?.speakerIds;
+  if (Array.isArray(reviewed) && reviewed.length) {
+    const supported=reviewed.map(String).filter(id=>state.speakerById.has(id));
+    if (supported.length) { video._speakerIds=supported; return supported; }
+  }
+
+  // When no reviewed mapping exists, website watch.js derives the speaker
+  // from the raw lecture title, not the localized display title. Match that
+  // EXACT key before considering a Worker-only auto speaker ID.
+  const websiteId=websiteFallbackSpeakerFromTitle(video?.title);
+  if (websiteId) {video._speakerIds=[websiteId];return video._speakerIds;}
+  const translatedTitle=video?.titleHe || video?.titleEn;
+  const translatedId=websiteFallbackSpeakerFromTitle(translatedTitle);
+  if (translatedId) {video._speakerIds=[translatedId];return video._speakerIds;}
+
   if (ids.length) return ids;
 
-  // The app's Drive-backed catalog sometimes has a Hebrew speaker/title but
-  // no speakerIds. Website metadata can still identify the SAME speaker key.
-  // Try all language variants rather than only the current video.title.
-  for (const title of [video?.titleHe, video?.titleEn, video?.title]) {
-    if (!String(title || '').trim()) continue;
-    const id = resolveSpeakerFromTitle(title);
-    if (id) { video._speakerIds = [String(id)]; return video._speakerIds; }
-  }
+  // A direct Hebrew/English speaker field may still be matched to canonical
+  // reviewed metadata even when the raw video has no speaker prefix.
   for (const value of [
-    video?.speakerHe, video?.speakerEn, video?.speaker, video?.rabbi,
-    video?.lecturer, video?._speakerLabel
+    video?.speakerHe,video?.speakerEn,video?.speaker,video?.rabbi,
+    video?.lecturer,video?._speakerLabel
   ]) {
-    const name = bareSpeakerName(cleanSpeakerDisplayName(value));
-    const normalized = normalizeText(name);
-    if (!normalized || /^(irgun shiurai torah|unknown|various speakers|speaker|magid shiur)$/i.test(normalized)) continue;
-    const canonical = state.speakerAliasToId.get(normalized);
-    // Don't invent a speaker for an unnamed shiur or a single vague word.
-    const id = canonical || (normalized.split(' ').length >= 2 && normalized.split(' ').length <= 7
-      ? resolveSpeakerFromTitle(`Rav ${name} - Shiur`) : '');
-    if (id) { video._speakerIds = [String(id)]; return video._speakerIds; }
+    const name=bareSpeakerName(cleanSpeakerDisplayName(value));
+    const normalized=normalizeText(name);
+    if(!normalized || /^(irgun shiurai torah|unknown|various speakers|speaker|magid shiur)$/i.test(normalized))continue;
+    const id=state.speakerAliasToId.get(normalized);
+    if(id) {video._speakerIds=[String(id)];return video._speakerIds;}
   }
   return [];
 }
@@ -7002,6 +7035,13 @@ function bind() {
     state.paidExpandedId = state.paidExpandedId === id ? '' : id;
     if(state.paidExpandedId){const product=state.paidCatalog.find(item=>String(item.id)===id);const first=product?.tracks?.[0];if(first)prefetchPaidTrack(id,first.id);}
     render();
+    if(Capacitor.getPlatform()==='android' && state.paidExpandedId===id){
+      // Keep the expanded collection in view after rebuilding the page.
+      // The folder tree uses ordinary document scrolling, not a nested 64vh
+      // scroller that can trap native Samsung touch gestures.
+      requestAnimationFrame(()=>document.querySelector(`[data-paid-collection-id="${CSS.escape(id)}"]`)
+        ?.scrollIntoView({block:'start',behavior:'smooth'}));
+    }
   }));
   document.querySelectorAll('[data-paid-description]').forEach(el => el.addEventListener('click', () => {
     const id = String(el.dataset.paidDescription || '');
@@ -7013,7 +7053,7 @@ function bind() {
   document.querySelectorAll('[data-paid-carousel]').forEach(carousel=>{const track=carousel.querySelector('.paid-cover-track');if(!track||track.dataset.boundScroll)return;track.dataset.boundScroll='1';track.addEventListener('scroll',()=>{const index=Math.round(track.scrollLeft/Math.max(1,track.clientWidth));carousel.querySelectorAll('[data-paid-image-dot]').forEach((dot,i)=>dot.classList.toggle('active',i===index));},{passive:true});});
   document.querySelectorAll('[data-paid-attachment-view]').forEach(el=>el.addEventListener('click',()=>openPaidAttachment(el.dataset.paidProduct,el.dataset.paidAttachmentView,false)));
   document.querySelectorAll('[data-paid-attachment-download]').forEach(el=>el.addEventListener('click',()=>openPaidAttachment(el.dataset.paidProduct,el.dataset.paidAttachmentDownload,true)));
-  document.querySelectorAll('[data-paid-track]').forEach(el => { el.addEventListener('pointerdown', () => prefetchPaidTrack(el.dataset.paidProduct, el.dataset.paidTrack), {passive:true}); el.addEventListener('click', () => playPaidTrack(el.dataset.paidProduct, el.dataset.paidTrack)); });
+  document.querySelectorAll('[data-paid-track]').forEach(el => { el.addEventListener('pointerdown', event => { if(event.pointerType==='mouse'||event.pointerType==='pen') prefetchPaidTrack(el.dataset.paidProduct, el.dataset.paidTrack); }, {passive:true}); el.addEventListener('click', () => playPaidTrack(el.dataset.paidProduct, el.dataset.paidTrack)); });
   if(Capacitor.getPlatform()==='android') androidPaidQuestionIndex.bind(document);
   document.querySelectorAll('[data-paid-purchase]').forEach(el => el.addEventListener('click', () => initPaidCheckout(el.dataset.paidPurchase)));
   document.querySelectorAll('[data-paid-checkout-close]').forEach(el => el.addEventListener('click', closePaidCheckout));

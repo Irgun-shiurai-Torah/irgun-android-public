@@ -3,6 +3,8 @@ import {buildPaidFolderTree,paidFolderKey,BELSKY_VOL1_ID,belskyAlbumForSession,
   belskySessionLabel,findBelskyQuestions} from './android-paid-collections.js';
 
 const label = (en, he, isHebrew) => isHebrew ? he : en;
+// Decorative vector icons avoid oversized phone emoji in the dense folder tree.
+const folderIcon = '<svg class="paid-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.8a2 2 0 0 1 2-2h4.2l2.2 2.3H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
 export function paidFolderTreeHtml(product, {esc,openFolders=new Set(),isHebrew=false}={}) {
   const owned = Boolean(product?.owned);
   const records = owned ? product?.tracks : product?.folderPreview;
@@ -12,19 +14,19 @@ export function paidFolderTreeHtml(product, {esc,openFolders=new Set(),isHebrew=
   const trackButton = entry => {
     const track = entry.track;
     const title = esc(track.title || `Track ${entry.index+1}`);
-    return `<button type="button" class="paid-track paid-folder-track" data-paid-product="${esc(product.id)}" data-paid-track="${esc(track.id)}"><span class="paid-track-num">${entry.index+1}</span><div><strong>${title}</strong><small>${track.size ? `${Math.max(1,Math.round(Number(track.size)/1024/1024))} MB` : 'Secure streaming'}</small></div><span aria-hidden="true">▶</span></button>`;
+    return `<button type="button" class="paid-track paid-folder-track" data-paid-product="${esc(product.id)}" data-paid-track="${esc(track.id)}"><span class="paid-track-num">${entry.index+1}</span><div class="paid-track-info"><strong dir="auto">${title}</strong><small>${track.size ? `${Math.max(1,Math.round(Number(track.size)/1024/1024))} MB` : label('Secure streaming','האזנה מאובטחת',isHebrew)}</small></div><span class="paid-track-play" aria-hidden="true">▶</span></button>`;
   };
   const render = (node, depth=0) => {
     const key = paidFolderKey(product.id,node.path);
     const count = node.count;
     const inner = node.folders.map(child=>render(child,depth+1)).join('') +
       (owned ? node.tracks.map(trackButton).join('') : '');
-    if (!owned && !node.folders.length) return `<div class="paid-folder-leaf"><span aria-hidden="true">📁</span><span dir="auto">${esc(node.name)}</span><small>${count} ${label('tracks','קטעים',isHebrew)}</small></div>`;
-    return `<details class="paid-folder-node" data-paid-folder-key="${esc(key)}" ${openFolders.has(key)?'open':''}><summary><span aria-hidden="true">📁</span><span class="paid-folder-name" dir="auto">${esc(node.name)}</span><small>${count} ${label('tracks','קטעים',isHebrew)}</small><span class="paid-folder-chevron" aria-hidden="true">⌄</span></summary><div class="paid-folder-children">${inner}</div></details>`;
+    if (!owned && !node.folders.length) return `<div class="paid-folder-leaf">${folderIcon}<span dir="auto">${esc(node.name)}</span><small class="paid-folder-count">${count} ${label('tracks','קטעים',isHebrew)}</small></div>`;
+    return `<details class="paid-folder-node" data-paid-folder-key="${esc(key)}" ${openFolders.has(key)?'open':''}><summary>${folderIcon}<span class="paid-folder-name" dir="auto">${esc(node.name)}</span><small class="paid-folder-count">${count} ${label('tracks','קטעים',isHebrew)}</small><span class="paid-folder-chevron" aria-hidden="true">⌄</span></summary><div class="paid-folder-children">${inner}</div></details>`;
   };
   const rows = tree.folders.map(node=>render(node,0)).join('') +
     (owned ? tree.tracks.map(trackButton).join('') : '');
-  return `<div class="paid-folder-overview"><div class="paid-folder-overview-title"><strong>${label('Collection folders','תיקיות האוסף',isHebrew)}</strong><span>${tree.count} ${label('tracks','קטעים',isHebrew)}</span></div><div class="paid-folder-tree">${rows}</div>${!owned ? `<p class="paid-folder-locked">${label('Folder titles are public. Recordings require purchased access.','אפשר לראות את שמות התיקיות. ההקלטות זמינות לרוכשים בלבד.',isHebrew)}</p>` : ''}</div>`;
+  return `<section class="paid-folder-overview" data-paid-scroll-container="page"><div class="paid-folder-overview-title"><strong>${label('Collection folders','תיקיות האוסף',isHebrew)}</strong><span>${tree.count} ${label('tracks','קטעים',isHebrew)}</span></div><p class="paid-folder-guidance">${label('Open a folder to see its tracks. Scroll down to browse the whole collection.','פתחו תיקייה כדי לראות את הקטעים. גללו למטה כדי לעיין באוסף.',isHebrew)}</p><div class="paid-folder-tree">${rows}</div>${!owned ? `<p class="paid-folder-locked">${label('Folder titles are public. Recordings require purchased access.','אפשר לראות את שמות התיקיות. ההקלטות זמינות לרוכשים בלבד.',isHebrew)}</p>` : ''}</section>`;
 }
 
 function questionLocation(section, isHebrew) {
