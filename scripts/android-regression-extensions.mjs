@@ -294,8 +294,18 @@ async function nativeNotificationTap(pattern,name) {
     readHierarchy:()=>nativeHierarchy('emulator-report/notification-'+name+'.xml'),
     action:name,pattern,delay
   });
+  // Sample the SAME native Media3 clock immediately either side of the
+  // physical SystemUI tap. Comparing Back against the prior Forward sample
+  // was invalid during 2x playback: seconds elapsed while Android drew the
+  // notification shade, so a real -15s seek looked like a failure.
+  const before=await read();
+  const beforePositionMs=Number(before.native.audioPositionMs);
+  const tappedAt=Date.now();
   adb('shell','input','tap',...point.map(String));
   await delay(800);
+  const after=await read();
+  return {beforePositionMs,afterPositionMs:Number(after.native.audioPositionMs),
+    elapsedMs:Date.now()-tappedAt,rate:Number(before.native.playbackSpeed)||1};
 }
 async function verifyOfflineServerHistory(id) {
   const expected=(await read()).native.audioPositionMs/1000;
@@ -374,7 +384,11 @@ try{
   const initial=await wait(s=>s.ready&&s.watchId&&s.watchMode==='audio'&&s.native.audioIsPlaying,'Existing real-MP4 audio/video handoff test must leave audio playing');
   assert.equal(initial.isLoggedIn,process.env.IRGUN_EXPECT_SIGNED_IN==='1','Media suite must execute in its declared logged-in or logged-out state');
   report.accountMode=initial.isLoggedIn?'logged-in':'logged-out';
-  audibleAudio(initial);report.initial={watchId:initial.watchId,positionMs:initial.native.audioPositionMs};
+  // This is the true fresh session BEFORE earlier suites change speed to 2x.
+  // Never mislabel a later intentionally-changed speed as a broken default.
+  assert.ok(Math.abs(initial.speed-1)<.01&&Math.abs(initial.native.playbackSpeed-1)<.05,
+    'A new Android playback session must default to 1x, never 0.75x');
+  audibleAudio(initial);report.initial={watchId:initial.watchId,positionMs:initial.native.audioPositionMs,defaultSpeed:initial.speed};
   checks('Started from successful real-media 10-minute audio/video handoff');
 
   await section('Repeated audio/video handoffs preserve playing position and single audio source',async()=>{
@@ -674,10 +688,16 @@ try{
     }
     const clockBefore=await notificationClock();await delay(3500);const clockAfter=await notificationClock();
     assert.ok(clockAfter>=clockBefore+2,'The visible Android notification timer must advance, not remain at 0:00');
-    await nativeNotificationTap(/(?:content-desc="Forward 15 seconds"|resource-id="[^"]*actionNext")/,'forward');
-    const physicalForward=await wait(s=>s.native.audioPositionMs>=playing.native.audioPositionMs+12000,'Physical notification Forward did not seek');
-    await nativeNotificationTap(/(?:content-desc="Back 15 seconds"|resource-id="[^"]*actionPrev")/,'back');
-    await wait(s=>s.native.audioPositionMs<=physicalForward.native.audioPositionMs-11000,'Physical notification Back did not seek');
+    const forwardTap=await nativeNotificationTap(/(?:content-desc="Forward 15 seconds"|resource-id="[^"]*actionNext")/,'forward');
+    assert.ok(forwardTap.afterPositionMs-forwardTap.beforePositionMs>=11000 &&
+      forwardTap.afterPositionMs-forwardTap.beforePositionMs<=15000+forwardTap.elapsedMs*forwardTap.rate+4500,
+      'Physical notification Forward must actually seek +15s against its immediate pre-tap clock: '+JSON.stringify(forwardTap));
+    await wait(s=>s.native.audioIsPlaying&&s.native.audioPositionMs>=forwardTap.beforePositionMs+11000,
+      'Native MediaSession must continue after real notification Forward');
+    const backTap=await nativeNotificationTap(/(?:content-desc="Back 15 seconds"|resource-id="[^"]*actionPrev")/,'back');
+    assert.ok(backTap.beforePositionMs-backTap.afterPositionMs>=8000 &&
+      backTap.beforePositionMs-backTap.afterPositionMs<=16500,
+      'Physical notification Back must actually seek -15s against its immediate pre-tap clock: '+JSON.stringify(backTap));
     checks('Physical notification Play/Pause/Forward/Back and visible timer',{clockBefore,clockAfter});
     const updatedXml=nativeHierarchy('emulator-report/irgun-notification-after-controls.xml');
     const nodes=updatedXml.match(/<node\b[^>]*>/g)||[];
@@ -1069,17 +1089,23 @@ try{
       a=b;
     }
     assert.ok(adb('shell','pidof',pkg),'Android process crashed during lock/unlock');
-  });  await section('Playback starts at 1x; native 1.25x, 1.5x, 2x work; 1.5x survives restart',async()=>{
+  });  await section('Initial 1x checked; native 1.25x, 1.5x, 2x and 1.5x restart work',async()=>{
     await closePlayer();
     const playing=await audioReady();
     audibleAudio(playing);
-    assert.ok(Math.abs(playing.speed-1)<0.01,'Fresh-session default speed must be 1x, never 0.75x');
+    // An earlier speed suite intentionally selected 2x, which is still live.
+    // The real cold-start 1x default was verified at test entry; now reset
+    // via the physical player UI before testing the subsequent speeds.
     // The speed settings are on the full player opened from the mini player.
     // The Watch page itself has no [data-open-player] control.
     await tap('[data-close-watch]');
     await wait(s=>!s.watchId&&s.currentId==='1233236785:585d5d53db','Closing Watch must retain live native audio');
     await tapWithScroll('.mini-player .mini-copy');
     await wait(s=>s.playerOpen,'Audio full-player settings did not open from real mini player');
+    await tapWithScroll('[data-speed-choice="1"]');
+    const reset=await wait(s=>Math.abs(s.speed-1)<.01&&Math.abs(s.native.playbackSpeed-1)<.05,
+      'Physical speed reset must return the SAME native player to 1x',20000);
+    audibleAudio(reset);
     for(const rate of [1.25,1.5,2,1.5]) {
       await tapWithScroll('[data-speed-choice="'+rate+'"]');
       const adjusted=await wait(s=>Math.abs(s.speed-rate)<0.01&&Math.abs(s.native.playbackSpeed-rate)<0.05,
