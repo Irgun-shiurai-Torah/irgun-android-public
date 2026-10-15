@@ -138,3 +138,27 @@ test('a temporary display bridge failure can retry the same state without alteri
  const controller=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunVideoDisplayController.java','utf8');
  assert.doesNotMatch(controller,/\.seekTo\(|\.prepare\(|\.setMediaItem\(|new ExoPlayer|Settings\.System\.put/);
 });
+
+test('partly scrolled picture measurement waits for real controller auto-hide without injecting a seek',async()=>{
+ const {runInNewContext}=await import('node:vm');
+ const source=readFileSync('scripts/android-emulator-native-media3.mjs','utf8');
+ const start=source.indexOf('  const captureVisibleNativePicture=');
+ const end=source.indexOf('  const first=await waitNative',start);
+ assert.ok(start>=0&&end>start);
+ const visible={media3:{controllerFullyVisible:true,qualityButtonVisible:true,
+  surfaceVisibleOnScreen:true,surfaceVisibleWidth:320,surfaceVisibleHeight:104,surfaceX:0,surfaceY:80}};
+ const hidden={media3:{...visible.media3,controllerFullyVisible:false,qualityButtonVisible:false}};
+ const commands=[],report={checks:[]};let waited=false,captured=false;
+ const capture=runInNewContext(source.slice(start,end)+'captureVisibleNativePicture',{
+  assert,report,delay:async()=>{},sample:async()=>{assert.equal(waited,true);return hidden;},
+  waitNative:async predicate=>{assert.equal(predicate(visible),false);assert.equal(predicate(hidden),true);waited=true;return hidden;},
+  adb:()=>{throw Error('No Android touch or seek is allowed during screenshot observation');},
+  writeFileSync:()=>{captured=true;},execFileSync:(command,args)=>{
+    commands.push([command,...args]);
+    if(command==='adb'){assert.deepEqual(Array.from(args),['exec-out','screencap','-p']);return Buffer.from('png');}
+    assert.equal(command,'convert');return '0.5';
+  }
+ });
+ assert.equal(await capture(visible,'partial'),.5);assert.ok(captured);
+ assert.equal(commands.length,2);assert.equal(report.checks.length,1);
+});

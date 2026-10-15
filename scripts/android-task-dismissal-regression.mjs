@@ -14,8 +14,9 @@ export function recentsEducationAction(xml) {
   return rect?{tap:[Math.round((rect[0]+rect[2])/2),Math.round((rect[1]+rect[3])/2)]}:{back:true};
 }
 
-const recentTasks=dump=>dump.split(/(?=^\s*\*?\s*Recent #\d+:)/m)
-  .filter(block=>/^\s*\*?\s*Recent #\d+:/.test(block));
+const recentTasks=dump=>dump.split(/Visible recent tasks|Visible recent task list/i)[0]
+  .split(/(?=^[ \t]*\*?[ \t]*Recent #\d+:)/m)
+  .filter(block=>/^[ \t]*\*?[ \t]*Recent #\d+:/.test(block));
 const irgunTask=block=>/(?:realActivity=|cmp=)org\.irgunshiuraitorah\.app\//.test(block||'');
 export function hasIrgunRecentTask(dump) {
   return recentTasks(dump).some(irgunTask);
@@ -80,7 +81,8 @@ export async function verifyAndroidTaskDismissal({adb,sample,delay,report}) {
     assert.equal(recentsEducationAction(hierarchy),null,'Recents education must be dismissed before a task swipe');
   }
   writeFileSync('emulator-report/task-dismissal-recents.xml',hierarchy);
-  const recentDump=adb('shell','dumpsys','activity','recents');
+  const recentDump=adb('shell','dumpsys','activity','-a','recents');
+  writeFileSync('emulator-report/task-dismissal-activity-recents.txt',recentDump);
   assert.equal(topRecentTaskIsIrgun(recentDump),true,
     'Android ActivityManager must expose the actual Irgun task before dismissal');
   const gesture=recentsDismissGesture(hierarchy,{width:Number(size[1]),height:Number(size[2]),topTaskIsIrgun:true});
@@ -93,7 +95,7 @@ export async function verifyAndroidTaskDismissal({adb,sample,delay,report}) {
     const sessions=adb('shell','dumpsys','media_session');
     const notifications=adb('shell','dumpsys','notification','--noredact');
     return {destroyed:logs.includes('Media3 service destroyed'),
-      taskPresent:hasIrgunRecentTask(adb('shell','dumpsys','activity','recents')),
+      taskPresent:hasIrgunRecentTask(adb('shell','dumpsys','activity','-a','recents')),
       servicePresent:/ServiceRecord\{[^\n]*IrgunPlaybackService/.test(services),
       sessionPresent:sessions.includes(pkg),notificationPresent:hasActivePlaybackNotification(notifications)};
   };

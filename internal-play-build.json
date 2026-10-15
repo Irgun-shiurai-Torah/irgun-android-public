@@ -1,12 +1,13 @@
 {
   "sourceBranch": "fix/android-postmerge-like-home-20261013",
-  "sourceCommit": "99bfa00263b028d0e6143829f695c99a48079c03",
+  "sourceCommit": "70ba39696a157352362890ad0353d34396a28559",
   "track": "internal",
-  "requestedAt": "2026-10-15T09:32:22.202Z",
+  "requestedAt": "2026-10-15T09:55:37.817Z",
   "pullRequest": 37,
   "mergeIntoMain": false,
   "features": [
-    "Noninteractive Splash does not take an input focus channel during first WebView setup; known Android immersive education is handled before native control tests",
+    "Android tests use detailed ActivityManager task identity, actual queued keyboard key-down/up, optional fullscreen-guidance window observation and real controller auto-hide before picture measurements",
+    "Restore normal Splash focus; regression fixtures wait for emulator first-boot broadcast work before cold app launch",
     "Tablet video uses FULL_SENSOR to rotate actual display without fixed-orientation letterboxing, while retaining user rotation setting and restoring prior policy outside video",
     "Account gestures use measured unobscured scroll area above floating nav; handle Overview education before actual task-dismiss swipe; verify actual recent task disappears",
     "Bind persistent Android PiP/mode/close controls once; clear old native error overlay only after same-player frames recover",
@@ -28,11 +29,11 @@
     "Account tests pin a descriptor-verified native-video/audio lecture; Vimeo-only playback tested separately"
   ],
   "verification": {
-    "localTests": 255,
+    "localTests": 258,
     "androidPackaging": "npm run test:player passed for web changes; later changes native/test only",
-    "status": "General media tests passed API30/34/35/36 on preceding source. Fresh complete suite includes physical screenshot orientation/coverage, fully visible native controller, and verified top-recent-task card identity.",
-    "fullMatrixRun": 38713625463,
-    "startupRun": 38713627606
+    "status": "Fresh complete matrix running; no claim that pending emulator or tablet tests passed. Prior source passed general media API30/34/35/36.",
+    "fullMatrixRun": 38716454036,
+    "startupRun": 38716454159
   },
-  "releaseAttempt": 19
+  "releaseAttempt": 20
 }

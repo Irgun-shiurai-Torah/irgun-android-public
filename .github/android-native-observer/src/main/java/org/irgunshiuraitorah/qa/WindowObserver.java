@@ -7,11 +7,14 @@ import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 
 /** Read the actual foreground hierarchy without requiring an idle media timer. */
 public class WindowObserver extends Instrumentation {
+    private boolean allWindows;
     @Override public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
+        allWindows = arguments != null && "true".equals(arguments.getString("allWindows"));
         start();
     }
 
@@ -23,15 +26,24 @@ public class WindowObserver extends Instrumentation {
             AccessibilityServiceInfo info = ui.getServiceInfo();
             info.flags |= AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS |
                 AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS;
+            if (allWindows) info.flags |= AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
             ui.setServiceInfo(info);
             AccessibilityNodeInfo root = null;
             for (int attempt = 0; attempt < 12 && root == null; attempt++) {
                 root = ui.getRootInActiveWindow();
                 if (root == null) SystemClock.sleep(150);
             }
-            if (root == null) throw new IllegalStateException("Actual active window has no accessibility root");
+            if (root == null && !allWindows) throw new IllegalStateException("Actual active window has no accessibility root");
             StringBuilder xml = new StringBuilder("<hierarchy>");
-            appendNode(xml, root, 0);
+            if (allWindows) {
+                // Optional only for public video fullscreen guidance. Default
+                // account and notification observers retain active-window scope.
+                for (AccessibilityWindowInfo window : ui.getWindows()) {
+                    AccessibilityNodeInfo windowRoot = window.getRoot();
+                    if (windowRoot != null) { appendNode(xml, windowRoot, 0); windowRoot.recycle(); }
+                }
+            } else appendNode(xml, root, 0);
+            if (root != null) root.recycle();
             xml.append("</hierarchy>");
             result.putString("hierarchy", xml.toString());
             finish(-1, result);

@@ -5,7 +5,6 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.view.WindowManager;
 
 public class SplashActivity extends Activity {
     public static final String EXTRA_OPEN_EXISTING_PLAYBACK = "org.irgunshiuraitorah.app.OPEN_EXISTING_PLAYBACK";
@@ -15,11 +14,6 @@ public class SplashActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // This brief branding Activity has no controls. Do not give it an input
-        // focus channel that must be acknowledged while MainActivity performs
-        // the first WebView initialization on this same UI thread.
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-            | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
 
         // Warm reopen must not send another Intent through an already-running
         // Capacitor BridgeActivity. Doing so calls BridgeActivity.onNewIntent() while
