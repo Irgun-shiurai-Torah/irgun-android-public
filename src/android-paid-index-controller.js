@@ -2,7 +2,7 @@
 // Rendering and folder navigation never authorize playback: signed sessions still
 // require Worker-owned entitlements and the existing native Media3 engine.
 import {BELSKY_VOL1_ID,BELSKY_INDEX_URL,belskyAlbumForSession,belskySessionLabel,
-  paidFolderKey,parseBelskyIndex} from './android-paid-collections.js';
+  paidFolderKey,paidFolderPath,parseBelskyIndex} from './android-paid-collections.js';
 import {paidQuestionIndexHtml,paidQuestionResultsHtml} from './android-paid-catalog-ui.js';
 
 export function createAndroidPaidQuestionController({state,CapacitorHttp,render,esc,isHebrew}) {
@@ -68,9 +68,19 @@ export function createAndroidPaidQuestionController({state,CapacitorHttp,render,
     const album=belskyAlbumForSession(session);
     if(!album)return;
     state.paidExpandedId=BELSKY_VOL1_ID;
-    // Visual folder grouping only, never infer a particular question's recording.
-    state.paidOpenFolders.add(paidFolderKey(BELSKY_VOL1_ID,[album.label]));
-    state.paidOpenFolders.add(paidFolderKey(BELSKY_VOL1_ID,[album.label,belskySessionLabel(session)]));
+    // Find the ACTUAL session path in the Worker's public preview or owned
+    // tracks. We can verify a folder from metadata but must never assume that
+    // an indexed question corresponds to one specific protected audio track.
+    const product=state.paidCatalog.find(item=>String(item.id)===BELSKY_VOL1_ID);
+    const records=product?.owned ? product.tracks : product?.folderPreview;
+    const code='RB-01-'+String(session).padStart(2,'0');
+    const row=(Array.isArray(records)?records:[]).find(item=>
+      Array.isArray(item?.folders) && item.folders.some(name=>String(name).trim().toUpperCase()===code));
+    if(row) {
+      const path=paidFolderPath(BELSKY_VOL1_ID,row.folders);
+      for(let index=1;index<=path.length;index++)
+        state.paidOpenFolders.add(paidFolderKey(BELSKY_VOL1_ID,path.slice(0,index)));
+    }
     state.paidQuestionIndexOpen=false;
     render();
     setTimeout(()=>{
