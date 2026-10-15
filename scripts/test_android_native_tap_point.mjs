@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {settledNativeTapPoint,waitForNativeWindowFocus} from './android-native-tap-point.mjs';
 import {accountSwipeDirection, watchPlayerReturnGesture, watchCommentsGesture, watchFollowTargetGesture} from './android-account-native-scroll.mjs';
-import {selectAccountPlaybackFixture} from './android-account-playback-fixture.mjs';
+import {selectAccountPlaybackFixture,hasWebsiteFollowTarget} from './android-account-playback-fixture.mjs';
 
 const geometry = height => ({left:0,top:24,right:320,bottom:24+height,focused:true});
 const immediate = async () => {};
@@ -26,6 +26,29 @@ test('account playback skips a new Vimeo-only upload with no Audio and pins an a
 });
 test('an absent native/audio fixture fails explicitly instead of treating Vimeo-only playback as a broken Audio button',async()=>{
   await assert.rejects(selectAccountPlaybackFixture([{id:'new',hasDriveVideo:false,hasAudio:false}],()=>{throw Error('Must not request native media for Vimeo-only');}),/native video AND separate audio/);
+});
+
+test('logged-in Follow QA chooses ONLY a website-followable native video/audio lecture',async()=>{
+  const metadata={lectures:{reviewed:{speakerIds:['shmuel-brisk']}},speakers:[{id:'shmuel-brisk'}]};
+  const videos=[
+    {id:'no-speaker',title:'Daily Lecture',hasDriveVideo:true,hasAudio:true},
+    {id:'vimeo-only',title:'הרב משה לוי - הלכה',hasDriveVideo:false,hasAudio:false},
+    {id:'reviewed',title:'Talk',hasDriveVideo:true,hasAudio:true},
+    {id:'with-name',title:'הרב משה לוי - הלכה',hasDriveVideo:true,hasAudio:true}
+  ];
+  assert.equal(hasWebsiteFollowTarget(videos[0],metadata),false);
+  assert.equal(hasWebsiteFollowTarget(videos[2],metadata),true);
+  assert.equal(hasWebsiteFollowTarget(videos[3],metadata),true);
+  const reads=[];
+  const selected=await selectAccountPlaybackFixture(videos,async id=>{
+    reads.push(id);return {video:{hls:'real.m3u8'},audio:{mp3:'real.mp3'}};
+  },{requireFollow:true,metadata});
+  assert.equal(selected.id,'reviewed','No Follow metadata must not masquerade as a failing Follow button');
+  assert.deepEqual(reads,['reviewed'],'Never fetch an unsuitable or Vimeo-only playback fixture');
+  await assert.rejects(
+    selectAccountPlaybackFixture([videos[0]],async()=>{throw Error('Must not fetch unsuitable fixture')},
+      {requireFollow:true,metadata}),
+    /website-recognized speaker/);
 });
 
 test('a keyboard resize requires fresh stable native and DOM bounds before mapping a tap',async()=>{
