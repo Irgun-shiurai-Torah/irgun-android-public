@@ -16,7 +16,11 @@ export function recentsEducationAction(xml) {
 
 const recentTasks=dump=>dump.split(/Visible recent tasks|Visible recent task list/i)[0]
   .split(/(?=^[ \t]*\*?[ \t]*Recent #\d+:)/m)
-  .filter(block=>/^[ \t]*\*?[ \t]*Recent #\d+:/.test(block));
+  // The Launcher/Recents HOME task is often Recent #0, even when the
+  // Irgun card is the top dismissible app (Recent #1). Only compare app
+  // tasks; never mistake HOME for the current foreground app task.
+  .filter(block=>/^[ \t]*\*?[ \t]*Recent #\d+:/.test(block)&&
+    !/\btype=(?:home|recents)\b/.test(block.split('\n',1)[0]));
 const irgunTask=block=>/(?:realActivity=|cmp=)org\.irgunshiuraitorah\.app\//.test(block||'');
 export function hasIrgunRecentTask(dump) {
   return recentTasks(dump).some(irgunTask);
