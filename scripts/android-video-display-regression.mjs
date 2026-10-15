@@ -92,7 +92,7 @@ export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,
    assert.ok(filled,'Native video must actually fill the rotated landscape window, not just set a fullscreen flag: '+JSON.stringify({bounds,visible}));
    const shown=await showControls();
    assertAndroidVideoTimes(shown.media3);
-   writeFileSync('emulator-report/video-landscape-'+index+'.png',execFileSync('adb',['exec-out','screencap','-p']));
+   writeFileSync('emulator-report/video-landscape-'+index+'.png',execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));
    same(before,visible,Date.now()-started);
    assert.equal(setting('system','accelerometer_rotation'),'0','The app must not change the system auto-rotate preference');
    adb('emu','sensor','set','acceleration',upright);

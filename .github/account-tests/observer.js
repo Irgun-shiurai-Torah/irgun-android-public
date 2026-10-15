@@ -34,7 +34,9 @@ window.ISTAccountTest = {
   };
   const scroll=document.querySelector('.watch-overlay .watch-scroll');
   const watchScroll=scroll ? (()=>{const r=scroll.getBoundingClientRect();
+    const nav=document.querySelector('#androidBottomNavigationMount .bottom-nav')?.getBoundingClientRect();
     return {x:r.x,y:r.y,width:r.width,height:r.height,top:scroll.scrollTop,
+      visibleBottom:Math.min(innerHeight,r.bottom,nav?.height>0?nav.top-8:innerHeight),
       heightTotal:scroll.scrollHeight,visibleHeight:scroll.clientHeight,
       touchAction:getComputedStyle(scroll).touchAction};})() : null;
   const video = state.watchVimeo?.getVideoElement?.()

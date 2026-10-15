@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
-import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {settledNativeTapPoint,waitForNativeWindowFocus} from './android-native-tap-point.mjs';
 import {safeNativeBackgroundHandoff} from './android-background-handoff-check.mjs';
 import {startMediaRequest,completeMediaRequest,failedDuringOffline} from './android-network-evidence.mjs';
 import {fullscreenEducationTapPoint,mediaNotificationClock,settledMediaNotificationControlPoint} from './android-system-ui-observation.mjs';
@@ -109,8 +109,9 @@ async function wait(test,message,timeout=45000) {
   }
   throw new Error(message+'; last='+JSON.stringify(last||{})+'; error='+String(lastError||'none'));
 }
-async function nativeBounds() {
-  const geometry=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+async function nativeBounds(waitForFocus=false) {
+  const observe=()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+  const geometry=waitForFocus?await waitForNativeWindowFocus({readBounds:observe,delay}):await observe();
   assert.equal(geometry.focused,true,'Irgun must own the native foreground window before an app tap');
   const arr=[geometry.left,geometry.top,geometry.right,geometry.bottom];
   assert.ok(arr.every(Number.isFinite)&&arr[2]>arr[0]&&arr[3]>arr[1],
@@ -679,8 +680,7 @@ try{
     const rect=selected.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
     assert.ok(rect&&rect[2]>rect[0]&&rect[3]>rect[1],'Visible notification title must have native screen bounds');
     adb('shell','input','tap',String(Math.round((rect[0]+rect[2])/2)),String(Math.round((rect[1]+rect[3])/2)));
-    await delay(1600);
-    bounds=await nativeBounds();
+    bounds=await nativeBounds(true);
     const back=await wait(s=>s.videoEngine==='native-media3' ? s.native.mode==='VIDEO'&&s.watchMode==='video'&&s.video&&!s.video.paused : s.native.mode==='AUDIO'&&s.native.audioIsPlaying,'Notification must reopen the previously selected Video with moving playback',50000);
     assert.ok(back.native.audioPositionMs/1000>=beforePosition+1,'Background handoff lost saved Video progress');
     assert.ok(back.native.audioPositionMs>=continuing.native.audioPositionMs-750,

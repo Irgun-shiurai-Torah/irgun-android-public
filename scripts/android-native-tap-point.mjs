@@ -1,5 +1,15 @@
 import assert from 'node:assert/strict';
 
+export async function waitForNativeWindowFocus({readBounds,
+  delay=ms=>new Promise(resolve=>setTimeout(resolve,ms)),samples=30}) {
+  for(let i=0;i<samples;i++){
+    const bounds=await readBounds();
+    if(bounds.focused&&bounds.right>bounds.left&&bounds.bottom>bounds.top)return bounds;
+    await delay(200);
+  }
+  throw new Error('Irgun did not regain the actual native foreground window after notification activation');
+}
+
 // Observe a stable target in the current native window. This never taps, repeats
 // an input action, restarts the app or relaxes the outcome being tested.
 export async function settledNativeTapPoint({readBounds, readPoint,

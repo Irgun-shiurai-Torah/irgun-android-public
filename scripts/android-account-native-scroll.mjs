@@ -14,9 +14,21 @@ export function accountSwipeDirection(key) {
 // maps DOM positions to fresh Android window bounds and verifies scrollTop
 // actually decreases; this function does not move the page programmatically.
 export function watchPlayerReturnGesture(scroll) {
-  const {x,y,width,height} = scroll || {};
-  if (![x,y,width,height].every(Number.isFinite) || width < 50 || height < 120)
-    throw new Error('Real Watch scroll bounds are required to reach the player');
+  const {x,y,width,height} = watchGestureViewport(scroll);
   const atX = x + width * 0.74;
   return {from:{x:atX,y:y+height*0.20},to:{x:atX,y:y+height*0.84}};
+}
+
+function watchGestureViewport(scroll) {
+  const {x,y,width,height,visibleBottom} = scroll || {};
+  if (![x,y,width,height].every(Number.isFinite) || width < 50 || height < 120)
+    throw new Error('Real Watch scroll bounds are required to reach the player');
+  const visibleHeight=(Number.isFinite(visibleBottom)?Math.min(y+height,visibleBottom):y+height)-Math.max(0,y);
+  if(visibleHeight<120)throw new Error('Real Watch scroll bounds are obscured by navigation or keyboard');
+  return {x,y:Math.max(0,y),width,height:visibleHeight};
+}
+
+export function watchCommentsGesture(scroll) {
+  const {x,y,width,height}=watchGestureViewport(scroll),atX=x+width*.70;
+  return {from:{x:atX,y:y+height*.86},to:{x:atX,y:y+height*.16}};
 }
