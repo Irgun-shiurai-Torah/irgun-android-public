@@ -464,6 +464,11 @@ test('native top PiP and video header PiP share one prepared entry; rejected PiP
     'PiP entry cannot resize/reflow the native view until Android confirms it');
   assert.match(rollback,/if \(videoFullscreen\) hideSystemBarsForVideo\(\)/,
     'Entry failure must retain the previous native fullscreen window');
+  assert.match(activity,/confirmRejectedPictureInPictureAfterSettling\(attempt\)/,
+    'Do not launch a permission dialog before the actual Android PiP callback settles');
+  assert.match(activity,/attempt != pipEntrySerial \|\| confirmedSystemPip/,
+    'A delayed PiP rejection must be cancelled by actual OS confirmation');
+  assert.match(activity,/\+\+pipEntrySerial; \/\/ Cancel any delayed rejection after real PiP/);
   assert.doesNotMatch(rollback,/IrgunNativeVideoPlugin\.systemPipChanged\(false\);/);
   assert.match(callback,/if \(isInPictureInPictureMode\) \{[\s\S]*?systemPipChanged\(true\)/);
   assert.match(callback,/else if \(wasConfirmed\) \{[\s\S]*?systemPipChanged\(false\)/);
