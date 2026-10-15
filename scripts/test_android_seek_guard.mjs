@@ -7,8 +7,30 @@ import {join} from 'node:path';
 
 test('actual native network recovery retains the engine, source, authority and user Pause with bounded attempts',()=>{
  const source=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java','utf8');
- const start=source.indexOf('    private void cancelNetworkRecovery()'),end=source.indexOf('    @Override\n    public void onCreate()',start);
- const methods=source.slice(start,end);assert.ok(methods.includes('ERROR_CODE_IO_NETWORK_CONNECTION_FAILED'));
+ // Extract only the original network-recovery methods. The application
+ // now has independent video-stall watchdog methods in this class; copying
+ // every helper before onCreate() into this minimal mock accidentally pulls
+ // in unrelated Media3/Video fields and makes the network test uncompilable.
+ const method=signature=>{
+  const start=source.indexOf(signature);
+  assert.ok(start>0,'Native network method not found: '+signature);
+  const brace=source.indexOf('{',start);
+  assert.ok(brace>start);
+  let depth=0;
+  for(let n=brace;n<source.length;n++){
+   if(source[n]==='{')depth++;
+   else if(source[n]==='}'&&--depth===0)return source.slice(start,n+1);
+  }
+  throw new Error('Unclosed native network method: '+signature);
+ };
+ const methods=[
+  method('private void cancelNetworkRecovery()'),
+  method('private boolean scheduleNetworkRecovery(int errorCode)'),
+  method('private void queueNetworkRecovery(long delayMs)')
+ ].join('\n');
+ assert.ok(methods.includes('ERROR_CODE_IO_NETWORK_CONNECTION_FAILED'));
+ assert.doesNotMatch(methods,/nativeVideoStallWatch|scheduleNativeVideoStallWatch/,
+  'Isolated network harness must never silently absorb the unrelated silent-buffer watchdog');
  assert.match(source,/if \(scheduleNetworkRecovery\(error.errorCode\)\) return;/);
  assert.match(source,/if \(networkRecoveryPending && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST\)/);
  assert.match(source,/if \(networkRecoveryPending && player.getPlayerError\(\) == null\) cancelNetworkRecovery\(\)/);
