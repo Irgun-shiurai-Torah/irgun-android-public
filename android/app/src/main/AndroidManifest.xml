@@ -25,15 +25,10 @@
             android:resizeableActivity="true"
             android:exported="true">
 
-            <!-- Android 16 targetSdk 36 ignores sensor-landscape requests on
-                 tablets unless temporarily opted out. This is MainActivity-only
-                 and does not disable adaptive resizing. Migrate for API 37. -->
-            <property
-                android:name="android.window.PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY"
-                android:value="true" />
-            <property
-                android:name="android.window.PROPERTY_COMPAT_IGNORE_REQUESTED_ORIENTATION"
-                android:value="false" />
+            <!-- Large Android screens are adaptive: do not opt out of
+                 Android 16 orientation/resizing or force a letterboxed window.
+                 Locked tablet screens use a rotated native video presentation,
+                 while unlocked displays rotate under Android system control. -->
 
             <intent-filter>
                 <action android:name="IRGUN_NOTIFICATION_CLICK" />

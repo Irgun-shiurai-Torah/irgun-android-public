@@ -43,8 +43,10 @@ final class IrgunVideoDisplayController {
         if (!enabled && !fromSensor && rotatedFullscreen) {
             policy.manualExit();
             rotatedFullscreen = false;
-            if (useFullSensorWindow()) restoreOrientation();
-            else activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+            if (useFullSensorWindow()) {
+                activity.setNativeVideoTabletTilt(VideoRotationPolicy.PORTRAIT);
+                restoreOrientation();
+            } else activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
         }
     }
 
@@ -73,25 +75,33 @@ final class IrgunVideoDisplayController {
             if (listening) { sensor.disable(); listening = false; physicalAngle = -1; policy.reset(); }
             // PiP owns its window sizing. Do not rotate that window during entry.
             if (!pip) restoreOrientation();
-            if (!active || !expanded) rotatedFullscreen = false;
+            if (!active || !expanded) {
+                rotatedFullscreen = false;
+                if (useFullSensorWindow()) activity.setNativeVideoTabletTilt(VideoRotationPolicy.PORTRAIT);
+            }
         }
         if (foreground && active) main.postDelayed(poll, 200);
     }
 
     private void rotate(int direction) {
         if (direction == VideoRotationPolicy.PORTRAIT && !rotatedFullscreen) return;
-        if (previousOrientation == null) previousOrientation = activity.getRequestedOrientation();
-        // FULL_SENSOR requested fullscreen on a locked tablet without actually
-        // rotating its portrait display. Select the physical sensor axis
-        // explicitly, preserving the user's system auto-rotate preference.
-        int orientation = useFullSensorWindow()
-            ? (direction == VideoRotationPolicy.PORTRAIT
-                ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-                : ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE)
-            : direction == VideoRotationPolicy.PORTRAIT ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            : direction == VideoRotationPolicy.LANDSCAPE ? ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-            : ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE;
-        if (activity.getRequestedOrientation() != orientation) activity.setRequestedOrientation(orientation);
+        // On sw600dp+ displays Android 16 can IGNORE orientation requests and
+        // letterbox the Activity while the physical screen stays portrait.
+        // Never fight the user's rotation lock: let the OS own tablet window
+        // orientation, and rotate the ONE native PlayerView when locked.
+        // Phones still honor fixed orientation for immersive Video.
+        if (useFullSensorWindow()) {
+            activity.setNativeVideoTabletTilt(direction);
+        } else {
+            if (previousOrientation == null) previousOrientation = activity.getRequestedOrientation();
+            int orientation = direction == VideoRotationPolicy.PORTRAIT
+                ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                : direction == VideoRotationPolicy.LANDSCAPE
+                    ? ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                    : ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE;
+            if (activity.getRequestedOrientation() != orientation)
+                activity.setRequestedOrientation(orientation);
+        }
         rotatedFullscreen = direction != VideoRotationPolicy.PORTRAIT;
         activity.applySensorVideoFullscreen(rotatedFullscreen);
     }

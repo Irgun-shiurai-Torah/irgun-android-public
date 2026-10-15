@@ -64,6 +64,14 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     private AlertDialog qualityDialog, speedDialog;
     private boolean systemPip;
     private int requestedQualityHeight;
+    private int tabletTilt;
+    public static void tabletSensorTilt(int direction) {
+        IrgunNativeVideoPlugin plugin=current.get();
+        if (plugin == null) return;
+        if (plugin.tabletTilt == direction) return;
+        plugin.tabletTilt=direction;
+        if (plugin.surface != null) plugin.surface.post(plugin::layoutSurface);
+    }
     private boolean controllerVisible;
     private long doubleTapSeekCount, doubleTapSeekTargetMs, doubleTapSeekAtMs;
 
@@ -575,14 +583,29 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             // Use the real Android root, not the old WebView HLS stage. Media3
             // keeps decoding on the SAME existing ExoPlayer while switching
             // between in-page and fullscreen native PlayerView dimensions.
-            FrameLayout.LayoutParams full = new FrameLayout.LayoutParams(
-                Math.max(1, root.getWidth()), Math.max(1, root.getHeight()));
-            full.gravity = Gravity.TOP | Gravity.LEFT;
-            full.leftMargin = 0;
-            full.topMargin = 0;
-            clipHost.setLayoutParams(new FrameLayout.LayoutParams(full));
+            int rootW=Math.max(1,root.getWidth()), rootH=Math.max(1,root.getHeight());
+            FrameLayout.LayoutParams full=new FrameLayout.LayoutParams(rootW,rootH);
+            full.gravity=Gravity.TOP | Gravity.LEFT;
+            clipHost.setLayoutParams(full);
             clipHost.setVisibility(View.VISIBLE);
-            surface.setLayoutParams(full);
+            // On a rotation-locked tablet, rotate only the native video
+            // presentation. The user sees landscape when holding it sideways,
+            // without forcing an OS-wide display orientation.
+            boolean rotateInWindow=!systemPip && tabletTilt != VideoRotationPolicy.PORTRAIT
+                && rootH>rootW && getContext().getResources().getConfiguration().smallestScreenWidthDp>=600;
+            if (rotateInWindow) {
+                FrameLayout.LayoutParams sideways=new FrameLayout.LayoutParams(rootH,rootW);
+                sideways.gravity=Gravity.TOP | Gravity.LEFT;
+                sideways.leftMargin=(rootW-rootH)/2;
+                sideways.topMargin=(rootH-rootW)/2;
+                surface.setLayoutParams(sideways);
+                surface.setPivotX(rootH/2f);
+                surface.setPivotY(rootW/2f);
+                surface.setRotation(tabletTilt == VideoRotationPolicy.REVERSE_LANDSCAPE ? -90f : 90f);
+            } else {
+                if (surface.getRotation()!=0f) surface.setRotation(0f);
+                surface.setLayoutParams(full);
+            }
             surface.setClipBounds(null);
             if (surface.getResizeMode() != AspectRatioFrameLayout.RESIZE_MODE_FIT)
                 surface.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
@@ -624,6 +647,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             hideMiniTargets();
             return;
         }
+        if (surface.getRotation() != 0f) surface.setRotation(0f);
         FrameLayout.LayoutParams clipParams = new FrameLayout.LayoutParams(r-l,b-t);
         clipParams.gravity = Gravity.TOP | Gravity.LEFT;
         clipParams.leftMargin = left+l;
@@ -822,6 +846,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("sourceType", state.source);
             response.put("error", state.error);
             response.put("fullscreen", fullscreen);
+            response.put("surfaceRotationDegrees", surface == null ? 0f : surface.getRotation());
             response.put("mini", mini);
             response.put("systemPip", systemPip);
             response.put("controllerFullyVisible", surface != null && surface.isControllerFullyVisible());

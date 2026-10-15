@@ -6,6 +6,14 @@ import {execFileSync} from 'node:child_process';
 export function nativeControllerRevealPoint(media) {
  const {surfaceX:x,surfaceY:y,surfaceVisibleWidth:w,surfaceVisibleHeight:h,seekBarRect:seek}=media;
  assert.ok([x,y,w,h].every(Number.isFinite)&&w>120&&h>100,'A real video surface is needed before a controller tap');
+ if (Math.abs(media.surfaceRotationDegrees||0)===90) {
+   // On a portrait-LOCKED tablet the player is rotated visually, so its
+   // bottom seek row becomes a VERTICAL stripe. Tap the safe picture center
+   // rather than using unrotated seek.y coordinates.
+   const px=Math.round(x+w*.68),py=Math.round(y+h*.48);
+   assert.ok(!seek||px>seek.x+seek.width+15,'Rotated controller tap must clear the physical seek bar');
+   return [String(px),String(py)];
+ }
  const top=y+50;
  const bottom=Math.min(y+h-12,seek?.y===undefined?y+h*.70:seek.y-12);
  assert.ok(bottom>top,'Video controls and seek bar must leave a real non-seeking reveal region');
@@ -17,13 +25,27 @@ export function nativeControllerRevealPoint(media) {
 export function assertAndroidVideoTimes(media) {
  const {elapsedTimeRect:p,durationTimeRect:d,seekBarRect:bar}=media;
  assert.ok(p&&d&&bar,'Actual native elapsed time, duration and seek bar must all be visible');
- assert.ok(p.x+p.width<d.x,'Elapsed and total duration must be on opposite sides without a separator');
- assert.ok(p.x+p.width<media.surfaceX+media.surfaceVisibleWidth*.4&&
-  d.x>media.surfaceX+media.surfaceVisibleWidth*.6,
-  'Elapsed belongs on the left and total duration on the right, including Hebrew layout');
- assert.ok(Math.abs((p.y+p.height/2)-(d.y+d.height/2))<=Math.max(p.height,d.height)*.25,
-  'The two actual timestamps must share one bottom row');
- assert.ok(bar.y+bar.height<=Math.min(p.y,d.y)+2,'The original seek bar must remain directly above the time row');
+ if (Math.abs(media.surfaceRotationDegrees||0)===90) {
+   // Landscape UI inside a portrait-locked physical display. The elapsed and
+   // total timestamps must still occupy opposite LANDSCAPE corners, which
+   // become opposite vertical ends in physical screen coordinates.
+   const py=p.y+p.height/2,dy=d.y+d.height/2;
+   assert.ok(Math.abs(py-dy)>media.surfaceVisibleHeight*.50,
+     'Rotated elapsed/total time must occupy opposite ends of actual fullscreen video');
+   assert.ok(media.surfaceRotationDegrees>0 ? py<dy : py>dy,
+     'Elapsed belongs to the physical left of the landscape player, even when rotated');
+   assert.ok(Math.abs((p.x+p.width/2)-(d.x+d.width/2))<Math.max(p.width,d.width)*3,
+     'Rotated elapsed/total time must share the actual landscape bottom edge');
+ } else {
+   assert.ok(p.x+p.width<d.x,'Elapsed and total duration must be on opposite sides without a separator');
+   assert.ok(p.x+p.width<media.surfaceX+media.surfaceVisibleWidth*.4&&
+    d.x>media.surfaceX+media.surfaceVisibleWidth*.6,
+    'Elapsed belongs on the left and total duration on the right, including Hebrew layout');
+   assert.ok(Math.abs((p.y+p.height/2)-(d.y+d.height/2))<=Math.max(p.height,d.height)*.25,
+    'The two actual timestamps must share one bottom row');
+   assert.ok(bar.y+bar.height<=Math.min(p.y,d.y)+2,
+    'The original seek bar must remain directly above the time row');
+ }
  const seconds=value=>{
   assert.match(value,/^\d+:\d{2}(?::\d{2})?$/,'Actual Media3 timestamp must remain readable');
   return value.split(':').reduce((sum,n)=>sum*60+Number(n),0);
@@ -55,7 +77,7 @@ export function nativeDoubleTapPoint(media,direction) {
 }
 
 // Real emulator accelerometer and Android input; CDP is observation only.
-export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,delay,report,showControls,tapExit,
+export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,delay,report,showControls,tapExit,capturePicture,
  naturalLandscape=process.env.IRGUN_TABLET_NATURAL_LANDSCAPE==='1'}) {
  const setting=(scope,key)=>adb('shell','settings','get',scope,key).trim();
  const saved=[['system','accelerometer_rotation'],['system','user_rotation'],
@@ -112,37 +134,44 @@ export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,
    adb('emu','sensor','set','acceleration',acceleration);
    const full=await waitNative(s=>s.media3.fullscreen&&s.media3.playing&&s.media3.frames>before.frames+5,
     'Physical accelerometer tilt must enter native fullscreen with auto-rotate OFF');
-   const landscape=await waitShape(true);assert.ok(landscape.width>landscape.height,'Actual Android/WebView must be landscape');
-   let bounds,visible,filled=false;
-   for(let n=0;n<30;n++){
-    bounds=await window();visible=(await sample()).media3;
-    filled=bounds.right-bounds.left>bounds.bottom-bounds.top&&
-     visible.surfaceVisibleWidth>=(bounds.right-bounds.left)*.96&&
-     visible.surfaceVisibleHeight>=(bounds.bottom-bounds.top)*.94;
-    if(filled)break;await delay(200);
-   }
-   assert.ok(filled,'Native video must actually fill the rotated landscape window, not just set a fullscreen flag: '+JSON.stringify({bounds,visible}));
-   const shown=await showControls();
-   assertAndroidVideoTimes(shown.media3);
-   let png,screen,displayFilled=false;
-   for(let n=0;n<20;n++){
+   // Android 16 ignores app-forced orientation on sw600dp+ devices. With
+   // the real system rotation lock ON, the physical display MUST stay portrait.
+   // The user's video instead rotates inside the full-size native window.
+   // If the OS already presents a landscape screen, use the normal orientation.
+   let bounds,visible,landscape,screen,png,presentationCorrect=false;
+   for(let n=0;n<35;n++){
+    bounds=await window();landscape=await shape();visible=(await sample()).media3;
     png=execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024});
     screen={width:png.readUInt32BE(16),height:png.readUInt32BE(20)};
-    visible=(await sample()).media3;
-    displayFilled=screen.width>screen.height&&visible.surfaceVisibleWidth>=screen.width*.96&&
-     visible.surfaceVisibleHeight>=screen.height*.94;
-    if(displayFilled)break;await delay(200);
+    const physicalLandscape=screen.width>screen.height;
+    const angle=visible.surfaceRotationDegrees||0;
+    const rotatedLocked=!physicalLandscape&&Math.abs(angle)===90 &&
+      (index===0 ? angle>0 : angle<0);
+    presentationCorrect=visible.surfaceVisibleOnScreen&&
+      visible.surfaceVisibleWidth>=screen.width*.92&&
+      visible.surfaceVisibleHeight>=screen.height*.92&&
+      (physicalLandscape?angle===0:rotatedLocked)&&
+      // Do not accept a landscape-sized letterbox within a portrait screen.
+      (physicalLandscape?landscape.width>landscape.height:landscape.height>landscape.width);
+    if(presentationCorrect)break;
+    await delay(250);
    }
    writeFileSync('emulator-report/video-landscape-'+index+'.png',png);
-   assert.ok(displayFilled,'Actual Android screenshot must be landscape and video must fill that display, not a letterboxed portrait-screen window: '+JSON.stringify({screen,visible}));
-   same(before,visible,Date.now()-started);
-   assert.equal(setting('system','accelerometer_rotation'),'0','The app must not change the system auto-rotate preference');
+   assert.ok(presentationCorrect,'Video must fill the physical tablet display with an upright landscape presentation, NOT a letterboxed fake landscape Activity: '+
+     JSON.stringify({screen,bounds,landscape,visible}));
+   const shown=await showControls();
+   assertAndroidVideoTimes(shown.media3);
+   assert.equal(setting('system','accelerometer_rotation'),'0',
+     'The app must never silently change the tablet rotation-lock preference');
+   // The actual recorded screenshot, not ExoPlayer counters, must show pixels.
+   if (capturePicture) await capturePicture(await sample(),'tablet-tilt-video-'+index);
+   same(before,(await sample()).media3,Date.now()-started);
    adb('emu','sensor','set','acceleration',upright);
    const regular=await waitNative(s=>!s.media3.fullscreen&&s.media3.playing,
     'Turning upright must restore the regular player');
    const portrait=await waitShape(false);assert.ok(portrait.height>portrait.width,'Actual window must return to portrait');
    same(before,regular.media3,Date.now()-started);
-   report.checks.push({label:'Actual sensor landscape/full-display video and portrait/regular player with rotation lock ON',naturalLandscape,screen,bounds,before,landscape:visible,after:regular.media3});
+   report.checks.push({label:'Real tilt fills entire physical tablet display with correctly rotated landscape video and preserves rotation lock',naturalLandscape,screen,bounds,before,landscape:visible,after:regular.media3});
   }
   adb('emu','sensor','set','acceleration',sideways[0]);
   await waitNative(s=>s.media3.fullscreen,'Landscape must re-enter fullscreen');

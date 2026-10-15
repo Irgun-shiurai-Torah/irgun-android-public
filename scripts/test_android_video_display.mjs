@@ -58,6 +58,26 @@ test('controller reveal taps never hit a seek bar or custom top controls',()=>{
  assert.ok(wide[1]>50&&wide[1]<500);
 });
 
+test('locked tablet rotates native Media3 fullscreen and its corner timestamps inside actual display',()=>{
+ const java=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
+ assert.match(java,/boolean rotateInWindow=!systemPip && tabletTilt != VideoRotationPolicy\.PORTRAIT/);
+ assert.match(java,/surface\.setRotation\(tabletTilt == VideoRotationPolicy\.REVERSE_LANDSCAPE \? -90f : 90f\)/);
+ assert.match(java,/surfaceRotationDegrees/);
+ assert.match(java,/surface\.setRotation\(0f\)/);
+ const media={surfaceX:0,surfaceY:0,surfaceVisibleWidth:800,surfaceVisibleHeight:1280,
+   surfaceRotationDegrees:90,positionMs:243000,durationMs:3475000,
+   elapsedTimeText:'04:03',durationTimeText:'57:55',
+   elapsedTimeRect:{x:20,y:35,width:60,height:20},
+   durationTimeRect:{x:20,y:1225,width:60,height:20},
+   seekBarRect:{x:90,y:0,width:25,height:1280}};
+ assert.doesNotThrow(()=>assertAndroidVideoTimes(media));
+ assert.doesNotThrow(()=>assertAndroidVideoTimes({...media,surfaceRotationDegrees:-90,
+   elapsedTimeRect:media.durationTimeRect,durationTimeRect:media.elapsedTimeRect}));
+ const [x,y]=nativeControllerRevealPoint(media).map(Number);
+ assert.ok(x>media.seekBarRect.x+media.seekBarRect.width+15 && y>200&&y<1100);
+ assert.throws(()=>assertAndroidVideoTimes({...media,surfaceRotationDegrees:0}),/opposite|right/);
+});
+
 test('native time layout observation rejects grouped, reversed, stale and hidden timestamps',()=>{
  const native={surfaceX:0,surfaceVisibleWidth:960,positionMs:243000,durationMs:3475000,
   elapsedTimeText:'04:03',durationTimeText:'57:55',elapsedTimeRect:{x:16,y:508,width:45,height:20},
@@ -114,18 +134,20 @@ test('tablet video keeps an adaptive full-sensor window instead of opting into f
  const xml=readFileSync('android/app/src/main/AndroidManifest.xml','utf8');
  const main=xml.match(/<activity\b[^>]*android:name="\.MainActivity"[\s\S]*?<\/activity>/)?.[0];
  assert.ok(main);
- assert.match(main,/PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY/,
-   'Android 16 targetSdk 36 must allow Activity-only orientation compatibility while rotation lock is on');
- assert.match(main,/<property\s+android:name="android\.window\.PROPERTY_COMPAT_IGNORE_REQUESTED_ORIENTATION"\s+android:value="false"/);
+ assert.doesNotMatch(main,/PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY/,
+   'Android 16 must not force a letterboxed tablet Activity under rotation lock');
+ assert.doesNotMatch(main,/PROPERTY_COMPAT_IGNORE_REQUESTED_ORIENTATION/);
  assert.match(main,/android:resizeableActivity="true"/,'App stays resizable; rotation applies only while watching video');
  const controller=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunVideoDisplayController.java','utf8');
  assert.match(controller,/smallestScreenWidthDp >= 600/);
- assert.match(controller,/SCREEN_ORIENTATION_SENSOR_LANDSCAPE/);
- assert.match(controller,/SCREEN_ORIENTATION_SENSOR_PORTRAIT/);
- assert.match(controller,/if \(useFullSensorWindow\(\)\) restoreOrientation\(\)/,'Tablet manual exit must release the sensor override');
+ assert.match(controller,/activity\.setNativeVideoTabletTilt\(direction\)/,
+   'Large screens must rotate video content rather than force the Android screen orientation');
+ assert.doesNotMatch(controller,/SCREEN_ORIENTATION_SENSOR_LANDSCAPE/);
+ assert.match(controller,/activity\.setNativeVideoTabletTilt\(VideoRotationPolicy\.PORTRAIT\)/,
+   'Tablet manual exit must restore native video direction');
 });
 
-test('actual Java orientation requests use the physical tablet sensor and restore the original window policy on manual exit',()=>{
+test('Android tablet sensor respects locked display while phone requests its actual window orientation',()=>{
  const source=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunVideoDisplayController.java','utf8');
  const method=signature=>{
   const start=source.indexOf(signature);assert.ok(start>=0);let depth=0;
@@ -142,7 +164,7 @@ public class DisplayRequests {
  static class ActivityInfo {static final int SCREEN_ORIENTATION_PORTRAIT=1,SCREEN_ORIENTATION_LANDSCAPE=0,SCREEN_ORIENTATION_REVERSE_LANDSCAPE=8,SCREEN_ORIENTATION_SENSOR_LANDSCAPE=6,SCREEN_ORIENTATION_SENSOR_PORTRAIT=7;}
  static class Configuration {int smallestScreenWidthDp;}
  static class Resources {Configuration c=new Configuration();Configuration getConfiguration(){return c;}}
- static class Activity {Resources r=new Resources();int request=-1;boolean full;Resources getResources(){return r;}int getRequestedOrientation(){return request;}void setRequestedOrientation(int n){request=n;}void applySensorVideoFullscreen(boolean n){full=n;}}
+ static class Activity {Resources r=new Resources();int request=-1;int tilt;boolean full;Resources getResources(){return r;}int getRequestedOrientation(){return request;}void setRequestedOrientation(int n){request=n;}void applySensorVideoFullscreen(boolean n){full=n;}void setNativeVideoTabletTilt(int n){tilt=n;}}
  final Activity activity=new Activity();final VideoRotationPolicy policy=new VideoRotationPolicy();Integer previousOrientation;boolean rotatedFullscreen;
  ${method('void fullscreenChanged(')}
  ${method('private void rotate(')}
@@ -151,10 +173,15 @@ public class DisplayRequests {
  static void check(boolean ok,String why){if(!ok)throw new AssertionError(why);}
  public static void main(String[] args){
   DisplayRequests tablet=new DisplayRequests();tablet.activity.r.c.smallestScreenWidthDp=800;
-  tablet.rotate(VideoRotationPolicy.LANDSCAPE);check(tablet.activity.request==6&&tablet.activity.full,"Tablet requests actual sensor landscape rotation");
-  tablet.rotate(VideoRotationPolicy.PORTRAIT);check(tablet.activity.request==7&&!tablet.activity.full,"Tablet requests sensor portrait on upright tilt");
+  tablet.rotate(VideoRotationPolicy.LANDSCAPE);
+  check(tablet.activity.request==-1&&tablet.activity.tilt==VideoRotationPolicy.LANDSCAPE&&tablet.activity.full,
+    "Locked tablet rotates the native video instead of the OS screen");
+  tablet.rotate(VideoRotationPolicy.PORTRAIT);
+  check(tablet.activity.request==-1&&tablet.activity.tilt==VideoRotationPolicy.PORTRAIT&&!tablet.activity.full,
+    "Upright tilt restores the original tablet window");
   tablet.rotate(VideoRotationPolicy.REVERSE_LANDSCAPE);tablet.fullscreenChanged(false,false);
-  check(tablet.activity.request==-1&&tablet.previousOrientation==null,"Manual exit restores original tablet orientation policy");
+  check(tablet.activity.request==-1&&tablet.activity.tilt==VideoRotationPolicy.PORTRAIT&&tablet.previousOrientation==null,
+    "Manual Exit resets native rotation and does not change tablet display settings");
   DisplayRequests phone=new DisplayRequests();phone.activity.r.c.smallestScreenWidthDp=320;
   phone.rotate(VideoRotationPolicy.LANDSCAPE);check(phone.activity.request==0,"Phone retains tested landscape request");
   phone.rotate(VideoRotationPolicy.PORTRAIT);check(phone.activity.request==1,"Phone upright restores portrait");

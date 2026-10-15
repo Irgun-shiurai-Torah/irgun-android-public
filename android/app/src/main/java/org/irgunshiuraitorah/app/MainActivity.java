@@ -106,6 +106,12 @@ public class MainActivity extends BridgeActivity {
         if (videoDisplay != null) videoDisplay.presentation(active, playing, expanded, nativeEngine);
     }
 
+    public void setNativeVideoTabletTilt(int direction) {
+        // Video presentation only: no media source, MediaSession or settings
+        // mutations. This is a fallback when Android locks tablet rotation.
+        IrgunNativeVideoPlugin.tabletSensorTilt(direction);
+    }
+
     public void applySensorVideoFullscreen(boolean enabled) {
         setVideoFullscreen(enabled, true);
         if (getBridge() != null && getBridge().getWebView() != null)
