@@ -92,7 +92,17 @@ export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,
    assert.ok(filled,'Native video must actually fill the rotated landscape window, not just set a fullscreen flag: '+JSON.stringify({bounds,visible}));
    const shown=await showControls();
    assertAndroidVideoTimes(shown.media3);
-   writeFileSync('emulator-report/video-landscape-'+index+'.png',execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));
+   let png,screen,displayFilled=false;
+   for(let n=0;n<20;n++){
+    png=execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024});
+    screen={width:png.readUInt32BE(16),height:png.readUInt32BE(20)};
+    visible=(await sample()).media3;
+    displayFilled=screen.width>screen.height&&visible.surfaceVisibleWidth>=screen.width*.96&&
+     visible.surfaceVisibleHeight>=screen.height*.94;
+    if(displayFilled)break;await delay(200);
+   }
+   writeFileSync('emulator-report/video-landscape-'+index+'.png',png);
+   assert.ok(displayFilled,'Actual Android screenshot must be landscape and video must fill that display, not a letterboxed portrait-screen window: '+JSON.stringify({screen,visible}));
    same(before,visible,Date.now()-started);
    assert.equal(setting('system','accelerometer_rotation'),'0','The app must not change the system auto-rotate preference');
    adb('emu','sensor','set','acceleration',upright);
@@ -100,7 +110,7 @@ export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,
     'Turning upright must restore the regular player');
    const portrait=await waitShape(false);assert.ok(portrait.height>portrait.width,'Actual window must return to portrait');
    same(before,regular.media3,Date.now()-started);
-   report.checks.push({label:'Actual sensor landscape/full-window video and portrait/regular player with rotation lock ON',naturalLandscape,bounds,before,landscape:visible,after:regular.media3});
+   report.checks.push({label:'Actual sensor landscape/full-display video and portrait/regular player with rotation lock ON',naturalLandscape,screen,bounds,before,landscape:visible,after:regular.media3});
   }
   adb('emu','sensor','set','acceleration',sideways[0]);
   await waitNative(s=>s.media3.fullscreen,'Landscape must re-enter fullscreen');

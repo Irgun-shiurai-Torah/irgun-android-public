@@ -4,7 +4,7 @@ import {readFileSync, mkdtempSync, writeFileSync, rmSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {recentsDismissGesture, hasActivePlaybackNotification,recentsEducationAction,hasIrgunRecentTask} from './android-task-dismissal-regression.mjs';
+import {recentsDismissGesture, hasActivePlaybackNotification,recentsEducationAction,hasIrgunRecentTask,topRecentTaskIsIrgun} from './android-task-dismissal-regression.mjs';
 
 test('actual Java task-removal and bridge callbacks stop playing, paused and buffering lectures without late restart', () => {
   const source=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java','utf8');
@@ -80,7 +80,10 @@ public class IrgunPlaybackService {
 
 test('Recents gesture targets the observed Irgun card and refuses another app or offscreen thumbnail',()=>{
   const card=(name,bounds='[30,180][290,550]')=>`<hierarchy><node content-desc="${name}" resource-id="com.google.android.apps.nexuslauncher:id/snapshot" visible="true" bounds="${bounds}"></node></hierarchy>`;
-  assert.deepEqual(recentsDismissGesture(card('Screenshot of Irgun Shiurai Torah'),{width:320,height:640}),[160,421,160,32]);
+  assert.deepEqual(recentsDismissGesture(card('Screenshot of Irgun Shiurai Torah'),{width:320,height:640}),[284,421,284,32]);
+  assert.throws(()=>recentsDismissGesture(card(''),{width:320,height:640}),/Irgun/);
+  assert.deepEqual(recentsDismissGesture(card(''),{width:320,height:640,topTaskIsIrgun:true}),[284,421,284,32]);
+  assert.throws(()=>recentsDismissGesture(card('Screenshot of Settings'),{width:320,height:640,topTaskIsIrgun:true}),/Irgun/);
   assert.throws(()=>recentsDismissGesture(card('Screenshot of Settings'),{width:320,height:640}),/Irgun/);
   assert.throws(()=>recentsDismissGesture(card('Screenshot of Irgun Shiurai Torah','[-290,180][-30,550]'),{width:320,height:640}),/Irgun/);
 });
@@ -103,5 +106,7 @@ test('first-use Overview tips are handled before the actual task swipe, with and
 test('task dismissal requires the actual ActivityManager recent task to disappear, independently of the service',()=>{
  const task='Recent tasks:\n  * Recent #0: Task{abc #12 type=standard}\n    realActivity=org.irgunshiuraitorah.app/.SplashActivity\n  * Recent #1: Task{def #11}\n    realActivity=com.android.settings/.Settings';
  assert.equal(hasIrgunRecentTask(task),true);
+ assert.equal(topRecentTaskIsIrgun(task),true);
+ assert.equal(topRecentTaskIsIrgun('Recent #0: Task{x}\n realActivity=other.app/.Main\n'+task),false);
  assert.equal(hasIrgunRecentTask(task.replace('org.irgunshiuraitorah.app/.SplashActivity','other.app/.Main')),false);
 });

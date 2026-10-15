@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {observedAdb} from './android-adb-observer.mjs';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {fullscreenEducationTapPoint} from './android-system-ui-observation.mjs';
-import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {settledNativeTapPoint,waitForNativeWindowFocus} from './android-native-tap-point.mjs';
 import {typeObservedNativeText} from './android-native-text-entry.mjs';
 import {verifyAndroidVideoDisplay,assertAndroidVideoTimes} from './android-video-display-regression.mjs';
 import {verifyAndroidTaskDismissal} from './android-task-dismissal-regression.mjs';
@@ -355,24 +355,43 @@ try {
     }
     throw new Error('Actual native control not visible: '+description+' / '+text+'; '+xml);
   };
+  let fullscreenEducationDismissed=false;
   const showNativeControls=async({fresh=false}={})=>{
+    if((await sample()).media3.fullscreen&&!fullscreenEducationDismissed){
+      // Android's first immersive-mode tip is not focusable on every version;
+      // it can intercept taps even while the app still reports window focus.
+      await delay(1200);
+      const education=fullscreenEducationTapPoint(nativeHierarchy());
+      if(education){
+        adb('shell','input','tap',...education.map(String));
+        fullscreenEducationDismissed=true;await delay(250);
+      }
+    }
+    const observeWindow=()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+    if(!(await observeWindow()).focused){
+      const education=fullscreenEducationTapPoint(nativeHierarchy());
+      assert.ok(education,'An unexpected native window blocks video controls; ANR and other dialogs are failures');
+      adb('shell','input','tap',...education.map(String));
+      await waitForNativeWindowFocus({readBounds:observeWindow,delay});
+    }
     const s=await sample(), m=s.media3;
     const point=[String(Math.round(m.surfaceX+m.surfaceVisibleWidth*.95)),
       String(Math.round(m.surfaceY+m.surfaceVisibleHeight*.48))];
-    if(fresh&&m.qualityButtonVisible){
+    const hasTimeRow=m.elapsedTimeRect&&m.durationTimeRect&&m.seekBarRect;
+    if(m.controllerFullyVisible&&(fresh||!hasTimeRow)){
       // A visible control may have only milliseconds left on its timer.
       // Physically hide/show it before launching the held-touch instrument,
       // whose process startup must not consume that remaining timeout.
       adb('shell','input','tap',...point);
-      await waitNative(s=>!s.media3.qualityButtonVisible,'Physical tap must hide controls',10000);
+      await waitNative(s=>!s.media3.controllerFullyVisible,'Physical tap must hide controls',10000);
       // Separate these controller taps beyond Android's double-tap window.
       // The same right-edge pair must not become a +15-second user gesture.
       await delay(500);
     }
-    if (fresh||!m.qualityButtonVisible) {
+    if (fresh||!m.controllerFullyVisible||!hasTimeRow) {
       adb('shell','input','tap',...point);
     }
-    const shown=await waitNative(s=>s.media3.pipButtonVisible&&s.media3.qualityButtonVisible&&
+    const shown=await waitNative(s=>s.media3.controllerFullyVisible&&s.media3.pipButtonVisible&&s.media3.qualityButtonVisible&&
       s.media3.elapsedTimeRect&&s.media3.durationTimeRect&&s.media3.seekBarRect,
       'Native controls, elapsed time, total duration and seek bar must all be visible after layout settles',10000);
     assert.equal(shown.media3.settingsButtonVisible,false,

@@ -14,22 +14,29 @@ export function recentsEducationAction(xml) {
   return rect?{tap:[Math.round((rect[0]+rect[2])/2),Math.round((rect[1]+rect[3])/2)]}:{back:true};
 }
 
+const recentTasks=dump=>dump.split(/(?=^\s*\*?\s*Recent #\d+:)/m)
+  .filter(block=>/^\s*\*?\s*Recent #\d+:/.test(block));
+const irgunTask=block=>/(?:realActivity=|cmp=)org\.irgunshiuraitorah\.app\//.test(block||'');
 export function hasIrgunRecentTask(dump) {
-  return dump.split(/(?=^\s*\*?\s*Recent #\d+:)/m).some(block=>
-    /^\s*\*?\s*Recent #\d+:/.test(block)&&
-    /(?:realActivity=|cmp=)org\.irgunshiuraitorah\.app\//.test(block));
+  return recentTasks(dump).some(irgunTask);
+}
+export function topRecentTaskIsIrgun(dump) {
+  return irgunTask(recentTasks(dump)[0]);
 }
 
-export function recentsDismissGesture(xml,{width,height}) {
+export function recentsDismissGesture(xml,{width,height,topTaskIsIrgun=false}) {
   const nodes=xml.match(/<node\b[^>]*>/g)||[];
-  const card=nodes.find(node=>/visible="true"/.test(node)&&
-    /content-desc="[^"]*Irgun Shiurai Torah[^"]*"/.test(node)&&
+  const cards=nodes.filter(node=>/visible="true"/.test(node)&&
     /resource-id="[^"]*:(?:id\/)(?:snapshot|thumbnail)"/.test(node)&&
     /bounds="\[\d+,\d+\]\[\d+,\d+\]"/.test(node));
+  const card=cards.find(node=>/content-desc="[^"]*Irgun Shiurai Torah[^"]*"/.test(node))||
+    (topTaskIsIrgun&&cards.length===1&&/content-desc=""/.test(cards[0])?cards[0]:null);
   const rect=card?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
   assert.ok(rect&&rect[0]>=0&&rect[1]>=0&&rect[2]<=width&&rect[3]<=height&&
     rect[2]>rect[0]&&rect[3]>rect[1],'Actual Recents must expose the visible Irgun screenshot card before swiping');
-  const x=Math.round((rect[0]+rect[2])/2);
+  // The thumbnail's OCR/image-selection targets can consume a center drag.
+  // Use its plain outer edge for a short, decisive task-dismiss fling.
+  const x=rect[2]-6;
   return [x,Math.round(rect[1]+(rect[3]-rect[1])*.65),x,Math.max(1,Math.round(height*.05))];
 }
 
@@ -73,11 +80,12 @@ export async function verifyAndroidTaskDismissal({adb,sample,delay,report}) {
     assert.equal(recentsEducationAction(hierarchy),null,'Recents education must be dismissed before a task swipe');
   }
   writeFileSync('emulator-report/task-dismissal-recents.xml',hierarchy);
-  assert.equal(hasIrgunRecentTask(adb('shell','dumpsys','activity','recents')),true,
+  const recentDump=adb('shell','dumpsys','activity','recents');
+  assert.equal(topRecentTaskIsIrgun(recentDump),true,
     'Android ActivityManager must expose the actual Irgun task before dismissal');
-  const gesture=recentsDismissGesture(hierarchy,{width:Number(size[1]),height:Number(size[2])});
+  const gesture=recentsDismissGesture(hierarchy,{width:Number(size[1]),height:Number(size[2]),topTaskIsIrgun:true});
   writeFileSync('emulator-report/task-dismissal-before.png',execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));
-  adb('shell','input','swipe',...gesture.map(String),'400');
+  adb('shell','input','swipe',...gesture.map(String),'180');
   report.gestures.push({recentsSwipeUp:gesture});
   const stopped=()=>{
     const logs=adb('shell','logcat','-d','-s','IrgunPlayback:D','*:S');

@@ -59,14 +59,58 @@ public class RotationCheck {
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
 
-test('tablet video activity allows explicit rotation on Android 16 without changing the launcher or other activities',()=>{
+test('tablet video keeps an adaptive full-sensor window instead of opting into fixed-orientation letterboxing',()=>{
  const xml=readFileSync('android/app/src/main/AndroidManifest.xml','utf8');
  const main=xml.match(/<activity\b[^>]*android:name="\.MainActivity"[\s\S]*?<\/activity>/)?.[0];
  assert.ok(main);
- assert.match(main,/<property\s+android:name="android\.window\.PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY"\s+android:value="true"/);
+ assert.doesNotMatch(main,/PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY/);
  assert.match(main,/<property\s+android:name="android\.window\.PROPERTY_COMPAT_IGNORE_REQUESTED_ORIENTATION"\s+android:value="false"/);
  assert.match(main,/android:resizeableActivity="true"/,'App stays resizable; rotation applies only while watching video');
- assert.equal((xml.match(/PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY/g)||[]).length,1);
+ const controller=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunVideoDisplayController.java','utf8');
+ assert.match(controller,/smallestScreenWidthDp >= 600/);
+ assert.match(controller,/useFullSensorWindow\(\) \? ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR/);
+ assert.match(controller,/if \(useFullSensorWindow\(\)\) restoreOrientation\(\)/,'Tablet manual exit must release the sensor override');
+});
+
+test('actual Java orientation requests use the physical tablet sensor and restore the original window policy on manual exit',()=>{
+ const source=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunVideoDisplayController.java','utf8');
+ const method=signature=>{
+  const start=source.indexOf(signature);assert.ok(start>=0);let depth=0;
+  for(let i=source.indexOf('{',start);i<source.length;i++){
+   if(source[i]==='{')depth++;
+   if(source[i]==='}'&&--depth===0)return source.slice(start,i+1);
+  }throw Error('Unclosed Java method');
+ };
+ const dir=mkdtempSync(join(tmpdir(),'irgun-display-request-'));
+ try{
+  const harness=join(dir,'DisplayRequests.java');
+  writeFileSync(harness,`package org.irgunshiuraitorah.app;
+public class DisplayRequests {
+ static class ActivityInfo {static final int SCREEN_ORIENTATION_PORTRAIT=1,SCREEN_ORIENTATION_LANDSCAPE=0,SCREEN_ORIENTATION_REVERSE_LANDSCAPE=8,SCREEN_ORIENTATION_FULL_SENSOR=10;}
+ static class Configuration {int smallestScreenWidthDp;}
+ static class Resources {Configuration c=new Configuration();Configuration getConfiguration(){return c;}}
+ static class Activity {Resources r=new Resources();int request=-1;boolean full;Resources getResources(){return r;}int getRequestedOrientation(){return request;}void setRequestedOrientation(int n){request=n;}void applySensorVideoFullscreen(boolean n){full=n;}}
+ final Activity activity=new Activity();final VideoRotationPolicy policy=new VideoRotationPolicy();Integer previousOrientation;boolean rotatedFullscreen;
+ ${method('void fullscreenChanged(')}
+ ${method('private void rotate(')}
+ ${method('private boolean useFullSensorWindow(')}
+ ${method('private void restoreOrientation(')}
+ static void check(boolean ok,String why){if(!ok)throw new AssertionError(why);}
+ public static void main(String[] args){
+  DisplayRequests tablet=new DisplayRequests();tablet.activity.r.c.smallestScreenWidthDp=800;
+  tablet.rotate(VideoRotationPolicy.LANDSCAPE);check(tablet.activity.request==10&&tablet.activity.full,"Tablet uses actual sensor rotation, not fixed landscape letterboxing");
+  tablet.rotate(VideoRotationPolicy.PORTRAIT);check(tablet.activity.request==10&&!tablet.activity.full,"Tablet upright stays sensor-driven while returning to regular video");
+  tablet.rotate(VideoRotationPolicy.REVERSE_LANDSCAPE);tablet.fullscreenChanged(false,false);
+  check(tablet.activity.request==-1&&tablet.previousOrientation==null,"Manual exit restores original tablet orientation policy");
+  DisplayRequests phone=new DisplayRequests();phone.activity.r.c.smallestScreenWidthDp=320;
+  phone.rotate(VideoRotationPolicy.LANDSCAPE);check(phone.activity.request==0,"Phone retains tested landscape request");
+  phone.rotate(VideoRotationPolicy.PORTRAIT);check(phone.activity.request==1,"Phone upright restores portrait");
+  phone.restoreOrientation();check(phone.activity.request==-1,"Leaving video restores original phone policy");
+ }
+}`);
+  execFileSync('javac',['-d',dir,'android/app/src/main/java/org/irgunshiuraitorah/app/VideoRotationPolicy.java',harness]);
+  execFileSync('java',['-cp',dir,'org.irgunshiuraitorah.app.DisplayRequests']);
+ }finally{rmSync(dir,{recursive:true,force:true});}
 });
 
 test('actual presentation synchronization distinguishes native video, pause, Mini, Audio and close without per-clock bridge calls',async()=>{
