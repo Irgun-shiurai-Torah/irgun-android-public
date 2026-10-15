@@ -6681,7 +6681,9 @@ function render() {
     isAndroid:()=>Capacitor.getPlatform()==='android'&&state.playerOpen,
     playerKey:`${state.current?.kind||''}:${state.current?.id||''}`});
   app.innerHTML = shell(content + playlistPickerHtml());
-  syncAndroidMiniDialogVisibility();
+  // Isolated render regressions execute only this function, without helpers.
+  // In the Android app the helper is always defined and updates mini layering.
+  if (typeof syncAndroidMiniDialogVisibility === 'function') syncAndroidMiniDialogVisibility();
   bind();
   // Reconcile the native Android Video surface after every modal change.
   // Physical PlayerView must never cover native WebView dialog controls.
