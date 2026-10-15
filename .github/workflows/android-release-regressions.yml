@@ -51,6 +51,7 @@ on:
       - 'scripts/android-emulator-account.mjs'
       - 'scripts/test_android_sources.mjs'
       - 'scripts/test_android_paid_collections.mjs'
+      - 'scripts/test_android_share_video.mjs'
       - 'scripts/test_android_seek_guard.mjs'
       - 'scripts/test_tab_swipes.cjs'
       - 'src/**'
@@ -99,7 +100,7 @@ jobs:
           node --check scripts/android-hls-delivery-probe.mjs
       - name: Check source and gesture unit regressions
         timeout-minutes: 2
-        run: node --test scripts/test_android_task_dismissal.mjs scripts/test_android_bottom_navigation.mjs scripts/test_android_video_display.mjs scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs scripts/test_android_media_source.mjs scripts/test_android_vimeo_playback.mjs scripts/test_android_player_controls.mjs scripts/test_android_probes.mjs scripts/test_android_seek_guard.mjs scripts/test_android_adb_observer.mjs scripts/test_android_native_tap_point.mjs scripts/test_android_native_text_entry.mjs scripts/test_android_video_startup_buffer.mjs scripts/test_android_system_ui_observation.mjs scripts/test_android_emulator_prepare.mjs scripts/test_android_offline_account.mjs scripts/test_android_network_evidence.mjs scripts/test_android_background_handoff.mjs scripts/test_android_native_media3_beta.mjs scripts/test_android_like_persistence.mjs scripts/test_android_home_position.mjs scripts/test_android_paid_collections.mjs
+        run: node --test scripts/test_android_task_dismissal.mjs scripts/test_android_bottom_navigation.mjs scripts/test_android_video_display.mjs scripts/test_tab_swipes.cjs scripts/test_android_sources.mjs scripts/test_android_media_source.mjs scripts/test_android_vimeo_playback.mjs scripts/test_android_player_controls.mjs scripts/test_android_probes.mjs scripts/test_android_seek_guard.mjs scripts/test_android_adb_observer.mjs scripts/test_android_native_tap_point.mjs scripts/test_android_native_text_entry.mjs scripts/test_android_video_startup_buffer.mjs scripts/test_android_system_ui_observation.mjs scripts/test_android_emulator_prepare.mjs scripts/test_android_offline_account.mjs scripts/test_android_network_evidence.mjs scripts/test_android_background_handoff.mjs scripts/test_android_native_media3_beta.mjs scripts/test_android_like_persistence.mjs scripts/test_android_home_position.mjs scripts/test_android_paid_collections.mjs scripts/test_android_share_video.mjs
       - name: Verify current Android player source and packaged web assets
         run: npm run test:player
 
