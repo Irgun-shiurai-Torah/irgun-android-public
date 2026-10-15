@@ -8902,7 +8902,10 @@ async function closeWatch(save = true) {
   if (!state.watchVideo) return;
   const closingVideo = state.watchVideo;
   const closingPlayer = state.watchVimeo;
-  const androidWatch = Capacitor.getPlatform() === 'android';
+  // Small isolated playback tests do not provide the Capacitor bridge. In the
+  // real Android app it is always loaded; avoid throwing before cleanup in
+  // bare/other-platform environments.
+  const androidWatch = typeof Capacitor !== 'undefined' && Capacitor.getPlatform() === 'android';
   // Invalidate an in-flight Android Media3 start as soon as Back is clicked.
   // Otherwise a slow/erroring native video can replace closingPlayer while
   // this async handler saves history, leaving the visible Watch stuck open.
