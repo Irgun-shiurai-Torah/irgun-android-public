@@ -5120,31 +5120,63 @@ function followButtonText(following, label) {
   return `${esc(tr(following ? 'Following' : 'Follow'))} ${esc(label)}`;
 }
 
+function websiteFallbackSpeakerFromTitle(title) {
+  // Exact website watch.js fallback. A Follow made from the title must use
+  // auto-<slug>, NOT the app's old auto-speaker:<name>, or website and Android
+  // subscribe to different keys even when the user follows the same Rav.
+  const match=String(title || '').match(/(?:^|[-–—]\s*)(?:Rabbi|Rav|הרב|רבי|ר[׳'])\s+(.+?)(?=\s+[-–—#|]|$)/i);
+  if (!match) return '';
+  const name=match[1].replace(/\s+/g,' ').trim();
+  const key=name.toLowerCase().replace(/[^a-z0-9\u0590-\u05ff]+/g,'-').replace(/^-|-$/g,'').slice(0,150);
+  if (!key) return '';
+  const id='auto-'+key;
+  if (!state.speakerById.has(id)) {
+    const hebrew=/[\u0590-\u05ff]/.test(name);
+    const en=hebrew ? generatedEnglishSpeakerName(name) : name;
+    const he=hebrew ? name : generatedHebrewSpeakerName(name);
+    state.speakerById.set(id,{id,
+      nameEn:en||'',nameHe:he||'',
+      displayEn:en ? 'Rav '+en : name,
+      displayHe:hebrew ? 'הרב '+name : (he ? 'הרב '+he : name),
+      auto:true});
+  }
+  return id;
+}
+
 function followSpeakerIdsForLecture(video) {
   const ids = [...new Set((Array.isArray(video?._speakerIds) ? video._speakerIds : [])
     .map(String).filter(Boolean))];
+
+  // Use the website's reviewed lecture-to-speaker mapping first. The website
+  // loads library-metadata.json and checks lectures[video.id].speakerIds.
+  const reviewed=state.metadata?.lectures?.[videoId(video)]?.speakerIds;
+  if (Array.isArray(reviewed) && reviewed.length) {
+    const supported=reviewed.map(String).filter(id=>state.speakerById.has(id));
+    if (supported.length) { video._speakerIds=supported; return supported; }
+  }
+
+  // When no reviewed mapping exists, website watch.js derives the speaker
+  // from the raw lecture title, not the localized display title. Match that
+  // EXACT key before considering a Worker-only auto speaker ID.
+  const websiteId=websiteFallbackSpeakerFromTitle(video?.title);
+  if (websiteId) {video._speakerIds=[websiteId];return video._speakerIds;}
+  const translatedTitle=video?.titleHe || video?.titleEn;
+  const translatedId=websiteFallbackSpeakerFromTitle(translatedTitle);
+  if (translatedId) {video._speakerIds=[translatedId];return video._speakerIds;}
+
   if (ids.length) return ids;
 
-  // The app's Drive-backed catalog sometimes has a Hebrew speaker/title but
-  // no speakerIds. Website metadata can still identify the SAME speaker key.
-  // Try all language variants rather than only the current video.title.
-  for (const title of [video?.titleHe, video?.titleEn, video?.title]) {
-    if (!String(title || '').trim()) continue;
-    const id = resolveSpeakerFromTitle(title);
-    if (id) { video._speakerIds = [String(id)]; return video._speakerIds; }
-  }
+  // A direct Hebrew/English speaker field may still be matched to canonical
+  // reviewed metadata even when the raw video has no speaker prefix.
   for (const value of [
-    video?.speakerHe, video?.speakerEn, video?.speaker, video?.rabbi,
-    video?.lecturer, video?._speakerLabel
+    video?.speakerHe,video?.speakerEn,video?.speaker,video?.rabbi,
+    video?.lecturer,video?._speakerLabel
   ]) {
-    const name = bareSpeakerName(cleanSpeakerDisplayName(value));
-    const normalized = normalizeText(name);
-    if (!normalized || /^(irgun shiurai torah|unknown|various speakers|speaker|magid shiur)$/i.test(normalized)) continue;
-    const canonical = state.speakerAliasToId.get(normalized);
-    // Don't invent a speaker for an unnamed shiur or a single vague word.
-    const id = canonical || (normalized.split(' ').length >= 2 && normalized.split(' ').length <= 7
-      ? resolveSpeakerFromTitle(`Rav ${name} - Shiur`) : '');
-    if (id) { video._speakerIds = [String(id)]; return video._speakerIds; }
+    const name=bareSpeakerName(cleanSpeakerDisplayName(value));
+    const normalized=normalizeText(name);
+    if(!normalized || /^(irgun shiurai torah|unknown|various speakers|speaker|magid shiur)$/i.test(normalized))continue;
+    const id=state.speakerAliasToId.get(normalized);
+    if(id) {video._speakerIds=[String(id)];return video._speakerIds;}
   }
   return [];
 }
