@@ -477,10 +477,22 @@ try{
       const video=await videoReady();audibleVideo(video);
       assert.ok(Math.abs(video.video.rate-rate)<.05,
         'Native decoded Video did not inherit the selected '+rate+'x rate');
-      const before=video.video.time;await delay(2100);
-      const after=await read();audibleVideo(after);
-      assert.ok(after.video.time>before+rate*1.0,
-        'Real native decoded Video clock failed to advance at selected speed '+rate);
+      const before=video.video.time;
+      // The OS/HLS pipeline sometimes legitimately starts fetching a new
+      // segment immediately after the real Audio -> Video tap. Do NOT accept
+      // an advancing intent clock or a decoded-frame count from before the
+      // switch. Require fresh audible, visible frames AND advancing clock
+      // within a bounded recovery window.
+      const after=await wait(s=>s.videoEngine==='native-media3'&&
+        s.native.mode==='VIDEO'&&s.media3?.active&&s.media3.videoSelected&&
+        s.media3.playing&&s.media3.surfaceVisibleOnScreen&&
+        s.media3.playerIdentity===video.media3.playerIdentity&&
+        Math.abs(s.media3.playbackSpeed-rate)<.05&&
+        s.media3.frames>=video.media3.frames+4&&
+        s.video&&!s.video.paused&&s.video.ready>=2&&
+        s.video.time>before+rate*1.0,
+        'Native Video must recover NEW decoded frames and clock at '+rate+'x without a second player',25000);
+      audibleVideo(after);
       const audio=await audioReady();
       assert.ok(Math.abs(audio.native.playbackSpeed-rate)<.05,
         'Returning to Audio lost '+rate+'x setting');
@@ -511,7 +523,13 @@ try{
         // reports fullscreen; let that real OS window appear before inspecting.
         await delay(700);
         await dismissFullscreenEducation();
-        await delay(2300);const moved=await read();
+        const moved=await wait(s=>s.media3?.active&&s.media3.videoSelected&&
+          s.media3.playing&&s.media3.surfaceVisibleOnScreen&&
+          s.media3.playerIdentity===full.media3.playerIdentity&&
+          s.media3.positionMs>full.media3.positionMs+1100&&
+          s.media3.frames>=full.media3.frames+5&&
+          s.video&&!s.video.paused&&s.video.ready>=2,
+          'Fullscreen must keep rendering new decoded frames after Android system UI settles',24000);
         audibleVideo(moved);
         assert.ok(moved.media3.positionMs>full.media3.positionMs+1100&&
           moved.media3.frames>=full.media3.frames+5,
@@ -981,7 +999,13 @@ try{
           s.media3.bufferedPositionMs>s.media3.positionMs+1000&&
           s.media3.positionMs>=sought.media3.positionMs-2000,
           'Native HLS did not decode newly fetched frames under actual emulator network throttling',95000);
-        await delay(2500);const slowMoved=await read();
+        const slowMoved=await wait(s=>s.media3?.active&&s.media3.videoSelected&&
+          s.media3.playing&&s.media3.surfaceVisibleOnScreen&&
+          s.media3.playerIdentity===originalPlayer&&
+          s.media3.positionMs>slow.media3.positionMs+900&&
+          s.media3.frames>slow.media3.frames+3&&
+          s.video&&!s.video.paused&&s.video.ready>=2,
+          'Throttled native HLS must recover REAL moving frames and clock without a new player',32000);
         audibleVideo(slowMoved);
         assert.ok(slowMoved.media3.positionMs>slow.media3.positionMs+900&&
           slowMoved.media3.frames>slow.media3.frames+3,
@@ -1111,11 +1135,26 @@ try{
       const adjusted=await wait(s=>Math.abs(s.speed-rate)<0.01&&Math.abs(s.native.playbackSpeed-rate)<0.05,
         'Native Media3 playback speed did not become '+rate+'x',20000);
       audibleAudio(adjusted);
-      const old=adjusted.native.audioPositionMs;
-      await delay(2100);
-      const newer=await read();
-      assert.ok(newer.native.audioPositionMs>old+rate*1100,'Audio clock did not advance at '+rate+'x');
-      checks('Native playback speed '+rate+'x',{timeBeforeMs:old,timeAfterMs:newer.native.audioPositionMs});
+      // The long regression suite deliberately stresses Android networking
+      // and then returns to the full Audio controls. At the first rate-change
+      // tick a valid 1.25x setting can coincide with a short segment rebuffer.
+      // Give it at most four actual two-second playback windows; only a
+      // continuously advancing, physically selected SAME Media3 player passes.
+      let beforeClock=null, newer=null;
+      for(let attempt=0;attempt<4;attempt++){
+        const begun=await wait(s=>s.native?.audioIsPlaying&&
+          Math.abs(s.native.playbackSpeed-rate)<.05&&s.native.audioPositionMs>=adjusted.native.audioPositionMs,
+          'Real native Audio never resumed after physical speed selection',16000);
+        beforeClock=begun.native.audioPositionMs;
+        await delay(2100);
+        const observed=await read();
+        if(observed.native.audioIsPlaying&&Math.abs(observed.native.playbackSpeed-rate)<.05&&
+          observed.native.audioPositionMs>beforeClock+rate*1100) {
+          newer=observed;break;
+        }
+      }
+      assert.ok(newer,'Native Audio did not sustain an advancing clock at '+rate+'x after four bounded real playback checks');
+      checks('Native playback speed '+rate+'x',{timeBeforeMs:beforeClock,timeAfterMs:newer.native.audioPositionMs});
     }
     await closePlayer();
     const atSpeed=await read(),lecture=atSpeed.currentId;
