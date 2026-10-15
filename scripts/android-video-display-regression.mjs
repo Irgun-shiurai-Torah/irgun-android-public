@@ -34,6 +34,26 @@ export function assertAndroidVideoTimes(media) {
   'Right timestamp must show the actual total duration, not remaining time');
 }
 
+// The first of two native taps must not hit Media3's seek bar. On short
+// in-page videos the seek bar can occupy the lower HALF of PlayerView; the
+// old 50%-height double tap scrubbed the lecture before requesting +/-15s.
+export function nativeDoubleTapPoint(media,direction) {
+ assert.ok(direction===1||direction===-1,'Specify right or left double-tap side');
+ const {surfaceX:x,surfaceY:y,surfaceVisibleWidth:w,surfaceVisibleHeight:h,seekBarRect:seek}=media;
+ assert.ok([x,y,w,h].every(Number.isFinite)&&w>120&&h>115,
+   'Double tap requires a visible real Android video frame');
+ // Native custom actions occupy the first 44dp; Media3 seek and time
+ // controls occupy the bottom of short players. Use the visible picture
+ // gap between them, based on actual measured video/seek rectangles.
+ const start=y+53;
+ const end=Math.min(y+h-44,
+   seek?.y===undefined?y+Math.min(h*.43,180):seek.y-14);
+ assert.ok(end>start,'No unobstructed video area for a real double tap');
+ const pointY=Math.round(start+(end-start)*.35);
+ assert.ok(!seek||pointY<seek.y-12,'Double tap must not scrub the Media3 seek bar');
+ return [String(Math.round(x+w*(direction===1?.90:.10))),String(pointY)];
+}
+
 // Real emulator accelerometer and Android input; CDP is observation only.
 export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,delay,report,showControls,tapExit,
  naturalLandscape=process.env.IRGUN_TABLET_NATURAL_LANDSCAPE==='1'}) {

@@ -5,7 +5,7 @@ import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createAndroidVideoDisplaySync} from '../src/android-video-display.js';
-import {assertAndroidVideoTimes,nativeControllerRevealPoint} from './android-video-display-regression.mjs';
+import {assertAndroidVideoTimes,nativeControllerRevealPoint,nativeDoubleTapPoint} from './android-video-display-regression.mjs';
 
 test('native Media3 surface uses TextureView to preserve actual scroll-clipped video pixels',()=>{
  const java=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
@@ -19,6 +19,21 @@ test('native Media3 surface uses TextureView to preserve actual scroll-clipped v
  assert.match(java,/clipHost.setLayoutParams\(clipParams\)/);
  assert.doesNotMatch(java,/surface.setClipBounds\(new Rect/,
    'Clipping the PlayerView itself must not black out Android 16 video pixels');
+});
+
+test('real double taps stay in the unobstructed video area above the seek bar',()=>{
+ const short={surfaceX:0,surfaceY:121,surfaceVisibleWidth:320,surfaceVisibleHeight:150,
+   seekBarRect:{x:0,y:191,width:320,height:48}};
+ const left=nativeDoubleTapPoint(short,-1).map(Number);
+ const right=nativeDoubleTapPoint(short,1).map(Number);
+ assert.equal(left[0],32);assert.equal(right[0],288);
+ assert.equal(left[1],right[1]);
+ assert.ok(left[1]>165&&left[1]<179,'Physical taps must clear 44dp top actions and the real seek bar');
+ const long=nativeDoubleTapPoint({...short,surfaceVisibleHeight:600,
+   seekBarRect:{x:0,y:520,width:320,height:48}},1).map(Number);
+ assert.ok(long[1]>175&&long[1]<490);
+ assert.throws(()=>nativeDoubleTapPoint({...short,seekBarRect:{x:0,y:169,width:320,height:48}},-1),
+   /No unobstructed video area/);
 });
 
 test('controller reveal taps never hit a seek bar or custom top controls',()=>{

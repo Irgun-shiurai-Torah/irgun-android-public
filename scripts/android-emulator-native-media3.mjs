@@ -6,7 +6,7 @@ import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {fullscreenEducationTapPoint} from './android-system-ui-observation.mjs';
 import {settledNativeTapPoint,waitForNativeWindowFocus} from './android-native-tap-point.mjs';
 import {typeObservedNativeText} from './android-native-text-entry.mjs';
-import {verifyAndroidVideoDisplay,assertAndroidVideoTimes,nativeControllerRevealPoint} from './android-video-display-regression.mjs';
+import {verifyAndroidVideoDisplay,assertAndroidVideoTimes,nativeControllerRevealPoint,nativeDoubleTapPoint} from './android-video-display-regression.mjs';
 import {verifyAndroidTaskDismissal} from './android-task-dismissal-regression.mjs';
 
 // Read the real WebView through CDP, but perform every navigation gesture with
@@ -500,8 +500,9 @@ try {
   for(const direction of [1,-1]) {
     await delay(500);
     const before=(await sample()).media3,started=Date.now();
-    const x=Math.round(before.surfaceX+before.surfaceVisibleWidth*(direction>0?.90:.10));
-    const y=Math.round(before.surfaceY+before.surfaceVisibleHeight*.50);
+    // Use unobstructed VIDEO pixels. Old height/2 was physically inside the
+    // Media3 progress bar on Android 11 and jumped the lecture to 94 minutes.
+    const [x,y]=nativeDoubleTapPoint(before,direction).map(Number);
     const pid=adb('shell','pidof','org.irgunshiuraitorah.app');
     const touch=adb('shell','am','instrument','-w','-r','-e','x',String(x),'-e','y',String(y),
       'org.irgunshiuraitorah.qa/.NativeTouch');
