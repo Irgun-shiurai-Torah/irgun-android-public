@@ -124,7 +124,7 @@ test('Android Recents HOME entry preceding Irgun must not fail real app task dis
    '  Visible recent tasks (most recent first):',
    '  * RecentTaskInfo #0:',
    '    baseIntent=Intent { cmp=org.irgunshiuraitorah.app/.SplashActivity }'
- ].join('\\n');
+ ].join('\n');
  assert.equal(hasIrgunRecentTask(dump),true);
  assert.equal(topRecentTaskIsIrgun(dump),true,'HOME must not masquerade as an app card');
  const settingsFirst=dump.replace('type=standard A=10168:org.irgunshiuraitorah.app','type=standard A=com.android.settings')
