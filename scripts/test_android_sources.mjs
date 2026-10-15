@@ -510,6 +510,56 @@ test('old Android WebView clears the persistent host on close',()=>{
   assert.equal(f.mount.children.length,0);assert.equal(f.overlay.parentElement,null);assert.equal(f.state.watchHostedExternally,false);
 });
 
+
+test('Hebrew lecture without speakerIds renders an actual translated canonical Follow button',()=>{
+  const slice=(from,to)=>{
+    const a=mainSource.indexOf(from),b=mainSource.indexOf(to,a);
+    assert.ok(a>=0&&b>a,'Missing production Follow dependency '+from);
+    return mainSource.slice(a,b);
+  };
+  const state={
+    speakerAliasToId:new Map([['שמואל יהודה בריסק','shmuel-yehuda-brisk']]),
+    speakerById:new Map([['shmuel-yehuda-brisk',{
+      id:'shmuel-yehuda-brisk',displayHe:'הרב שמואל יהודה בריסק',displayEn:'Rav Shmuel Yehuda Brisk'
+    }]]),
+    topicById:new Map(),
+    follows:new Map()
+  };
+  let language='he';
+  const context={state,currentLanguage:()=>language,
+    tr:key=>language==='he' ? ({Follow:'עקבו אחרי',Following:'עוקבים אחרי'}[key]||key):key,
+    generatedEnglishSpeakerName:()=>'',generatedHebrewSpeakerName:()=>''};
+  runInNewContext(
+    slice('function normalizeText(', 'const SPEAKER_TOKEN_EN_COUNTS')+
+    slice('function bareSpeakerName(', 'function incrementSpeakerTokenCount(')+
+    slice('function speakerLabel(', 'function getVisitorId(')+
+    slice('function extractSpeakerFromTitle(', 'function resolveTopicFromTag(')+
+    slice('function cleanSpeakerDisplayName(', 'function cleanTopicDisplayName(')+
+    slice('function esc(', 'function shiurTitleParts(')+
+    slice('function followButtonText(', 'function commentsHtml()')+
+    '\nthis.renderFollow=currentFollowButtons;',context);
+  const video={title:'שאלות חדשות',titleHe:'הרב שמואל יהודה בריסק - שאלות חדשות',
+    _speakerIds:[],_speakerLabel:'הרב שמואל יהודה בריסק',_topicId:''};
+  let html=context.renderFollow(video);
+  assert.match(html,/data-follow-type="speaker"/);
+  assert.match(html,/data-follow-key="shmuel-yehuda-brisk"/);
+  assert.match(html,/עקבו אחרי הרב שמואל יהודה בריסק/);
+  assert.deepEqual(Array.from(video._speakerIds),['shmuel-yehuda-brisk']);
+  state.follows.set('speaker:shmuel-yehuda-brisk',{type:'speaker',key:'shmuel-yehuda-brisk'});
+  html=context.renderFollow(video);
+  assert.match(html,/עוקבים אחרי הרב שמואל יהודה בריסק/);
+  language='en';
+  assert.match(context.renderFollow(video),/Following Rav Shmuel Yehuda Brisk/);
+  // A full native Drive lecture can provide a valid speaker name in Hebrew
+  // without a tagged title; the Follow control must still be available.
+  const bySpeaker={title:'שאלות חדשות',speakerHe:'הרב שמואל יהודה בריסק',_speakerIds:[]};
+  assert.match(context.renderFollow(bySpeaker),/data-follow-key="shmuel-yehuda-brisk"/);
+  const serverId={title:'Shiur',_speakerIds:['speaker-api-only'],_speakerLabel:'הרב שמואל יהודה בריסק'};
+  assert.match(context.renderFollow(serverId),/data-follow-key="speaker-api-only"/);
+  assert.match(context.renderFollow(serverId),/הרב שמואל יהודה בריסק/);
+  assert.equal(context.renderFollow({title:'Untitled recording',_speakerIds:[]}), '',
+    'Do not invent a speaker Follow identity for an unnamed lecture');
+});
 test('Android Video-to-Audio handoff preserves user Play intent during MP4 priming and respects actual Pause',async()=>{
   for(const options of [
     {intent:true,decoderPaused:true,stalePlaying:false,expected:true},
