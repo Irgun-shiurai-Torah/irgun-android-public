@@ -5114,20 +5114,56 @@ function relatedVideos(video) {
   }).slice(0, 8);
 }
 
+function followButtonText(following, label) {
+  // Keep the real website /follows/toggle identity and translate the action,
+  // not the speaker's stable account key. Hebrew Watch pages must show עקבו אחרי.
+  return `${esc(tr(following ? 'Following' : 'Follow'))} ${esc(label)}`;
+}
+
+function followSpeakerIdsForLecture(video) {
+  const ids = [...new Set((Array.isArray(video?._speakerIds) ? video._speakerIds : [])
+    .map(String).filter(Boolean))];
+  if (ids.length) return ids;
+
+  // The app's Drive-backed catalog sometimes has a Hebrew speaker/title but
+  // no speakerIds. Website metadata can still identify the SAME speaker key.
+  // Try all language variants rather than only the current video.title.
+  for (const title of [video?.titleHe, video?.titleEn, video?.title]) {
+    if (!String(title || '').trim()) continue;
+    const id = resolveSpeakerFromTitle(title);
+    if (id) { video._speakerIds = [String(id)]; return video._speakerIds; }
+  }
+  for (const value of [
+    video?.speakerHe, video?.speakerEn, video?.speaker, video?.rabbi,
+    video?.lecturer, video?._speakerLabel
+  ]) {
+    const name = bareSpeakerName(cleanSpeakerDisplayName(value));
+    const normalized = normalizeText(name);
+    if (!normalized || /^(irgun shiurai torah|unknown|various speakers|speaker|magid shiur)$/i.test(normalized)) continue;
+    const canonical = state.speakerAliasToId.get(normalized);
+    // Don't invent a speaker for an unnamed shiur or a single vague word.
+    const id = canonical || (normalized.split(' ').length >= 2 && normalized.split(' ').length <= 7
+      ? resolveSpeakerFromTitle(`Rav ${name} - Shiur`) : '');
+    if (id) { video._speakerIds = [String(id)]; return video._speakerIds; }
+  }
+  return [];
+}
+
 function currentFollowButtons(video) {
   if (!video) return '';
   const buttons = [];
-  for (const speakerId of video._speakerIds || []) {
-    const label = speakerLabel(speakerId);
+  for (const speakerId of followSpeakerIdsForLecture(video)) {
+    const label = speakerLabel(speakerId) ||
+      cleanSpeakerDisplayName(video._speakerLabel || video.speakerHe || video.speakerEn || video.speaker || '');
     if (!label) continue;
     const following = state.follows.has(`speaker:${speakerId}`);
-    buttons.push(`<button class="follow-chip ${following ? 'active' : ''}" data-follow-type="speaker" data-follow-key="${esc(speakerId)}" data-follow-label="${esc(label)}">${following ? 'Following' : 'Follow'} ${esc(label)}</button>`);
+    buttons.push(`<button class="follow-chip ${following ? 'active' : ''}" dir="auto" data-follow-type="speaker" data-follow-key="${esc(speakerId)}" data-follow-label="${esc(label)}">${followButtonText(following, label)}</button>`);
   }
   if (video._topicId) {
-    const label = topicLabel(video._topicId);
+    const label = topicLabel(video._topicId) || video._topicLabel;
     if (label) {
       const following = state.follows.has(`topic:${video._topicId}`);
-      buttons.push(`<button class="follow-chip ${following ? 'active' : ''}" data-follow-type="topic" data-follow-key="${esc(video._topicId)}" data-follow-label="${esc(label)}">${following ? 'Following' : 'Follow'} ${esc(label)}</button>`);
+      buttons.push(`<button class="follow-chip ${following ? 'active' : ''}" dir="auto" data-follow-type="topic" data-follow-key="${esc(video._topicId)}" data-follow-label="${esc(label)}">${followButtonText(following, label)}</button>`);
     }
   }
   return buttons.join('');
@@ -7369,7 +7405,7 @@ function refreshInteractiveUi() {
     const following = state.follows.has(identity);
     button.classList.toggle('active', following);
     const label = button.dataset.followLabel || '';
-    button.innerHTML = `${following ? 'Following' : 'Follow'} ${esc(label)}`;
+    button.innerHTML = followButtonText(following, label);
   });
 }
 
