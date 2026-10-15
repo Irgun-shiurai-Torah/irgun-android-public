@@ -24,7 +24,7 @@ test('persistent Android watch controls bind once across page renders and alongs
 
 test('silent HLS segment buffering has bounded recovery on the SAME Media3 player and item',()=>{
  const start=service.indexOf('private void scheduleNativeVideoStallWatch()');
- const end=service.indexOf('private void queueNetworkRecovery(long delayMs)',start);
+ const end=service.indexOf('public void onCreate()',start);
  assert.ok(start>0&&end>start,'Native silent buffering watchdog must exist');
  const watchdog=service.slice(start,end);
  assert.match(watchdog,/!nativeVideoFirstFrameRendered/,'Do not restart normal initial video buffering');

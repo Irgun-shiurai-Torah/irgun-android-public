@@ -359,6 +359,34 @@ public class IrgunPlaybackService extends MediaSessionService {
         return true;
     }
 
+    private void queueNetworkRecovery(long delayMs) {
+        if (!networkRecoveryPending || player == null || networkRecoveryAttempts >= 3) return;
+        if (networkRecoveryRunnable != null) mainHandler.removeCallbacks(networkRecoveryRunnable);
+        final long generation = ++networkRecoveryGeneration;
+        final ExoPlayer engine = player;
+        final String source = audioUrl;
+        final String lecture = lectureId;
+        networkRecoveryRunnable = () -> {
+            if (!networkRecoveryPending || generation != networkRecoveryGeneration || player != engine ||
+                !lecture.equals(lectureId) || !source.equals(audioUrl)) return;
+            networkRecoveryRunnable = null;
+            networkRecoveryAttempts++;
+            long position = !nativeVideoSourceActive && playbackMode == PlaybackMode.VIDEO ? externalVideoPositionMs : networkRecoveryPositionMs;
+            boolean wanted = !nativeVideoSourceActive && playbackMode == PlaybackMode.VIDEO ? externalVideoPlaying : networkRecoveryWanted;
+            suppressVideoMirrorCallbacks();
+            syncingVideoShadow = true;
+            try {
+                setCandidateAudioFocus(nativeVideoSourceActive || playbackMode == PlaybackMode.AUDIO);
+                engine.setVolume(!nativeVideoSourceActive && playbackMode == PlaybackMode.VIDEO ? 0f : logicalVolume);
+                engine.seekTo(Math.max(0L, position));
+                engine.prepare();
+                engine.setPlayWhenReady(wanted);
+                Log.d(TAG, "[Playback] Real network recovery attempt " + networkRecoveryAttempts + " mode=" + playbackMode);
+            } finally { syncingVideoShadow = false; }
+        };
+        mainHandler.postDelayed(networkRecoveryRunnable, delayMs);
+    }
+
     private void cancelNativeVideoStallWatch() {
         nativeVideoStallGeneration++;
         if (nativeVideoStallWatch != null) mainHandler.removeCallbacks(nativeVideoStallWatch);
@@ -409,34 +437,6 @@ public class IrgunPlaybackService extends MediaSessionService {
             publishNativeState();
         };
         mainHandler.postDelayed(nativeVideoStallWatch, NATIVE_VIDEO_STALL_MS);
-    }
-
-    private void queueNetworkRecovery(long delayMs) {
-        if (!networkRecoveryPending || player == null || networkRecoveryAttempts >= 3) return;
-        if (networkRecoveryRunnable != null) mainHandler.removeCallbacks(networkRecoveryRunnable);
-        final long generation = ++networkRecoveryGeneration;
-        final ExoPlayer engine = player;
-        final String source = audioUrl;
-        final String lecture = lectureId;
-        networkRecoveryRunnable = () -> {
-            if (!networkRecoveryPending || generation != networkRecoveryGeneration || player != engine ||
-                !lecture.equals(lectureId) || !source.equals(audioUrl)) return;
-            networkRecoveryRunnable = null;
-            networkRecoveryAttempts++;
-            long position = !nativeVideoSourceActive && playbackMode == PlaybackMode.VIDEO ? externalVideoPositionMs : networkRecoveryPositionMs;
-            boolean wanted = !nativeVideoSourceActive && playbackMode == PlaybackMode.VIDEO ? externalVideoPlaying : networkRecoveryWanted;
-            suppressVideoMirrorCallbacks();
-            syncingVideoShadow = true;
-            try {
-                setCandidateAudioFocus(nativeVideoSourceActive || playbackMode == PlaybackMode.AUDIO);
-                engine.setVolume(!nativeVideoSourceActive && playbackMode == PlaybackMode.VIDEO ? 0f : logicalVolume);
-                engine.seekTo(Math.max(0L, position));
-                engine.prepare();
-                engine.setPlayWhenReady(wanted);
-                Log.d(TAG, "[Playback] Real network recovery attempt " + networkRecoveryAttempts + " mode=" + playbackMode);
-            } finally { syncingVideoShadow = false; }
-        };
-        mainHandler.postDelayed(networkRecoveryRunnable, delayMs);
     }
 
     @Override
