@@ -8,10 +8,20 @@ capture() {
 trap capture EXIT
 adb install -r android/qa-native-observer/build/outputs/apk/debug/qa-native-observer-debug.apk
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+# Let first-boot package and launcher work finish before the measured cold
+# app launch. Do not dismiss ANRs or restart either the app or the emulator.
+if adb shell am help | grep -q wait-for-broadcast-idle; then
+  timeout 60s adb shell am wait-for-broadcast-idle
+fi
+sleep 8
 adb logcat -c
 if [[ "${1:-}" == "tablet-display" ]]; then
   # Pixel Tablet's natural orientation is landscape. Start physically upright
   # with the system rotation lock ON before opening the real app.
+  # A landscape-native 1280x800 tablet keeps the >=600dp layout and physical
+  # rotation coverage without software-rendering a 4-megapixel display in CI.
+  adb shell wm size 1280x800
+  adb shell wm density 160
   adb shell settings put system accelerometer_rotation 0
   adb shell settings put system user_rotation 1
   adb emu sensor set acceleration 9.81:0:0

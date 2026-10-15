@@ -110,3 +110,10 @@ test('task dismissal requires the actual ActivityManager recent task to disappea
  assert.equal(topRecentTaskIsIrgun('Recent #0: Task{x}\n realActivity=other.app/.Main\n'+task),false);
  assert.equal(hasIrgunRecentTask(task.replace('org.irgunshiuraitorah.app/.SplashActivity','other.app/.Main')),false);
 });
+
+test('separate visible-task section cannot misattribute an unrelated actual recent task',()=>{
+ const other='Recent tasks:\n  * Recent #0: Task{abc #12 type=standard}\n    realActivity=other.app/.Main\n';
+ const visible='\nVisible recent tasks (most recent first):\n * RecentTaskInfo #0:\n realActivity=org.irgunshiuraitorah.app/.MainActivity';
+ assert.equal(hasIrgunRecentTask(other+visible),false);
+ assert.equal(topRecentTaskIsIrgun(other+visible),false);
+});

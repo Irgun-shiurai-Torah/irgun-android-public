@@ -4,10 +4,11 @@ import assert from 'node:assert/strict';
 
 // This observer targets its own APK. It reads SystemUI/dialog accessibility
 // nodes and never launches or instruments the app under test.
-export function nativeHierarchy(evidencePath) {
+export function nativeHierarchy(evidencePath,{allWindows=false}={}) {
   const adb=(...args)=>execFileSync('adb',args,{encoding:'utf8',timeout:20000}).trim();
   const before=adb('shell','pidof','org.irgunshiuraitorah.app');
   const result=adb('shell','am','instrument','-w','-r',
+    ...(allWindows?['-e','allWindows','true']:[]),
     'org.irgunshiuraitorah.qa/.WindowObserver');
   assert.equal(adb('shell','pidof','org.irgunshiuraitorah.app'),before,
     'Native screen observation must not restart the Irgun app');

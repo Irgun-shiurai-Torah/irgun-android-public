@@ -171,7 +171,11 @@ try {
   assert.equal(observedSearch.focused,'homeLibrarySearch','Actual Android tap must focus Home search before sending text');
   await typeObservedNativeText({value:code,delay,
     readValue:async()=>{const s=await searchState();assert.equal(s.focused,'homeLibrarySearch','Each real native key must target the focused Home search');return s.value;},
-    typeCharacter:character=>adb('shell','input','text',character)
+    typeCharacter:character=>{
+      const result=adb('shell','am','instrument','-w','-r','-e','text',character,
+        'org.irgunshiuraitorah.qa/.NativeText');
+      assert.match(result,/INSTRUMENTATION_CODE: -1/,'Android must accept the actual native key pair');
+    }
   });
   observedSearch=await searchState();report.searchAfterTyping=observedSearch;
   assert.equal(observedSearch.focused,'homeLibrarySearch','Feed refresh must preserve Home input focus');
@@ -211,7 +215,18 @@ try {
     }
     throw new Error(label+'; last='+JSON.stringify(result));
   };
-  const captureVisibleNativePicture=(snapshot,name)=>{
+  const captureVisibleNativePicture=async(snapshot,name)=>{
+    // Measure the picture after physically hiding the controller scrim. On a
+    // partly scrolled stage its dark bottom controls can cover the entire crop.
+    if(snapshot.media3.controllerFullyVisible){
+      const m=snapshot.media3;
+      adb('shell','input','tap',String(Math.round(m.surfaceX+m.surfaceVisibleWidth*.95)),
+        String(Math.round(m.surfaceY+m.surfaceVisibleHeight*.48)));
+      await waitNative(s=>!s.media3.controllerFullyVisible&&!s.media3.qualityButtonVisible,
+        'Physical video tap must hide the controller before measuring picture pixels');
+      await delay(500);
+    }
+    snapshot=await sample();
     const m=snapshot.media3;
     assert.ok(m.surfaceVisibleOnScreen && m.surfaceVisibleWidth>120 &&
       m.surfaceVisibleHeight>65 && m.surfaceX>=0 && m.surfaceY>=0,
@@ -247,7 +262,7 @@ try {
   assert.ok(first.media3.positionMs>0&&first.media3.bufferedPositionMs>first.media3.positionMs,
     'Native ExoPlayer must have real prepared media');
   report.checks.push({label:'Native HLS decodes visible frames with exactly one Media3 player',snapshot:first.media3});
-  captureVisibleNativePicture(first,'media3-first-frames');
+  await captureVisibleNativePicture(first,'media3-first-frames');
   await delay(3000);
   const moved=await sample();
   assert.ok(moved.media3.positionMs>first.media3.positionMs+1800,'Native VIDEO clock must progress');
@@ -285,7 +300,7 @@ try {
   assert.equal(resumed.media3.sourceType,'hls','Track-only Video restore must retain original HLS');
   assert.equal(resumed.video,null,'No second WebView video player may be created during mode switches');
   report.checks.push({label:'Audio to Video resumes moving decoded frames in the same Media3 engine',snapshot:resumed.media3});
-  const restoredLuminance=captureVisibleNativePicture(resumed,'media3-video-restored');
+  const restoredLuminance=await captureVisibleNativePicture(resumed,'media3-video-restored');
   report.restoredVisiblePicture={luminance:restoredLuminance,frameCount:resumed.media3.frames,
     surfaceX:resumed.media3.surfaceX,surfaceY:resumed.media3.surfaceY};
 
@@ -361,15 +376,18 @@ try {
       // Android's first immersive-mode tip is not focusable on every version;
       // it can intercept taps even while the app still reports window focus.
       await delay(1200);
-      const education=fullscreenEducationTapPoint(nativeHierarchy());
+      const education=fullscreenEducationTapPoint(nativeHierarchy(undefined,{allWindows:true}));
       if(education){
         adb('shell','input','tap',...education.map(String));
         fullscreenEducationDismissed=true;await delay(250);
       }
     }
     const observeWindow=()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+    // Window focus can lag the actual physical rotation animation. Wait for
+    // real focus first; an unknown persistent dialog still fails below.
+    for(let i=0;i<15&&!(await observeWindow()).focused;i++)await delay(200);
     if(!(await observeWindow()).focused){
-      const education=fullscreenEducationTapPoint(nativeHierarchy());
+      const education=fullscreenEducationTapPoint(nativeHierarchy(undefined,{allWindows:true}));
       assert.ok(education,'An unexpected native window blocks video controls; ANR and other dialogs are failures');
       adb('shell','input','tap',...education.map(String));
       await waitForNativeWindowFocus({readBounds:observeWindow,delay});
@@ -523,7 +541,7 @@ try {
     'Partly scrolled video must retain a visible native picture');
   await delay(1200);const partialMoved=await sample();
   assert.ok(partialMoved.media3.frames>partial.media3.frames+5,'Clipped Video must keep rendering frames');
-  captureVisibleNativePicture(partialMoved,'media3-partially-scrolled');
+  await captureVisibleNativePicture(partialMoved,'media3-partially-scrolled');
   adb('shell','input','swipe',String(scrollX),String(scrollY-Math.round(beforeScroll.surfaceVisibleHeight*.65)),
     String(scrollX),String(scrollY),'700');
   await waitNative(s=>s.media3.surfaceVisibleHeight>=beforeScroll.surfaceVisibleHeight-3&&s.media3.playing,
@@ -592,7 +610,7 @@ try {
   await tapNativeLabel('Enter video fullscreen');
   await waitNative(s=>s.media3.fullscreen,'Native fullscreen control must expand video');
   await delay(900);
-  const education=fullscreenEducationTapPoint(nativeHierarchy());
+  const education=fullscreenEducationTapPoint(nativeHierarchy(undefined,{allWindows:true}));
   if (education) adb('shell','input','tap',...education.map(String));
   await showNativeControls();
   await tapNativeLabel('Exit video fullscreen');
