@@ -1,11 +1,13 @@
 {
   "sourceBranch": "fix/android-postmerge-like-home-20261013",
-  "sourceCommit": "1bf1ce7e240fd91902d959c0ba2c95ec88a2730e",
+  "sourceCommit": "f4423b50ba8d6b36055ff6722f6485e24c3d50d8",
   "track": "internal",
-  "requestedAt": "2026-10-15T00:00:29.930Z",
+  "requestedAt": "2026-10-15T08:47:28.029Z",
   "pullRequest": 37,
   "mergeIntoMain": false,
   "features": [
+    "Keep the existing Media3 seek bar above elapsed time at bottom-left and total duration at bottom-right; reuse existing TextViews and clock",
+    "Android tablet MainActivity honors explicit video orientation with rotation lock on; Android 16 large-display compatibility and manufacturer orientation opt-out",
     "Remove the duplicate bottom-right Media3 settings gear; retain dedicated top-row quality and speed controls",
     "Home continues playback; swiping the app card away from Recents stops playing/paused/buffering lecture, clears media item and notification, cancels retries/handoffs and blocks stale bridge commands",
     "Persistent floating Android bottom navigation outside page/player renders; sliding active-tab highlight; English/Hebrew support",
@@ -21,11 +23,11 @@
     "Account tests pin a descriptor-verified native-video/audio lecture; Vimeo-only playback tested separately"
   ],
   "verification": {
-    "localTests": 246,
+    "localTests": 248,
     "androidPackaging": "npm run test:player passed",
-    "status": "Physical emulator regression matrix runs separately; user-authorized concurrent Internal testing.",
-    "fullMatrixRun": 38657469398,
-    "startupRun": 38657469074
+    "status": "Added real Pixel Tablet API 35/36 accelerometer rotation and fullscreen geometry checks, plus actual native timestamp geometry/live-clock checks. Physical tests run separately; not claimed passed.",
+    "fullMatrixRun": 38708164239,
+    "startupRun": 38708164235
   },
-  "releaseAttempt": 16
+  "releaseAttempt": 17
 }

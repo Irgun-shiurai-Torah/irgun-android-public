@@ -667,3 +667,68 @@ jobs:
           path: emulator-report/
           if-no-files-found: warn
           retention-days: 14
+
+  tablet-video-display:
+    name: Tablet landscape video with rotation lock Android API ${{ matrix.api-level }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 38
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [35, 36]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Install Android SDK 36
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - run: npm ci
+      - name: Validate strict native Media3 emulator script
+        run: node --check scripts/android-emulator-native-media3.mjs
+      - name: Prepare actual Android launch resources
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+          bash scripts/prepare_android_icons.sh
+      - name: Append read-only native Media3 source telemetry to this disposable APK
+        run: cat .github/release-tests/observer.js >> src/main.js
+      - run: npm run build
+      - run: npx cap sync android
+      - run: bash scripts/prepare_android_icons.sh
+      - name: Expose native audio volume in emulator only
+        run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
+      - run: chmod +x android/gradlew
+      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+        working-directory: android
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Validate emulator SDK download for Android API ${{ matrix.api-level }}
+        run: bash scripts/android-emulator-sdk-preflight.sh ${{ matrix.api-level }}
+      - name: Verify actual tablet window rotation, fullscreen video bounds and unchanged playback
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_tablet
+          script: bash scripts/android-emulator-native-media3.sh tablet-display
+      - name: Upload actual tablet rotation screenshots and playback evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-tablet-video-display-api-${{ matrix.api-level }}-${{ github.run_id }}
+          path: emulator-report/
+          if-no-files-found: warn
+          retention-days: 14

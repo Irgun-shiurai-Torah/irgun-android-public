@@ -8,6 +8,7 @@ import android.view.ViewConfiguration;
 import android.widget.Button;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 import androidx.media3.common.C;
 import androidx.media3.common.Player;
@@ -393,6 +394,26 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         }, attempt == 0 ? 100 : 150);
     }
 
+    private void arrangeVideoTimes() {
+        FrameLayout bottom = surface.findViewById(androidx.media3.ui.R.id.exo_bottom_bar);
+        LinearLayout times = surface.findViewById(androidx.media3.ui.R.id.exo_time);
+        TextView position = surface.findViewById(androidx.media3.ui.R.id.exo_position);
+        TextView duration = surface.findViewById(androidx.media3.ui.R.id.exo_duration);
+        if (bottom == null || times == null || position == null || duration == null) return;
+        // Reuse the exact TextViews Media3 already updates. The existing seek
+        // bar, listeners, player and playback clock stay owned by Media3.
+        for (int i = times.getChildCount() - 1; i >= 0; i--)
+            if (times.getChildAt(i) != position) times.removeViewAt(i);
+        times.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        position.setTextColor(Color.WHITE);
+        duration.setTextColor(Color.WHITE);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        params.rightMargin = dp(16);
+        bottom.addView(duration, params);
+    }
+
     private void ensureSurface() {
         if (getActivity() == null) return;
         View v = getActivity().findViewById(android.R.id.content);
@@ -416,6 +437,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             View settings = surface.findViewById(androidx.media3.ui.R.id.exo_settings);
             if (settings != null && settings.getParent() instanceof ViewGroup)
                 ((ViewGroup) settings.getParent()).removeView(settings);
+            arrangeVideoTimes();
             surface.setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING);
             surface.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
             surface.setKeepContentOnPlayerReset(true);
@@ -714,6 +736,13 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("qualityButtonVisible", qualityButton != null && qualityButton.isShown());
             View settings = surface == null ? null : surface.findViewById(androidx.media3.ui.R.id.exo_settings);
             response.put("settingsButtonVisible", settings != null && settings.isShown());
+            TextView position = surface == null ? null : surface.findViewById(androidx.media3.ui.R.id.exo_position);
+            TextView duration = surface == null ? null : surface.findViewById(androidx.media3.ui.R.id.exo_duration);
+            response.put("elapsedTimeRect", controlRect(position));
+            response.put("durationTimeRect", controlRect(duration));
+            response.put("seekBarRect", controlRect(surface == null ? null : surface.findViewById(androidx.media3.ui.R.id.exo_progress)));
+            response.put("elapsedTimeText", position == null ? "" : position.getText().toString());
+            response.put("durationTimeText", duration == null ? "" : duration.getText().toString());
             response.put("qualityHeight", requestedQualityHeight);
             response.put("qualityMenuVisible", qualityDialog != null && qualityDialog.isShowing());
             response.put("speedMenuVisible", speedDialog != null && speedDialog.isShowing());

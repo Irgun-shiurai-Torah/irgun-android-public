@@ -6,7 +6,7 @@ import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {fullscreenEducationTapPoint} from './android-system-ui-observation.mjs';
 import {settledNativeTapPoint} from './android-native-tap-point.mjs';
 import {typeObservedNativeText} from './android-native-text-entry.mjs';
-import {verifyAndroidVideoDisplay} from './android-video-display-regression.mjs';
+import {verifyAndroidVideoDisplay,assertAndroidVideoTimes} from './android-video-display-regression.mjs';
 import {verifyAndroidTaskDismissal} from './android-task-dismissal-regression.mjs';
 
 // Read the real WebView through CDP, but perform every navigation gesture with
@@ -376,6 +376,7 @@ try {
       'Native PiP and quality buttons must be visible on the actual video',10000);
     assert.equal(shown.media3.settingsButtonVisible,false,
       'The duplicate bottom settings gear must stay removed whenever controls appear');
+    assertAndroidVideoTimes(shown.media3);
     if(fresh)assert.equal(shown.media3.doubleTapSeekCount,m.doubleTapSeekCount,
       'Physically refreshing controls must not trigger a double-tap seek');
     return shown;
@@ -390,6 +391,9 @@ try {
   };
   await verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,delay,report,
     showControls:()=>showNativeControls(),tapExit:()=>tapNativeLabel('Exit video fullscreen')});
+  if(process.env.IRGUN_VIDEO_DISPLAY_ONLY==='1') {
+    report.scope='Physical tablet video rotation and screen wake; separate from full media/account suite';
+  } else {
   // Real footer taps navigate while the SAME video continues in Mini. DOM
   // protocol node IDs prove feed/page renders do not replace the navigation.
   const navDocument=await command('DOM.getDocument',{depth:0});
@@ -701,6 +705,7 @@ try {
       minutes:15,samples:report.soak.samples.length,events:report.soak.events.length});
   }
   await verifyAndroidTaskDismissal({adb,sample,delay,report});
+  }
   report.result='passed';
 
 } catch (error) {
