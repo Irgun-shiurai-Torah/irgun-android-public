@@ -351,7 +351,17 @@ async function setOnline(online){
 async function sampleMovingVideo(){
   const a=await videoReady();
   await delay(2300);
-  const b=await read();
+  let b=await read();
+  // Real HLS briefly buffers after a native fullscreen -> Android Back
+  // transition. A stopped decoder remains a failure, but avoid reporting a
+  // transient 2-second rebuffer as an app crash while it is recovering.
+  if(a.videoEngine==='native-media3' && (!b.media3?.playing ||
+      b.media3.frames < a.media3.frames+2 || b.media3.positionMs < a.media3.positionMs+1000)) {
+    b=await wait(s=>s.media3?.playing && s.media3.videoSelected &&
+      s.media3.frames>=a.media3.frames+3 &&
+      s.media3.positionMs>a.media3.positionMs+1000,
+      'Native Media3 must resume real decoded frames after transient HLS rebuffer',18000);
+  }
   audibleVideo(b);
   assert.ok(b.video.time>a.video.time+1.0,'Video timeline must advance without a restart');
   assert.ok(b.video.frames>=a.video.frames+2,'Decoded frames must advance');

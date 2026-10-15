@@ -156,6 +156,21 @@ public final class IrgunNativeVideoPlugin extends Plugin {
                     getWidth(),ViewConfiguration.getDoubleTapTimeout(),
                     ViewConfiguration.get(getContext()).getScaledDoubleTapSlop()) : 0;
                 if (!tap) doubleTap.cancel();
+                if (direction == 0 && tap && fullscreen && !mini && !systemPip
+                        && !isControllerFullyVisible()) {
+                    // In immersive tablet fullscreen, a single physical tap
+                    // sometimes reaches PlayerView without toggling Media3's
+                    // controller. Reveal it in response to the user's tap,
+                    // not from a QA state setter, and keep its normal timeout.
+                    post(() -> {
+                        if (surface == NativePlayerView.this && fullscreen && visible
+                                && !mini && !systemPip) {
+                            showController();
+                            controllerVisible = true;
+                            updateVideoActions();
+                        }
+                    });
+                }
                 if (direction != 0) {
                     ExoPlayer player = IrgunPlaybackService.nativeVideoPlayer();
                     if (player != null) {
@@ -569,7 +584,12 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             clipHost.setVisibility(View.VISIBLE);
             surface.setLayoutParams(full);
             surface.setClipBounds(null);
-            surface.setUseController(!systemPip);
+            if (surface.getResizeMode() != AspectRatioFrameLayout.RESIZE_MODE_FIT)
+                surface.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
+            // Repeated setUseController(true) during sensor/window relayout
+            // disrupts Media3 controller visibility on large displays.
+            if (surface.getUseController() != !systemPip)
+                surface.setUseController(!systemPip);
             surface.setVisibility(View.VISIBLE);
             updateVideoActions();
             hideMiniTargets();
@@ -609,13 +629,23 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         clipParams.leftMargin = left+l;
         clipParams.topMargin = top+t;
         clipHost.setLayoutParams(clipParams);
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(w,h);
+        // On Android 15, placing a large TextureView at a negative offset
+        // inside a clipped parent can render part of its buffer as BLACK even
+        // when Media3 frames continue. Resize only the presentation view to
+        // the actually visible rectangle; ZOOM crops the picture naturally.
+        // The same underlying ExoPlayer, MediaItem and position are untouched.
+        int visibleW = r-l, visibleH = b-t;
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(visibleW,visibleH);
         params.gravity = Gravity.TOP | Gravity.LEFT;
-        params.leftMargin = -l;
-        params.topMargin = -t;
+        params.leftMargin = 0;
+        params.topMargin = 0;
         surface.setLayoutParams(params);
         surface.setClipBounds(null);
-        surface.setUseController(!mini);
+        boolean partiallyClipped = l>0 || t>0 || r<w || b<h;
+        int resizeMode = partiallyClipped ? AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            : AspectRatioFrameLayout.RESIZE_MODE_FIT;
+        if (surface.getResizeMode() != resizeMode) surface.setResizeMode(resizeMode);
+        if (surface.getUseController() != !mini) surface.setUseController(!mini);
         updateVideoActions();
         clipHost.setVisibility(View.VISIBLE);
         surface.setVisibility(View.VISIBLE);
@@ -733,8 +763,13 @@ public final class IrgunNativeVideoPlugin extends Plugin {
                 layoutSurface();
             } else if (surface != null) {
                 hideMiniTargets();
-                surface.setVisibility(View.GONE);
-                surface.setPlayer(null);
+                // Audio mode disables the VIDEO track on the same ExoPlayer.
+                // Do not detach its PlayerView/TextureView: Android 15 can
+                // keep decoding with a black screen for several seconds after
+                // the video track and output surface are reattached.
+                // INVISIBLE removes touch/picture without destroying the
+                // binding, while the sole Media3 audio output keeps playing.
+                surface.setVisibility(View.INVISIBLE);
             }
         });
         call.resolve();

@@ -92,6 +92,23 @@ test('Android native sources use Media3 and never switch to Vimeo after a transp
   assert.match(native,/showAndroidNativeVideoError\(frame,nativeError\);\s*return;/,
     'Native transport/decoder errors must stop before the Vimeo-only route');
 });
+test('Android native Audio to Video never detaches TextureView from the same Media3 player',()=>{
+ const start=bridge.indexOf('public void mode(PluginCall call)');
+ const end=bridge.indexOf('public void playback(PluginCall call)',start);
+ assert.ok(start>=0&&end>start);
+ const mode=bridge.slice(start,end);
+ assert.match(mode,/IrgunPlaybackService\.nativeVideoPresentation\(video, approved\)/);
+ assert.match(mode,/surface\.setPlayer\(IrgunPlaybackService\.nativeVideoPlayer\(\)\)/);
+ assert.match(mode,/surface\.setVisibility\(View\.INVISIBLE\)/);
+ assert.doesNotMatch(mode,/surface\.setPlayer\(null\)/,
+  'Audio mode deselects video tracks; unbinding TextureView causes black Video after handoff');
+ assert.match(bridge,/RESIZE_MODE_ZOOM/);
+ assert.match(bridge,/FrameLayout\.LayoutParams params = new FrameLayout\.LayoutParams\(visibleW,visibleH\)/,
+  'Clipped TextureView must be contained in its visible rectangle, not shifted negative');
+ assert.doesNotMatch(bridge,/params\.topMargin = -t/,
+  'Negative TextureView offsets black out the Android 15 cropped picture');
+});
+
 test('native video and native audio use the SAME ExoPlayer instance and MediaSession',()=>{
   assert.match(service,/private ExoPlayer player;/);
   assert.match(service,/public static ExoPlayer nativeVideoPlayer\(\)/);

@@ -36,6 +36,17 @@ test('real double taps stay in the unobstructed video area above the seek bar',(
    /No unobstructed video area/);
 });
 
+test('fullscreen physical taps restore Media3 controls and keep the native hide timeout',()=>{
+ const java=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
+ assert.match(java,/direction == 0 && tap && fullscreen && !mini && !systemPip/);
+ assert.match(java,/post\(\(\) -> \{[\s\S]*?showController\(\)/);
+ assert.match(java,/surface\.getUseController\(\) != !systemPip/,
+   'Resize/rotation must not repeatedly reset the controller');
+ assert.match(java,/if \(surface\.getUseController\(\) != !mini\)/);
+ assert.match(java,/setControllerShowTimeoutMs\(8000\)/,
+   'Normal video controls must still auto-hide when the user is inactive');
+});
+
 test('controller reveal taps never hit a seek bar or custom top controls',()=>{
  const m={surfaceX:0,surfaceY:121,surfaceVisibleWidth:320,surfaceVisibleHeight:150,
    seekBarRect:{x:0,y:191,width:320,height:30}};
