@@ -38,7 +38,7 @@ test('silent HLS segment buffering has bounded recovery on the SAME Media3 playe
  assert.match(watchdog,/engine\.stop\(\)/);
  assert.match(watchdog,/engine\.seekTo\(position\)/);
  assert.match(watchdog,/engine\.prepare\(\)/);
- assert.match(watchdog,/engine\.setPlaybackSpeed\(speed\)/,'Respect the user's selected speed');
+ assert.match(watchdog,/engine\.setPlaybackSpeed\(speed\)/,"Respect the user's selected speed");
  assert.doesNotMatch(watchdog,/setMediaItem\(|new ExoPlayer|new MediaSession|setVideoSurface/,
    'Silent buffering must keep exactly one player, media item and rendering surface');
  assert.match(service,/if \(state == Player\.STATE_BUFFERING\) scheduleNativeVideoStallWatch\(\)/);
