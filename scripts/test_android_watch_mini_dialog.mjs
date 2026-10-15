@@ -103,7 +103,7 @@ test('native Media3 surface hides behind Edit Shiur without pausing and returns 
 });
 
 test('Android render and persistent host both bind the gesture and modal without rebuilding player',()=>{
-  assert.match(main,/app\.innerHTML = shell\(content \+ playlistPickerHtml\(\)\);\s*syncAndroidMiniDialogVisibility\(\)/);
+  assert.match(main,/app\.innerHTML = shell\(content \+ playlistPickerHtml\(\)\);[\s\S]*?if \(typeof syncAndroidMiniDialogVisibility === 'function'\) syncAndroidMiniDialogVisibility\(\)/);
   assert.match(main,/function bindPersistentVideoChrome\(\) \{[\s\S]*?bindAndroidWatchDetailsSwipeToMini\(persistentVideoMount\.querySelector/);
   assert.match(main,/document\.querySelectorAll\('\.watch-overlay'\)\.forEach\(bindAndroidWatchDetailsSwipeToMini\)/);
   assert.match(adapter,/\.admin-editor-backdrop/);
