@@ -5,7 +5,7 @@ import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createAndroidVideoDisplaySync} from '../src/android-video-display.js';
-import {assertAndroidVideoTimes} from './android-video-display-regression.mjs';
+import {assertAndroidVideoTimes,nativeControllerRevealPoint} from './android-video-display-regression.mjs';
 
 test('native Media3 surface uses TextureView to preserve actual scroll-clipped video pixels',()=>{
  const java=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
@@ -14,6 +14,22 @@ test('native Media3 surface uses TextureView to preserve actual scroll-clipped v
  assert.match(java,/surface = createClippableVideoSurface\(\)/);
  assert.match(java,/super\(getActivity\(\), attrs\)/);
  assert.doesNotMatch(java,/surface = new NativePlayerView\(\)/);
+ assert.match(java,/clipHost = new FrameLayout\(getActivity\(\)\)/);
+ assert.match(java,/clipHost.setClipChildren\(true\)/);
+ assert.match(java,/clipHost.setLayoutParams\(clipParams\)/);
+ assert.doesNotMatch(java,/surface.setClipBounds\(new Rect/,
+   'Clipping the PlayerView itself must not black out Android 16 video pixels');
+});
+
+test('controller reveal taps never hit a seek bar or custom top controls',()=>{
+ const m={surfaceX:0,surfaceY:121,surfaceVisibleWidth:320,surfaceVisibleHeight:150,
+   seekBarRect:{x:0,y:191,width:320,height:30}};
+ const [x,y]=nativeControllerRevealPoint(m).map(Number);
+ assert.ok(x>200&&x<300&&y>=171&&y<179,'The real emulator touch must be above the native seek bar');
+ assert.throws(()=>nativeControllerRevealPoint({...m,seekBarRect:{x:0,y:166,width:320,height:30}}),/non-seeking reveal/);
+ const wide=nativeControllerRevealPoint({...m,surfaceY:0,surfaceVisibleWidth:800,surfaceVisibleHeight:600,
+   seekBarRect:{x:0,y:515,width:800,height:30}}).map(Number);
+ assert.ok(wide[1]>50&&wide[1]<500);
 });
 
 test('native time layout observation rejects grouped, reversed, stale and hidden timestamps',()=>{
@@ -72,7 +88,8 @@ test('tablet video keeps an adaptive full-sensor window instead of opting into f
  const xml=readFileSync('android/app/src/main/AndroidManifest.xml','utf8');
  const main=xml.match(/<activity\b[^>]*android:name="\.MainActivity"[\s\S]*?<\/activity>/)?.[0];
  assert.ok(main);
- assert.doesNotMatch(main,/PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY/);
+ assert.match(main,/PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY/,
+   'Android 16 targetSdk 36 must allow Activity-only orientation compatibility while rotation lock is on');
  assert.match(main,/<property\s+android:name="android\.window\.PROPERTY_COMPAT_IGNORE_REQUESTED_ORIENTATION"\s+android:value="false"/);
  assert.match(main,/android:resizeableActivity="true"/,'App stays resizable; rotation applies only while watching video');
  const controller=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunVideoDisplayController.java','utf8');

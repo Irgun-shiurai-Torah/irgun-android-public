@@ -324,6 +324,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         if (miniPlayPauseTarget != null) miniPlayPauseTarget.setVisibility(View.GONE);
     }
     private FrameLayout root;
+    private FrameLayout clipHost;
     private boolean visible = false;
     private boolean mini = false;
     private final View.OnLayoutChangeListener rootLayoutListener =
@@ -464,7 +465,15 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             surface.setElevation(12f);
             FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(1,1);
             params.gravity = Gravity.TOP | Gravity.LEFT;
-            root.addView(surface, params);
+            // Clip a normal Android ViewGroup, not PlayerView/TextureView's
+            // renderer itself. API 36 renders only a thin video strip when
+            // setClipBounds is applied directly to a partly-scrolled PlayerView.
+            clipHost = new FrameLayout(getActivity());
+            clipHost.setClipChildren(true);
+            clipHost.setClipToPadding(true);
+            clipHost.setElevation(12f);
+            root.addView(clipHost, new FrameLayout.LayoutParams(1,1));
+            clipHost.addView(surface, params);
             videoActions = new LinearLayout(getActivity());
             videoActions.setOrientation(LinearLayout.HORIZONTAL);
             videoActions.setGravity(Gravity.END);
@@ -544,7 +553,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     }
 
     private void layoutSurface() {
-        if (surface == null || root == null || getBridge() == null) return;
+        if (surface == null || root == null || clipHost == null || getBridge() == null) return;
         WebView web = getBridge().getWebView();
         updateVideoActions();
         if ((fullscreen || systemPip) && visible) {
@@ -556,6 +565,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             full.gravity = Gravity.TOP | Gravity.LEFT;
             full.leftMargin = 0;
             full.topMargin = 0;
+            clipHost.setLayoutParams(new FrameLayout.LayoutParams(full));
+            clipHost.setVisibility(View.VISIBLE);
             surface.setLayoutParams(full);
             surface.setClipBounds(null);
             surface.setUseController(!systemPip);
@@ -566,6 +577,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         }
         if (web == null || viewportWidth <= 0 || viewportHeight <= 0
                 || width <= 0 || height <= 0 || !visible) {
+            clipHost.setVisibility(View.GONE);
             surface.setVisibility(View.GONE);
             hideMiniTargets();
             return;
@@ -579,15 +591,33 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         int top = webScreen[1] - rootScreen[1] + Math.round(y * scaleY);
         int w = Math.max(1, Math.round(width * scaleX));
         int h = Math.max(1, Math.round(height * scaleY));
+        // A clipped parent preserves the unscaled, full-size video underneath
+        // the overlay/header. The internal TextureView is never re-created,
+        // cropped by TextureView clipBounds, or replaced with another player.
+        int l = Math.max(0,Math.min(w,Math.round(clipLeft*scaleX)));
+        int t = Math.max(0,Math.min(h,Math.round(clipTop*scaleY)));
+        int r = Math.max(l,Math.min(w,Math.round(clipRight*scaleX)));
+        int b = Math.max(t,Math.min(h,Math.round(clipBottom*scaleY)));
+        if (r <= l || b <= t) {
+            clipHost.setVisibility(View.GONE);
+            surface.setVisibility(View.GONE);
+            hideMiniTargets();
+            return;
+        }
+        FrameLayout.LayoutParams clipParams = new FrameLayout.LayoutParams(r-l,b-t);
+        clipParams.gravity = Gravity.TOP | Gravity.LEFT;
+        clipParams.leftMargin = left+l;
+        clipParams.topMargin = top+t;
+        clipHost.setLayoutParams(clipParams);
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(w,h);
         params.gravity = Gravity.TOP | Gravity.LEFT;
-        params.leftMargin = left;
-        params.topMargin = top;
+        params.leftMargin = -l;
+        params.topMargin = -t;
         surface.setLayoutParams(params);
-        surface.setClipBounds(new Rect(Math.round(clipLeft*scaleX),Math.round(clipTop*scaleY),
-            Math.round(clipRight*scaleX),Math.round(clipBottom*scaleY)));
+        surface.setClipBounds(null);
         surface.setUseController(!mini);
         updateVideoActions();
+        clipHost.setVisibility(View.VISIBLE);
         surface.setVisibility(View.VISIBLE);
         if (miniExpandTarget != null) {
             if (mini) {
@@ -653,6 +683,14 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             fullscreen = expand;
             if (expand) mini = false;
             layoutSurface();
+            if (expand && surface != null) {
+                // Controls can become hidden during tablet sensor window resize.
+                surface.showController();
+                main.postDelayed(() -> {
+                    if (surface != null && fullscreen && visible && !systemPip)
+                        surface.showController();
+                }, 400);
+            }
             call.resolve();
         });
     }
@@ -848,6 +886,11 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             ViewGroup parent = (ViewGroup)surface.getParent();
             if (parent != null) parent.removeView(surface);
             surface = null;
+        }
+        if (clipHost != null) {
+            ViewGroup parent = (ViewGroup)clipHost.getParent();
+            if (parent != null) parent.removeView(clipHost);
+            clipHost = null;
         }
         root = null;
     }

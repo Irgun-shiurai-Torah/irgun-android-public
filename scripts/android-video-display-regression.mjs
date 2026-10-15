@@ -2,6 +2,18 @@ import assert from 'node:assert/strict';
 import {writeFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 
+// Real Video controller reveal taps must stay away from Media3's seek bar.
+export function nativeControllerRevealPoint(media) {
+ const {surfaceX:x,surfaceY:y,surfaceVisibleWidth:w,surfaceVisibleHeight:h,seekBarRect:seek}=media;
+ assert.ok([x,y,w,h].every(Number.isFinite)&&w>120&&h>100,'A real video surface is needed before a controller tap');
+ const top=y+50;
+ const bottom=Math.min(y+h-12,seek?.y===undefined?y+h*.70:seek.y-12);
+ assert.ok(bottom>top,'Video controls and seek bar must leave a real non-seeking reveal region');
+ const posY=Math.round(Math.max(top,Math.min(y+h*.36,bottom)));
+ assert.ok(!seek || posY<seek.y-10,'Controller reveal must not seek the video');
+ return [String(Math.round(x+w*.74)),String(posY)];
+}
+
 export function assertAndroidVideoTimes(media) {
  const {elapsedTimeRect:p,durationTimeRect:d,seekBarRect:bar}=media;
  assert.ok(p&&d&&bar,'Actual native elapsed time, duration and seek bar must all be visible');

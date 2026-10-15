@@ -6,7 +6,7 @@ import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {fullscreenEducationTapPoint} from './android-system-ui-observation.mjs';
 import {settledNativeTapPoint,waitForNativeWindowFocus} from './android-native-tap-point.mjs';
 import {typeObservedNativeText} from './android-native-text-entry.mjs';
-import {verifyAndroidVideoDisplay,assertAndroidVideoTimes} from './android-video-display-regression.mjs';
+import {verifyAndroidVideoDisplay,assertAndroidVideoTimes,nativeControllerRevealPoint} from './android-video-display-regression.mjs';
 import {verifyAndroidTaskDismissal} from './android-task-dismissal-regression.mjs';
 
 // Read the real WebView through CDP, but perform every navigation gesture with
@@ -390,8 +390,10 @@ try {
       await waitForNativeWindowFocus({readBounds:observeWindow,delay});
     }
     const s=await sample(), m=s.media3;
-    const point=[String(Math.round(m.surfaceX+m.surfaceVisibleWidth*.95)),
-      String(Math.round(m.surfaceY+m.surfaceVisibleHeight*.48))];
+    // Previously 48% of the player overlapped the real seek bar on a
+    // 320x640 emulator, silently seeking a 1:42 lecture to ~1:40.
+    // Read the actual seek rectangle and reveal controls above it.
+    const point=nativeControllerRevealPoint(m);
     const hasTimeRow=m.elapsedTimeRect&&m.durationTimeRect&&m.seekBarRect;
     if(m.controllerFullyVisible&&(fresh||!hasTimeRow)){
       // A visible control may have only milliseconds left on its timer.

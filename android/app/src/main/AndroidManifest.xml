@@ -25,7 +25,12 @@
             android:resizeableActivity="true"
             android:exported="true">
 
-            <!-- Video sensor rotation remains adaptive on large displays. -->
+            <!-- Android 16 targetSdk 36 ignores sensor-landscape requests on
+                 tablets unless temporarily opted out. This is MainActivity-only
+                 and does not disable adaptive resizing. Migrate for API 37. -->
+            <property
+                android:name="android.window.PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY"
+                android:value="true" />
             <property
                 android:name="android.window.PROPERTY_COMPAT_IGNORE_REQUESTED_ORIENTATION"
                 android:value="false" />
