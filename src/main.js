@@ -4165,7 +4165,8 @@ const androidPaidQuestionIndex=createAndroidPaidQuestionController({
 function androidPaidFolderHtml(item, expanded) {
   const tree=paidFolderTreeHtml(item,{esc,openFolders:state.paidOpenFolders,isHebrew:currentLanguage()==='he'});
   if(!item.owned)return tree;
-  return '<div class="paid-album" '+(expanded?'':'hidden')+'><div class="paid-track-head"><strong>Your Audio</strong><span>Protected personal listening</span></div>'+tree+paidMaterialsHtml(item)+'</div>';
+  const he=currentLanguage()==='he';
+  return '<div class="paid-album" '+(expanded?'':'hidden')+'><div class="paid-track-head"><strong>'+(he?'ההקלטות שלכם':'Your Audio')+'</strong><span>'+(he?'האזנה פרטית ומאובטחת':'Protected personal listening')+'</span></div>'+tree+paidMaterialsHtml(item)+'</div>';
 }
 function paidProductCard(item) {
   const id = String(item.id || '');
@@ -4176,7 +4177,7 @@ function paidProductCard(item) {
   const status = item.owned ? tr('Purchased') : item.available ? tr('Available now') : tr('Coming Soon');
   const statusClass = item.owned ? 'owned' : item.available ? 'available' : 'coming';
   const coverHtml = images.length ? `<div class="paid-cover paid-cover-carousel" data-paid-carousel="${esc(id)}"><div class="paid-cover-track">${images.map((url,index)=>`<div class="paid-cover-slide" data-paid-slide="${index}"><img src="${esc(url)}" alt="${esc(paidProductTitle(item, 'Paid shiur'))}${images.length>1?` ${index+1}`:''}" loading="${index===0?'eager':'lazy'}" ${index===0?'fetchpriority="high"':''} decoding="async"></div>`).join('')}</div>${images.length>1?`<div class="paid-cover-dots">${images.map((_,index)=>`<button type="button" class="paid-cover-dot ${index===0?'active':''}" data-paid-image-dot="${index}" aria-label="Show picture ${index+1}"></button>`).join('')}</div>`:''}<button type="button" class="paid-cover-zoom" data-paid-image-open="${esc(id)}">View</button>${item.featured ? '<span class="paid-featured">FEATURED</span>' : ''}${item.owned ? '<span class="paid-owned">PURCHASED</span>' : ''}</div>` : `<div class="paid-cover">${logoArtworkHtml()}${item.featured ? '<span class="paid-featured">FEATURED</span>' : ''}${item.owned ? '<span class="paid-owned">PURCHASED</span>' : ''}</div>`;
-  return `<article class="paid-card ${item.featured ? 'featured' : ''} ${item.owned ? 'owned' : ''}">
+  return `<article class="paid-card ${item.featured ? 'featured' : ''} ${item.owned ? 'owned' : ''} ${expanded && Capacitor.getPlatform()==='android' ? 'expanded' : ''}" data-paid-collection-id="${esc(id)}">
     ${coverHtml}
     <div class="paid-body"><div class="paid-card-topline"><span class="paid-category">${esc(item.category || 'Audio Collection')}</span><span class="paid-status-chip ${statusClass}">${esc(status)}</span></div><h2>${esc(paidProductTitle(item))}</h2>${item.speaker ? `<strong class="paid-speaker">${esc(item.speaker)}</strong>` : ''}<div class="paid-meta">${esc([item.catalogDetails, item.audience].filter(Boolean).join(' • '))}</div>
       <div class="paid-price-row"><strong>${esc(paidProductPriceLabel(item))}</strong><span>${item.trackCount ? `${Number(item.trackCount)} tracks` : ''}</span></div>
@@ -7034,6 +7035,13 @@ function bind() {
     state.paidExpandedId = state.paidExpandedId === id ? '' : id;
     if(state.paidExpandedId){const product=state.paidCatalog.find(item=>String(item.id)===id);const first=product?.tracks?.[0];if(first)prefetchPaidTrack(id,first.id);}
     render();
+    if(Capacitor.getPlatform()==='android' && state.paidExpandedId===id){
+      // Keep the expanded collection in view after rebuilding the page.
+      // The folder tree uses ordinary document scrolling, not a nested 64vh
+      // scroller that can trap native Samsung touch gestures.
+      requestAnimationFrame(()=>document.querySelector(`[data-paid-collection-id="${CSS.escape(id)}"]`)
+        ?.scrollIntoView({block:'start',behavior:'smooth'}));
+    }
   }));
   document.querySelectorAll('[data-paid-description]').forEach(el => el.addEventListener('click', () => {
     const id = String(el.dataset.paidDescription || '');
