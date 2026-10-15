@@ -33,6 +33,19 @@ public class MainActivity extends BridgeActivity {
     private static final String PIP_TAG = "IrgunSystemPiP";
     private OnBackPressedCallback fullscreenBackCallback;
     private IrgunVideoDisplayController videoDisplay;
+    // ACTION_CHOOSER triggers onUserLeaveHint even though it is a temporary
+    // overlay, not Home. Suppress a Video -> Audio handoff only for this
+    // bounded, explicitly requested Share sheet; do not pause/reload Media3.
+    private long nativeShareSheetGuardUntilMs = 0L;
+
+    public void setNativeShareSheetActive(boolean active) {
+        nativeShareSheetGuardUntilMs = active
+            ? android.os.SystemClock.elapsedRealtime() + 120000L : 0L;
+    }
+
+    private boolean nativeShareSheetIsOpening() {
+        return nativeShareSheetGuardUntilMs > android.os.SystemClock.elapsedRealtime();
+    }
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -304,7 +317,7 @@ public class MainActivity extends BridgeActivity {
         // this gives it time to seek/start before Android suspends Vimeo and makes
         // the Home-button transition much closer to seamless. Explicit PiP sets the
         // PiP guard before this callback and therefore never starts background audio.
-        if (!isIrgunPipVisible()) {
+        if (!isIrgunPipVisible() && !nativeShareSheetIsOpening()) {
             IrgunPlaybackPlugin.handleAppBackgrounded();
         }
         super.onUserLeaveHint();
@@ -387,6 +400,9 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
+        // The system Share sheet has closed, or the user returned from its
+        // destination. Never let the temporary Share guard affect a later Home.
+        setNativeShareSheetActive(false);
         // Mark the Activity visible, but do not push JavaScript into the WebView here.
         // Android may call onResume while Capacitor is still restoring/replacing the
         // WebView after Home or a notification tap. The live JS page proves it is
