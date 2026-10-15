@@ -130,6 +130,8 @@ test('Android folder albums and long paid-track lists use page scrolling, not a 
   const main=readFileSync('src/main.js','utf8');
   assert.match(main,/data-paid-collection-id="/);
   assert.match(main,/scrollIntoView\(\{block:'start',behavior:'smooth'\}\)/);
+  assert.match(main,/event\.pointerType==='mouse'\|\|event\.pointerType==='pen'/,
+    'Touch scrolling over owned tracks must not start protected playback prefetch');
   const previewHtml=paidFolderTreeHtml({...product,owned:false,folderPreview:[
     {folders:['Volume 1','Shabbos'],trackCount:20},
     {folders:['Volume 2','Pesach'],trackCount:30}
