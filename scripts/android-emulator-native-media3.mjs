@@ -216,16 +216,13 @@ try {
     throw new Error(label+'; last='+JSON.stringify(result));
   };
   const captureVisibleNativePicture=async(snapshot,name)=>{
-    // Measure the picture after physically hiding the controller scrim. On a
-    // partly scrolled stage its dark bottom controls can cover the entire crop.
-    if(snapshot.media3.controllerFullyVisible){
-      const m=snapshot.media3;
-      adb('shell','input','tap',String(Math.round(m.surfaceX+m.surfaceVisibleWidth*.95)),
-        String(Math.round(m.surfaceY+m.surfaceVisibleHeight*.48)));
-      await waitNative(s=>!s.media3.controllerFullyVisible&&!s.media3.qualityButtonVisible,
-        'Physical video tap must hide the controller before measuring picture pixels');
-      await delay(500);
-    }
+    // Measure the picture after the actual controller scrim has disappeared.
+    // With most of a scrolled stage clipped, every visible pixel can belong
+    // to a transport/seek control. Wait for the real eight-second auto-hide;
+    // tapping an assumed empty point there could accidentally seek the lecture.
+    await waitNative(s=>!s.media3.controllerFullyVisible&&!s.media3.qualityButtonVisible,
+      'Native controller must auto-hide before measuring unobscured picture pixels',12000);
+    await delay(500);
     snapshot=await sample();
     const m=snapshot.media3;
     assert.ok(m.surfaceVisibleOnScreen && m.surfaceVisibleWidth>120 &&
