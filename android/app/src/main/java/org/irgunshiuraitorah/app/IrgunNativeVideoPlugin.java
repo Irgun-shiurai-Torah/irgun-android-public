@@ -732,6 +732,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("fullscreen", fullscreen);
             response.put("mini", mini);
             response.put("systemPip", systemPip);
+            response.put("controllerFullyVisible", surface != null && surface.isControllerFullyVisible());
             response.put("pipButtonVisible", pipButton != null && pipButton.isShown());
             response.put("qualityButtonVisible", qualityButton != null && qualityButton.isShown());
             View settings = surface == null ? null : surface.findViewById(androidx.media3.ui.R.id.exo_settings);

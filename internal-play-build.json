@@ -1,11 +1,13 @@
 {
   "sourceBranch": "fix/android-postmerge-like-home-20261013",
-  "sourceCommit": "40a60fbf04bc8d64771acc61cef9741f77dc019a",
+  "sourceCommit": "99bfa00263b028d0e6143829f695c99a48079c03",
   "track": "internal",
-  "requestedAt": "2026-10-15T09:11:02.101Z",
+  "requestedAt": "2026-10-15T09:32:22.202Z",
   "pullRequest": 37,
   "mergeIntoMain": false,
   "features": [
+    "Noninteractive Splash does not take an input focus channel during first WebView setup; known Android immersive education is handled before native control tests",
+    "Tablet video uses FULL_SENSOR to rotate actual display without fixed-orientation letterboxing, while retaining user rotation setting and restoring prior policy outside video",
     "Account gestures use measured unobscured scroll area above floating nav; handle Overview education before actual task-dismiss swipe; verify actual recent task disappears",
     "Bind persistent Android PiP/mode/close controls once; clear old native error overlay only after same-player frames recover",
     "Compact native Media3 controls keep seek/time row visible in portrait and after Mini expansion",
@@ -26,11 +28,11 @@
     "Account tests pin a descriptor-verified native-video/audio lecture; Vimeo-only playback tested separately"
   ],
   "verification": {
-    "localTests": 254,
-    "androidPackaging": "npm run test:player passed",
-    "status": "Fresh physical emulator regression runs started; results pending. Screenshot capture supports full tablet PNGs. Notification reopen waits for observed window focus.",
-    "fullMatrixRun": 38711030350,
-    "startupRun": 38711030354
+    "localTests": 255,
+    "androidPackaging": "npm run test:player passed for web changes; later changes native/test only",
+    "status": "General media tests passed API30/34/35/36 on preceding source. Fresh complete suite includes physical screenshot orientation/coverage, fully visible native controller, and verified top-recent-task card identity.",
+    "fullMatrixRun": 38713625463,
+    "startupRun": 38713627606
   },
-  "releaseAttempt": 18
+  "releaseAttempt": 19
 }

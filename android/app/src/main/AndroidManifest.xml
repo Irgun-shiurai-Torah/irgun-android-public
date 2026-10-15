@@ -25,11 +25,7 @@
             android:resizeableActivity="true"
             android:exported="true">
 
-            <!-- Video tilt explicitly requests landscape even with rotation lock on.
-                 Android 16 otherwise ignores that request on tablet displays. -->
-            <property
-                android:name="android.window.PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY"
-                android:value="true" />
+            <!-- Video sensor rotation remains adaptive on large displays. -->
             <property
                 android:name="android.window.PROPERTY_COMPAT_IGNORE_REQUESTED_ORIENTATION"
                 android:value="false" />
