@@ -2860,3 +2860,265 @@ body.irgun-android.irgun-mini-modal-open .mini-player {
 body.irgun-android #persistentVideoMount.watch-full-host .watch-scroll {
   touch-action: pan-y;
 }
+
+/* Android purchase catalog: website-inspired compact cards and ONE natural
+   vertical page scroller. Previously the 64vh folder scroller combined with
+   overscroll-behavior:contain trapped Samsung/WebView drags inside a nested
+   <details> tree, preventing the user from reaching later folders/tracks.
+   The native Media3 player, purchase controls and entitlement checks are
+   unaffected by these presentation-only rules. */
+body.irgun-android .paid-grid {
+  align-items:start;
+  gap:14px;
+}
+body.irgun-android .paid-card {
+  min-width:0;
+  background:#fff;
+  border:1px solid #e2e8f0;
+  border-radius:19px !important;
+  box-shadow:0 9px 28px rgba(15,31,53,.065);
+}
+body.irgun-android .paid-card.owned { border-color:#d8c59e; }
+body.irgun-android .paid-card.expanded { grid-column:1/-1; }
+body.irgun-android .paid-card .paid-cover,
+body.irgun-android .paid-card .paid-cover-slide {
+  height:190px;
+  min-height:0;
+  aspect-ratio:auto;
+  background:#f8fafc;
+}
+body.irgun-android .paid-card .paid-cover img,
+body.irgun-android .paid-card .paid-cover-slide img {
+  object-fit:contain;
+  height:100%;
+  max-height:100%;
+}
+body.irgun-android .paid-card .paid-body { padding:17px; min-width:0; }
+body.irgun-android .paid-body h2 { font-size:19px; line-height:1.38; overflow-wrap:anywhere; }
+body.irgun-android .paid-category {
+  display:inline-flex;
+  align-items:center;
+  padding:6px 9px;
+  margin-bottom:8px;
+  border:1px solid #ead4a4;
+  border-radius:999px;
+  background:#fff8ed;
+  color:#795b27;
+  font-size:10px;
+}
+body.irgun-android .paid-status-chip { font-size:10px; border-radius:999px; }
+body.irgun-android .paid-speaker { color:#94703c; font-size:12px; }
+body.irgun-android .paid-meta { font-size:11px; line-height:1.5; }
+body.irgun-android .paid-actions { margin-top:13px; }
+body.irgun-android .paid-actions button { min-height:44px; font-size:12px; }
+body.irgun-android .paid-primary {
+  background:linear-gradient(180deg,#ddc38d,#c8a46b);
+  color:#172338;
+}
+body.irgun-android .paid-secondary { background:#f5f7fb; }
+body.irgun-android .paid-album { overflow:visible; }
+body.irgun-android .paid-album[hidden] { display:none !important; }
+body.irgun-android .paid-track-head { margin:16px 0 10px; }
+body.irgun-android .paid-track-head strong { font-size:15px; color:#15283f; }
+body.irgun-android .paid-track-head span { font-size:11px; line-height:1.4; }
+
+/* Expandable album/session/track rows scroll with the WHOLE purchase page.
+   No max-height, nested overflow scrolling or overscroll trapping. */
+body.irgun-android .paid-folder-overview {
+  width:100%;
+  margin:13px 0 15px;
+  padding:14px;
+  border:1px solid #e4e8ed;
+  border-radius:15px;
+  background:#f8fafc;
+  box-shadow:none;
+  min-width:0;
+  overflow:visible;
+  touch-action:pan-y;
+}
+body.irgun-android .paid-folder-overview-title { align-items:center; margin-bottom:3px; }
+body.irgun-android .paid-folder-overview-title > strong { font-size:14px; color:#182f46; }
+body.irgun-android .paid-folder-overview-title > span {
+  border-radius:999px;
+  background:#fff;
+  padding:5px 9px;
+  border:1px solid #e0e7ef;
+  font-size:11px;
+}
+body.irgun-android .paid-folder-guidance {
+  margin:0 0 13px;
+  font-size:11.5px;
+  color:#66758a;
+  line-height:1.55;
+}
+body.irgun-android .paid-folder-tree {
+  display:grid;
+  gap:9px;
+  max-height:none !important;
+  height:auto !important;
+  min-height:0;
+  overflow:visible !important;
+  overscroll-behavior-y:auto !important;
+  -webkit-overflow-scrolling:auto;
+  touch-action:pan-y;
+}
+body.irgun-android .paid-folder-node {
+  min-width:0;
+  overflow:visible;
+  border:1px solid #e2e8f0;
+  border-radius:12px;
+  background:#fff;
+  box-shadow:0 2px 7px rgba(15,31,53,.035);
+  touch-action:pan-y;
+}
+body.irgun-android .paid-folder-node > summary {
+  display:flex;
+  align-items:center;
+  gap:9px;
+  min-width:0;
+  padding:13px 11px;
+  min-height:52px;
+  touch-action:pan-y;
+}
+body.irgun-android .paid-folder-node[open] > summary {
+  background:#fffcf6;
+  border-radius:12px 12px 0 0;
+  border-bottom:1px solid #ebe6dc;
+}
+body.irgun-android .paid-folder-icon {
+  display:block;
+  width:19px;
+  height:19px;
+  flex:0 0 19px;
+  color:#aa8245;
+}
+body.irgun-android .paid-folder-name {
+  flex:1 1 auto;
+  min-width:0;
+  line-height:1.4;
+  font-size:13px;
+  font-weight:780;
+  white-space:normal;
+  overflow-wrap:anywhere;
+  text-align:start;
+}
+body.irgun-android .paid-folder-count {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  flex:0 0 auto;
+  max-width:92px;
+  padding:5px 7px;
+  border-radius:999px;
+  background:#f2f5f9;
+  border:1px solid #e5e9ef;
+  color:#66758a;
+  font-size:10px;
+  font-weight:700;
+  white-space:normal;
+  line-height:1.3;
+  text-align:center;
+}
+body.irgun-android .paid-folder-chevron {
+  flex:0 0 16px;
+  color:#94703c;
+}
+body.irgun-android .paid-folder-children {
+  margin-inline-start:12px;
+  padding:10px 9px 12px 12px;
+  border-inline-start:1px solid #e5e9ef;
+  overflow:visible;
+  touch-action:pan-y;
+}
+body.irgun-android .paid-folder-leaf {
+  min-height:48px;
+  border:1px solid #e1e7ee;
+  background:#fff;
+  touch-action:pan-y;
+}
+body.irgun-android .paid-folder-track {
+  display:flex;
+  align-items:center;
+  width:100%;
+  min-height:51px;
+  margin:0;
+  border:1px solid #e4e9ee;
+  border-radius:11px;
+  background:#fff;
+  color:#172b43;
+  gap:10px;
+  padding:10px 9px;
+  text-align:start;
+  touch-action:pan-y;
+}
+body.irgun-android .paid-folder-track .paid-track-info { flex:1 1 auto; min-width:0; }
+body.irgun-android .paid-folder-track strong {
+  display:block;
+  font-size:12px;
+  font-weight:730;
+  line-height:1.4;
+  white-space:normal;
+  overflow-wrap:anywhere;
+  text-align:start;
+}
+body.irgun-android .paid-folder-track small { font-size:10px; margin-top:3px; }
+body.irgun-android .paid-folder-track .paid-track-num {
+  flex:0 0 29px;
+  width:29px;
+  min-width:29px;
+  height:29px;
+  border-radius:9px;
+  background:#f3f5f7;
+  color:#94703c;
+  font-size:11px;
+}
+body.irgun-android .paid-folder-track .paid-track-play {
+  flex:0 0 27px;
+  width:27px;
+  height:27px;
+  display:grid;
+  place-items:center;
+  border-radius:50%;
+  color:#fff;
+  background:#b18b53;
+  font-size:10px;
+}
+body.irgun-android .paid-folder-locked {
+  border-top:1px solid #e5e9ef;
+  padding-top:12px;
+  margin-top:12px;
+}
+body.irgun-android .paid-index-page,
+body.irgun-android .paid-index-album,
+body.irgun-android .paid-index-sessions,
+body.irgun-android .paid-index-session,
+body.irgun-android #paidQuestionResults,
+body.irgun-android .purchased-library {
+  max-height:none;
+  overflow:visible;
+  overscroll-behavior-y:auto;
+  touch-action:pan-y;
+}
+body.irgun-android .paid-index-searchbar { box-shadow:0 4px 15px rgba(15,31,53,.045); }
+body.irgun-android .paid-index-album { box-shadow:0 4px 15px rgba(15,31,53,.045); }
+body.irgun-android .paid-index-session>summary { min-height:48px; touch-action:pan-y; }
+
+/* A normal page swipe must work even when started over folder summary/track
+   content; keep the floating navigation beneath long purchase lists. */
+body.irgun-android .paid-catalog-section,
+body.irgun-android .purchased-library,
+body.irgun-android .paid-index-page {
+  padding-bottom:calc(env(safe-area-inset-bottom) + 10px);
+  touch-action:pan-y;
+}
+body.irgun-android .paid-card { scroll-margin-top:calc(84px + env(safe-area-inset-top)); }
+@media (max-width:520px) {
+  body.irgun-android .paid-card .paid-cover,
+  body.irgun-android .paid-card .paid-cover-slide { height:172px; min-height:0; aspect-ratio:auto; }
+  body.irgun-android .paid-card .paid-body { padding:13px; }
+  body.irgun-android .paid-body h2 { font-size:17px; }
+  body.irgun-android .paid-folder-overview { padding:11px; }
+  body.irgun-android .paid-folder-node > summary { padding:12px 8px; gap:7px; }
+  body.irgun-android .paid-folder-children { margin-inline-start:6px; padding:8px 5px 10px 9px; }
+  body.irgun-android .paid-folder-count { max-width:72px; font-size:9px; }
+}
