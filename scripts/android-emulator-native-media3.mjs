@@ -640,6 +640,16 @@ try {
   await waitNative(s=>s.media3.systemPip&&s.media3.playing,'Header PiP icon must enter system PiP');
   assert.match(adb('shell','dumpsys','activity','activities'),/mode=pinned/);
   adb('shell','am','start','-W','-n','org.irgunshiuraitorah.app/.MainActivity');
+  await delay(1300);
+  if ((await sample()).media3.systemPip) {
+    // A second pinned task on Android 16 sometimes ignores an explicit Main
+    // activity intent. Reopen using the real LAUNCHER path rather than faking
+    // PiP state or restarting a second player.
+    adb('shell','am','start','-W','-a','android.intent.action.MAIN',
+      '-c','android.intent.category.LAUNCHER',
+      '-n','org.irgunshiuraitorah.app/.SplashActivity');
+    report.gestures.push({reopenedPipThroughActualLauncher:true});
+  }
   const headerAfter=await waitNative(s=>!s.media3.systemPip&&s.media3.surfaceVisibleOnScreen&&s.media3.playing,
     'Header PiP return must restore the same visible player');
   samePlayback(headerBefore,headerAfter.media3,'Header PiP',Date.now()-headerPipStart);

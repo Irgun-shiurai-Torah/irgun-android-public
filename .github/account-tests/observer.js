@@ -12,7 +12,7 @@ window.ISTAccountTest = {
     editedQaText:qaCommentId ? '#editCommentText-'+qaCommentId : '#irgun-qa-comment-unavailable',
     saveQaComment:qaCommentId ? '[data-save-comment="'+qaCommentId+'"]' : '#irgun-qa-comment-unavailable',
     deleteQaComment:qaCommentId ? '[data-delete-comment="'+qaCommentId+'"]' : '#irgun-qa-comment-unavailable',
-    account: '.bottom-nav [data-nav="account"]', shiurim: '.bottom-nav [data-nav="shiurim"]',
+    home: '.bottom-nav [data-nav="home"]', account: '.bottom-nav [data-nav="account"]', shiurim: '.bottom-nav [data-nav="shiurim"]',
     library: '.bottom-nav [data-nav="library"]', email: '#authEmail', password: '#authPassword',
     login: '#authForm button[type="submit"]', logout: '[data-logout]',
     profile: '[data-account-section="profile"]', settings: '[data-account-section="settings"]',

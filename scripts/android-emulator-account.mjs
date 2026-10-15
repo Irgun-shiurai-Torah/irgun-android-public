@@ -458,6 +458,12 @@ try{
    await type('email',email);await type('password',password);await tap('login');
    await wait(s=>s.loggedIn&&!s.isAdmin,'A dedicated signed-in session is required for the separate media suite');
    report.checks.push('Dedicated QA session established for separate logged-in playback regression suite');
+    // The next independent media test starts with Home search. Navigate with
+    // a real Android tap while retaining the same signed-in QA session.
+    await tap('home');
+    await wait(s=>s.screen==='home'&&s.loggedIn&&s.ready,
+      'Account handoff must return to Home before separate native playback tests');
+    report.checks.push('Real Home tap preserves logged-in session for the playback suite');
  }
  report.unverified=['Other valid user comment ownership requires a second dedicated QA account','Session expiry and external revocation are unverified; tests do not extract the application session credential'];
  report.accountMutationsFinishedAt=new Date().toISOString();report.status='passed';

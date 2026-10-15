@@ -7,6 +7,15 @@ import {join} from 'node:path';
 import {createAndroidVideoDisplaySync} from '../src/android-video-display.js';
 import {assertAndroidVideoTimes} from './android-video-display-regression.mjs';
 
+test('native Media3 surface uses TextureView to preserve actual scroll-clipped video pixels',()=>{
+ const java=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
+ const xml=readFileSync('android/app/src/main/res/xml/irgun_native_texture_player.xml','utf8');
+ assert.match(xml,/app:surface_type="texture_view"/);
+ assert.match(java,/surface = createClippableVideoSurface\(\)/);
+ assert.match(java,/super\(getActivity\(\), attrs\)/);
+ assert.doesNotMatch(java,/surface = new NativePlayerView\(\)/);
+});
+
 test('native time layout observation rejects grouped, reversed, stale and hidden timestamps',()=>{
  const native={surfaceX:0,surfaceVisibleWidth:960,positionMs:243000,durationMs:3475000,
   elapsedTimeText:'04:03',durationTimeText:'57:55',elapsedTimeRect:{x:16,y:508,width:45,height:20},
@@ -68,7 +77,8 @@ test('tablet video keeps an adaptive full-sensor window instead of opting into f
  assert.match(main,/android:resizeableActivity="true"/,'App stays resizable; rotation applies only while watching video');
  const controller=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunVideoDisplayController.java','utf8');
  assert.match(controller,/smallestScreenWidthDp >= 600/);
- assert.match(controller,/useFullSensorWindow\(\) \? ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR/);
+ assert.match(controller,/SCREEN_ORIENTATION_SENSOR_LANDSCAPE/);
+ assert.match(controller,/SCREEN_ORIENTATION_SENSOR_PORTRAIT/);
  assert.match(controller,/if \(useFullSensorWindow\(\)\) restoreOrientation\(\)/,'Tablet manual exit must release the sensor override');
 });
 
@@ -86,7 +96,7 @@ test('actual Java orientation requests use the physical tablet sensor and restor
   const harness=join(dir,'DisplayRequests.java');
   writeFileSync(harness,`package org.irgunshiuraitorah.app;
 public class DisplayRequests {
- static class ActivityInfo {static final int SCREEN_ORIENTATION_PORTRAIT=1,SCREEN_ORIENTATION_LANDSCAPE=0,SCREEN_ORIENTATION_REVERSE_LANDSCAPE=8,SCREEN_ORIENTATION_FULL_SENSOR=10;}
+ static class ActivityInfo {static final int SCREEN_ORIENTATION_PORTRAIT=1,SCREEN_ORIENTATION_LANDSCAPE=0,SCREEN_ORIENTATION_REVERSE_LANDSCAPE=8,SCREEN_ORIENTATION_SENSOR_LANDSCAPE=6,SCREEN_ORIENTATION_SENSOR_PORTRAIT=7;}
  static class Configuration {int smallestScreenWidthDp;}
  static class Resources {Configuration c=new Configuration();Configuration getConfiguration(){return c;}}
  static class Activity {Resources r=new Resources();int request=-1;boolean full;Resources getResources(){return r;}int getRequestedOrientation(){return request;}void setRequestedOrientation(int n){request=n;}void applySensorVideoFullscreen(boolean n){full=n;}}
@@ -98,8 +108,8 @@ public class DisplayRequests {
  static void check(boolean ok,String why){if(!ok)throw new AssertionError(why);}
  public static void main(String[] args){
   DisplayRequests tablet=new DisplayRequests();tablet.activity.r.c.smallestScreenWidthDp=800;
-  tablet.rotate(VideoRotationPolicy.LANDSCAPE);check(tablet.activity.request==10&&tablet.activity.full,"Tablet uses actual sensor rotation, not fixed landscape letterboxing");
-  tablet.rotate(VideoRotationPolicy.PORTRAIT);check(tablet.activity.request==10&&!tablet.activity.full,"Tablet upright stays sensor-driven while returning to regular video");
+  tablet.rotate(VideoRotationPolicy.LANDSCAPE);check(tablet.activity.request==6&&tablet.activity.full,"Tablet requests actual sensor landscape rotation");
+  tablet.rotate(VideoRotationPolicy.PORTRAIT);check(tablet.activity.request==7&&!tablet.activity.full,"Tablet requests sensor portrait on upright tilt");
   tablet.rotate(VideoRotationPolicy.REVERSE_LANDSCAPE);tablet.fullscreenChanged(false,false);
   check(tablet.activity.request==-1&&tablet.previousOrientation==null,"Manual exit restores original tablet orientation policy");
   DisplayRequests phone=new DisplayRequests();phone.activity.r.c.smallestScreenWidthDp=320;

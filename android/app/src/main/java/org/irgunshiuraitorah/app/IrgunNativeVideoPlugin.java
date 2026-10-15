@@ -97,7 +97,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         private boolean holdingActionBar;
         private long downTime;
         private final NativeVideoDoubleTap doubleTap = new NativeVideoDoubleTap();
-        NativePlayerView() { super(getActivity()); }
+        NativePlayerView(android.util.AttributeSet attrs) { super(getActivity(), attrs); }
         private boolean interactiveAt(View view, float x, float y) {
             if (!view.isShown() || x < 0 || y < 0 || x >= view.getWidth() || y >= view.getHeight()) return false;
             if (view != this && !(view instanceof ViewGroup) && view.isEnabled() && view.isClickable()) return true;
@@ -414,6 +414,25 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         bottom.addView(duration, params);
     }
 
+    private NativePlayerView createClippableVideoSurface() {
+        // A regular SurfaceView can leave a black hole when in-page video
+        // scrolls under a sticky WebView header. A Media3 TextureView clips
+        // with the parent and stays attached to the SAME ExoPlayer/MediaItem.
+        android.content.res.XmlResourceParser xml =
+            getContext().getResources().getXml(R.xml.irgun_native_texture_player);
+        try {
+            while (xml.getEventType() != org.xmlpull.v1.XmlPullParser.START_TAG) {
+                if (xml.next() == org.xmlpull.v1.XmlPullParser.END_DOCUMENT)
+                    throw new IllegalStateException("Native texture attributes unavailable");
+            }
+            return new NativePlayerView(android.util.Xml.asAttributeSet(xml));
+        } catch (Exception error) {
+            throw new IllegalStateException("Cannot create clipping-safe Media3 video surface", error);
+        } finally {
+            xml.close();
+        }
+    }
+
     private void ensureSurface() {
         if (getActivity() == null) return;
         View v = getActivity().findViewById(android.R.id.content);
@@ -425,7 +444,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             root.addOnLayoutChangeListener(rootLayoutListener);
         }
         if (surface == null) {
-            surface = new NativePlayerView();
+            surface = createClippableVideoSurface();
             current = new WeakReference<>(this);
             surface.setUseController(true);
             surface.setControllerAutoShow(true);

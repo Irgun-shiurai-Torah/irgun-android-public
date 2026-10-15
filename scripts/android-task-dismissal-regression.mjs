@@ -45,6 +45,13 @@ export function recentsDismissGesture(xml,{width,height,topTaskIsIrgun=false}) {
   return [x,Math.round(rect[1]+(rect[3]-rect[1])*.65),x,Math.max(1,Math.round(height*.05))];
 }
 
+// Do not mistake historical media-button receiver names for a live session.
+export function hasRegisteredIrgunMediaSession(dump) {
+  return dump.split('\n').some(line =>
+    /(?:MediaSessionRecord|MediaSession2Record|Session2Record)\{/.test(line) &&
+    /\borg\.irgunshiuraitorah\.app(?:\b|\/)/.test(line));
+}
+
 export function hasActivePlaybackNotification(dump) {
   const active=dump.split(/Historical notifications:|Historical Notification List:|Notification History:/i)[0];
   return active.split(/(?=NotificationRecord\()/).some(record=>
@@ -101,7 +108,7 @@ export async function verifyAndroidTaskDismissal({adb,sample,delay,report}) {
     return {destroyed:logs.includes('Media3 service destroyed'),
       taskPresent:hasIrgunRecentTask(adb('shell','dumpsys','activity','-a','recents')),
       servicePresent:/ServiceRecord\{[^\n]*IrgunPlaybackService/.test(services),
-      sessionPresent:sessions.includes(pkg),notificationPresent:hasActivePlaybackNotification(notifications)};
+      sessionPresent:hasRegisteredIrgunMediaSession(sessions),notificationPresent:hasActivePlaybackNotification(notifications)};
   };
   let state;
   for(let n=0;n<30;n++){
@@ -109,6 +116,7 @@ export async function verifyAndroidTaskDismissal({adb,sample,delay,report}) {
     if(state.destroyed&&!state.taskPresent&&!state.servicePresent&&!state.sessionPresent&&!state.notificationPresent)break;
     await delay(300);
   }
+  if (state.sessionPresent) writeFileSync('emulator-report/task-dismissal-media-session.txt',adb('shell','dumpsys','media_session'));
   assert.ok(state.destroyed&&!state.taskPresent&&!state.servicePresent&&!state.sessionPresent&&!state.notificationPresent,
     'Actual Recents swipe must destroy playback service, release session, and remove notification: '+JSON.stringify(state));
   await delay(2200);

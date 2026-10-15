@@ -81,10 +81,13 @@ final class IrgunVideoDisplayController {
     private void rotate(int direction) {
         if (direction == VideoRotationPolicy.PORTRAIT && !rotatedFullscreen) return;
         if (previousOrientation == null) previousOrientation = activity.getRequestedOrientation();
-        // Fixed landscape can become a letterboxed Activity inside a locked
-        // portrait tablet display. Full sensor rotates the actual display while
-        // retaining an adaptive window; it does not change the user's OS setting.
-        int orientation = useFullSensorWindow() ? ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        // FULL_SENSOR requested fullscreen on a locked tablet without actually
+        // rotating its portrait display. Select the physical sensor axis
+        // explicitly, preserving the user's system auto-rotate preference.
+        int orientation = useFullSensorWindow()
+            ? (direction == VideoRotationPolicy.PORTRAIT
+                ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                : ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE)
             : direction == VideoRotationPolicy.PORTRAIT ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             : direction == VideoRotationPolicy.LANDSCAPE ? ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             : ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE;

@@ -4,7 +4,7 @@ import {readFileSync, mkdtempSync, writeFileSync, rmSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {recentsDismissGesture, hasActivePlaybackNotification,recentsEducationAction,hasIrgunRecentTask,topRecentTaskIsIrgun} from './android-task-dismissal-regression.mjs';
+import {recentsDismissGesture, hasActivePlaybackNotification,recentsEducationAction,hasIrgunRecentTask,topRecentTaskIsIrgun,hasRegisteredIrgunMediaSession} from './android-task-dismissal-regression.mjs';
 
 test('actual Java task-removal and bridge callbacks stop playing, paused and buffering lectures without late restart', () => {
   const source=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java','utf8');
@@ -86,6 +86,14 @@ test('Recents gesture targets the observed Irgun card and refuses another app or
   assert.throws(()=>recentsDismissGesture(card('Screenshot of Settings'),{width:320,height:640,topTaskIsIrgun:true}),/Irgun/);
   assert.throws(()=>recentsDismissGesture(card('Screenshot of Settings'),{width:320,height:640}),/Irgun/);
   assert.throws(()=>recentsDismissGesture(card('Screenshot of Irgun Shiurai Torah','[-290,180][-30,550]'),{width:320,height:640}),/Irgun/);
+});
+
+test('dismissal accepts historical receiver metadata but rejects an actual session record',()=>{
+ const historical='Last media button receiver: org.irgunshiuraitorah.app/.SplashActivity\n  remembered package: org.irgunshiuraitorah.app';
+ const active='Sessions Stack - have 1 sessions:\n  MediaSessionRecord{4f88 u0 org.irgunshiuraitorah.app/IrgunPlaybackService}\n'+historical;
+ assert.equal(hasRegisteredIrgunMediaSession(historical),false);
+ assert.equal(hasRegisteredIrgunMediaSession(active),true);
+ assert.equal(hasRegisteredIrgunMediaSession(active.replaceAll('org.irgunshiuraitorah.app','org.other.app')),false);
 });
 
 test('notification verification ignores historical and unrelated records but detects an actual app MediaStyle record',()=>{
