@@ -3939,6 +3939,12 @@ function hostCurrentWatchOverlay(mode = 'full') {
     persistentVideoMount.appendChild(overlay);
   }
   state.watchHostedExternally = true;
+  // Audio mode can render a temporary Watch UI inside #app while its real
+  // Media3 video host remains parked outside #app. When VIDEO becomes active
+  // again, remove that stale Audio-mode Watch overlay. It is NOT the native
+  // player: the actual iframe/PlayerView stays in persistentVideoMount.
+  if (Capacitor.getPlatform() === 'android')
+    document.querySelector('#app .watch-overlay')?.remove();
   const mini = mode === 'mini';
   state.watchMinimized = mini;
   persistentVideoMount.className = `persistent-video-mount watch-video-host ${mini ? 'watch-mini-host' : 'watch-full-host'}`;
@@ -5542,6 +5548,12 @@ function restoreParkedHostedVideo() {
   document.body.classList.remove('irgun-watch-mini-hosted');
   state.watchHostedExternally = true;
   state.watchMinimized = false;
+  // During AUDIO an in-page Watch panel can coexist with the parked external
+  // native VIDEO host. Its markup must be detached synchronously on return,
+  // even if the full app render is temporarily deferred (e.g. settings sheet).
+  // Otherwise two Watch overlays can steal physical Mini/Fullscreen taps.
+  if (Capacitor.getPlatform() === 'android')
+    document.querySelector('#app .watch-overlay')?.remove();
   return true;
 }
 
