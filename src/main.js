@@ -6413,21 +6413,26 @@ function warmPaidPurchases() {
   owned.forEach((product,index)=>setTimeout(()=>prefetchPaidTrack(product.id,product.tracks[0]?.id),150+index*250));
 }
 
-async function playPaidTrack(productId, trackId) {
+async function playPaidTrack(productId, trackId, options = {}) {
   if (!state.user) {
     state.screen = 'account';
     state.authMessage = 'Please sign in to listen to your purchased shiurim.';
     render();
     return;
   }
+  if(options.fromAutoAdvance && String(state.current?.id||'')!==String(options.expectedCurrentId||'')) return false;
   resetWatchPresentationForStandaloneAudio();
   const product = state.paidCatalog.find(item => String(item.id) === String(productId));
   const track = product?.tracks?.find(item => String(item.id) === String(trackId));
-  if (!product?.owned || !track) return;
+  if (!product?.owned || !track) return false;
+  if(!options.fromAutoAdvance){state.paidLastFinishedKey='';state.paidPlaybackGeneration++;}
+  const playbackGeneration=state.paidPlaybackGeneration;
   try {
     setToast('Preparing secure playback...');
     const data = await requestPaidPlaySession(productId, trackId, false);
     state.paidPlaySessionCache.delete(paidPlaySessionKey(productId, trackId));
+    if(options.fromAutoAdvance && (state.paidPlaybackGeneration!==playbackGeneration || String(state.current?.id||'')!==String(options.expectedCurrentId||''))) return false;
+    if(!data?.playbackUrl)throw new Error('Protected audio session has no playable URL.');
     audio.crossOrigin = 'use-credentials';
     await startAudio({
       kind:'paid-audio',
@@ -6441,11 +6446,35 @@ async function playPaidTrack(productId, trackId) {
       url:String(data.playbackUrl || ''),
       bookmarkSeconds:Number(data.progress?.bookmarkSeconds)||0
     }, Number(data.progress?.positionSeconds)||0);
+    return true;
   } catch (error) {
-    alert(error.message || 'Could not start protected playback.');
+    if(options.fromAutoAdvance)setToast('Could not play the next track. Choose it again to retry.');
+    else alert(error.message || 'Could not start protected playback.');
+    return false;
   }
 }
 
+// Continue protected Audio only inside the same deepest Google Drive folder.
+// The native Media3 MediaSession is reused; changing the signed MediaItem does
+// not create a second ExoPlayer or a WebView audio decoder.
+async function finishPaidNativeTrack(ended) {
+  if(!ended || ended.kind!=='paid-audio' || String(state.current?.id||'')!==String(ended.id||'')) return;
+  if(state.paidLastFinishedKey===ended.id)return;
+  state.paidLastFinishedKey=ended.id;
+  // Capture the just-ended track before requesting the next protected session.
+  // The network history write must not block consecutive playback.
+  void savePaidAudioProgress(false,true).catch(()=>{});
+  if(state.sleepMode==='end'){setToast('Playback stopped at the end of this track.');updatePlayerUi();return;}
+  const product=state.paidCatalog.find(item=>String(item.id)===String(ended.paidAudioId));
+  const next=product?.owned ? nextPaidTrackInFolder(product.tracks,ended.trackId) : null;
+  if(!next){setToast('Finished. End of this folder.');updatePlayerUi();return;}
+  const started=await playPaidTrack(String(product.id),String(next.id),{fromAutoAdvance:true,expectedCurrentId:ended.id});
+  if(started){
+    setToast('Playing the next track in this folder.');
+    const after=nextPaidTrackInFolder(product.tracks,next.id);
+    if(after?.id)prefetchPaidTrack(String(product.id),after.id);
+  }
+}
 async function savePaidAudioProgress(bookmark = false, force = false) {
   const current = state.current;
   if (!current || current.kind !== 'paid-audio' || !state.user) return;
@@ -7788,7 +7817,9 @@ async function startAudio(item, resumeAt = 0) {
   const replacingLecture = Boolean(previous && (String(previous.id || '') !== String(effective.id || '') || String(previous.kind || '') !== String(effective.kind || '')));
   if (replacingLecture) {
     if (previous.kind === 'paid-audio') {
-      await savePaidAudioProgress(false, true).catch(() => {});
+      if(Capacitor.getPlatform()==='android') void savePaidAudioProgress(false,true).catch(()=>{});
+      else await savePaidAudioProgress(false, true).catch(() => {});
+      state.paidProgressLastAt=0;
     } else {
       const outgoing = captureCurrentAudioHistorySnapshot();
       if (outgoing) saveAudioHistorySnapshot(outgoing, false, { reconcile:true }).catch(() => {});
@@ -8406,7 +8437,16 @@ const PlaybackController = {
       });
       plugin.addListener('audioReady', event => applyState(event));
       plugin.addListener('ended', async event => {
+        const endedPaid=Capacitor.getPlatform()==='android' && state.current?.kind==='paid-audio' && String(state.current.id||'')===String(event?.lectureId||'') ? state.current : null;
         applyState(event);
+        if(endedPaid){
+          await finishPaidNativeTrack(endedPaid);
+          if(state.sleepTimer)clearTimeout(state.sleepTimer);
+          state.sleepTimer=null;
+          state.sleepEndsAt=null;
+          if(state.sleepMode==='end')state.sleepMode='off';
+          return;
+        }
         await saveCurrentAudioHistory(true, true);
         if (state.sleepMode === 'end') state.sleepMode = 'off';
         if (state.sleepTimer) clearTimeout(state.sleepTimer);
