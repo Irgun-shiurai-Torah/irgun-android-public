@@ -22,6 +22,30 @@ test('persistent Android watch controls bind once across page renders and alongs
  assert.equal(listeners.length,1);listeners[0]();assert.equal(requested,1,'One real click must request PiP only once');
 });
 
+test('silent HLS segment buffering has bounded recovery on the SAME Media3 player and item',()=>{
+ const start=service.indexOf('private void scheduleNativeVideoStallWatch()');
+ const end=service.indexOf('private void queueNetworkRecovery(long delayMs)',start);
+ assert.ok(start>0&&end>start,'Native silent buffering watchdog must exist');
+ const watchdog=service.slice(start,end);
+ assert.match(watchdog,/!nativeVideoFirstFrameRendered/,'Do not restart normal initial video buffering');
+ assert.match(watchdog,/Player\.STATE_BUFFERING/,'Only genuine buffering can trigger recovery');
+ assert.match(watchdog,/!engine\.getPlayWhenReady\(\)/,'Paused lectures must not restart');
+ assert.match(watchdog,/networkRecoveryPending/,'Actual network recovery must take priority');
+ assert.match(watchdog,/nativeVideoStallRestarts >= MAX_NATIVE_VIDEO_STALL_RESTARTS/,
+   'A failed stream cannot loop endless preparation');
+ assert.match(watchdog,/engine\.getCurrentMediaItem\(\) != media/,
+   'Late timers must never change a new lecture');
+ assert.match(watchdog,/engine\.stop\(\)/);
+ assert.match(watchdog,/engine\.seekTo\(position\)/);
+ assert.match(watchdog,/engine\.prepare\(\)/);
+ assert.match(watchdog,/engine\.setPlaybackSpeed\(speed\)/,'Respect the user's selected speed');
+ assert.doesNotMatch(watchdog,/setMediaItem\(|new ExoPlayer|new MediaSession|setVideoSurface/,
+   'Silent buffering must keep exactly one player, media item and rendering surface');
+ assert.match(service,/if \(state == Player\.STATE_BUFFERING\) scheduleNativeVideoStallWatch\(\)/);
+ assert.match(service,/if \(!showVideo\) cancelNativeVideoStallWatch\(\)/);
+ assert.match(service,/public void onDestroy\(\) \{\s*cancelNativeVideoStallWatch\(\)/);
+});
+
 test('native network recovery clears error UI only after the same video renders new frames',async()=>{
  const start=adapter.indexOf('  const tick=async()=>{'),end=adapter.indexOf('  const timer=setInterval',start);
  assert.ok(start>0&&end>start);

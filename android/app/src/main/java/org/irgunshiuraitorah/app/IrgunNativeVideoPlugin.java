@@ -729,10 +729,20 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     @PluginMethod
     public void fullscreen(PluginCall call) {
         final boolean expand = Boolean.TRUE.equals(call.getBoolean("enabled", false));
+        final boolean fromSensor = Boolean.TRUE.equals(call.getBoolean("fromSensor", false));
         getActivity().runOnUiThread(() -> {
             if (expand && (!visible || surface == null)) {
                 call.reject("Native Media3 fullscreen requires a visible video surface");
                 return;
+            }
+            // The native exit button originates inside PlayerView, but
+            // fullscreen system-bar synchronization arrives from WebView AFTER
+            // this asynchronous plugin response. The 200ms sensor poll can
+            // otherwise re-expand a sideways tablet before manualExit() runs.
+            // Mark the user's manual exit synchronously, before changing the
+            // PlayerView layout. Ordinary sensor/upright exits are unaffected.
+            if (!expand && !fromSensor && fullscreen && getActivity() instanceof MainActivity) {
+                ((MainActivity)getActivity()).setVideoFullscreen(false, false);
             }
             fullscreen = expand;
             if (expand) mini = false;

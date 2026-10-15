@@ -173,6 +173,14 @@ public class IrgunPlaybackService extends MediaSessionService {
     private long networkRecoveryGeneration;
     private int networkRecoveryAttempts;
     private Runnable networkRecoveryRunnable;
+    // ExoPlayer can remain BUFFERING at an HLS segment boundary without
+    // surfacing a PlaybackException. Recover only after already rendering
+    // frames, retaining the SAME player/session/media item/playback clock.
+    private Runnable nativeVideoStallWatch;
+    private long nativeVideoStallGeneration;
+    private int nativeVideoStallRestarts;
+    private static final long NATIVE_VIDEO_STALL_MS = 14000L;
+    private static final int MAX_NATIVE_VIDEO_STALL_RESTARTS = 2;
 
     // One logical playback state shared by native audio and the Vimeo presentation.
     private String lectureId = "";
@@ -351,6 +359,58 @@ public class IrgunPlaybackService extends MediaSessionService {
         return true;
     }
 
+    private void cancelNativeVideoStallWatch() {
+        nativeVideoStallGeneration++;
+        if (nativeVideoStallWatch != null) mainHandler.removeCallbacks(nativeVideoStallWatch);
+        nativeVideoStallWatch = null;
+    }
+
+    private void scheduleNativeVideoStallWatch() {
+        cancelNativeVideoStallWatch();
+        if (taskRemoved || player == null || !nativeVideoSourceActive || !nativeVideoSelected ||
+            !nativeVideoFirstFrameRendered || !player.getPlayWhenReady() ||
+            player.getPlaybackState() != Player.STATE_BUFFERING ||
+            networkRecoveryPending || nativeVideoStallRestarts >= MAX_NATIVE_VIDEO_STALL_RESTARTS) return;
+        final ExoPlayer engine = player;
+        final MediaItem media = engine.getCurrentMediaItem();
+        if (media == null) return;
+        final long generation = nativeVideoStallGeneration;
+        final String originalLecture = lectureId;
+        final long initialPosition = Math.max(0L, engine.getCurrentPosition());
+        nativeVideoStallWatch = () -> {
+            if (generation != nativeVideoStallGeneration || taskRemoved || player != engine ||
+                !originalLecture.equals(lectureId) || engine.getCurrentMediaItem() != media ||
+                !nativeVideoSourceActive || !nativeVideoSelected || nativeVideoOfflineAudioActive ||
+                networkRecoveryPending || !engine.getPlayWhenReady() ||
+                engine.getPlaybackState() != Player.STATE_BUFFERING ||
+                nativeVideoStallRestarts >= MAX_NATIVE_VIDEO_STALL_RESTARTS) return;
+            long position = Math.max(0L, engine.getCurrentPosition());
+            if (position > initialPosition + 900L) return; // already recovering
+            long duration = engine.getDuration();
+            if (duration > 0L && position >= duration - 1200L) return;
+            // Never thrash while the device has no Internet: regular network
+            // recovery owns reconnection. No WebView or MP4 fallback is opened.
+            if (connectivityManager != null && connectivityManager.getActiveNetwork() == null) return;
+            cancelNativeVideoStallWatch();
+            nativeVideoStallRestarts++;
+            boolean playIntent = engine.getPlayWhenReady();
+            float speed = engine.getPlaybackParameters().speed;
+            Log.w(TAG, "[Playback] Native HLS stalled without an error for " +
+                NATIVE_VIDEO_STALL_MS + "ms at " + position + "ms; bounded same-player recovery " +
+                nativeVideoStallRestarts + "/" + MAX_NATIVE_VIDEO_STALL_RESTARTS);
+            // A prepare() alone is a no-op for an already BUFFERING ExoPlayer.
+            // stop() keeps its MediaItem; seeking and preparing the SAME
+            // instance restarts the HLS load without another decoder/session.
+            engine.stop();
+            engine.seekTo(position);
+            engine.prepare();
+            engine.setPlaybackSpeed(speed);
+            engine.setPlayWhenReady(playIntent);
+            publishNativeState();
+        };
+        mainHandler.postDelayed(nativeVideoStallWatch, NATIVE_VIDEO_STALL_MS);
+    }
+
     private void queueNetworkRecovery(long delayMs) {
         if (!networkRecoveryPending || player == null || networkRecoveryAttempts >= 3) return;
         if (networkRecoveryRunnable != null) mainHandler.removeCallbacks(networkRecoveryRunnable);
@@ -407,6 +467,8 @@ public class IrgunPlaybackService extends MediaSessionService {
             player.addListener(new Player.Listener() {
                 @Override
                 public void onPlaybackStateChanged(int state) {
+                    if (state == Player.STATE_BUFFERING) scheduleNativeVideoStallWatch();
+                    else cancelNativeVideoStallWatch();
                     if (state == Player.STATE_READY) {
                         if (networkRecoveryPending && player.getPlayerError() == null) cancelNetworkRecovery();
                         if (verifyAudioSeekInternal()) return;
@@ -429,6 +491,7 @@ public class IrgunPlaybackService extends MediaSessionService {
                     // isPlaying becomes false while the hidden MP3 shadow buffers,
                     // which must never be interpreted as Vimeo pausing.
                     if (isPlaying && pendingBackgroundHandoff) continueBackgroundHandoffIfReady();
+                    if (isPlaying && nativeVideoSourceActive) cancelNativeVideoStallWatch();
                     publishNativeState();
                     refreshMediaNotification();
                 }
@@ -476,6 +539,7 @@ public class IrgunPlaybackService extends MediaSessionService {
 
                 @Override
                 public void onPlayerError(PlaybackException error) {
+                    cancelNativeVideoStallWatch();
                     if (nativeVideoSourceActive) {
                         recoverNativeVideoSourceInternal(error);
                         return;
@@ -575,6 +639,7 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     @Override
     public void onDestroy() {
+        cancelNativeVideoStallWatch();
         cancelNetworkRecovery();
         if (connectivityManager != null && networkCallback != null) {
             try { connectivityManager.unregisterNetworkCallback(networkCallback); } catch (RuntimeException ignored) {}
@@ -1134,6 +1199,7 @@ public class IrgunPlaybackService extends MediaSessionService {
     }
 
     private void stopAudioInternal(boolean clearLecture) {
+        cancelNativeVideoStallWatch();
         cancelNetworkRecovery();
         audioSeekGuard.clear();
         authorityGuard.commitAudio();
@@ -1428,6 +1494,9 @@ public class IrgunPlaybackService extends MediaSessionService {
         }
         nativeVideoSelected = showVideo;
         playbackMode = showVideo ? PlaybackMode.VIDEO : PlaybackMode.AUDIO;
+        if (!showVideo) cancelNativeVideoStallWatch();
+        else if (player.getPlaybackState() == Player.STATE_BUFFERING)
+            scheduleNativeVideoStallWatch();
         if (showVideo) authorityGuard.allowVideo();
         else authorityGuard.commitAudio();
         setCandidateAudioFocus(true);
@@ -1477,6 +1546,8 @@ public class IrgunPlaybackService extends MediaSessionService {
             String image, String audioUrl, String hlsUrl, String mp4Url,
             long positionMs, float speed, boolean shouldPlay) {
         if (player == null) return;
+        cancelNativeVideoStallWatch();
+        nativeVideoStallRestarts = 0;
         String id = cleanStatic(requestedId);
         String videoUrl = !cleanStatic(hlsUrl).isEmpty() ? cleanStatic(hlsUrl) : cleanStatic(mp4Url);
         if (id.isEmpty() || videoUrl.isEmpty()) {
@@ -1540,6 +1611,7 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     private void recoverNativeVideoSourceInternal(PlaybackException error) {
         if (!nativeVideoSourceActive || player == null) return;
+        cancelNativeVideoStallWatch();
         if (nativeVideoOfflineAudioActive) {
             // A damaged local file must never trap the user in a silent Audio
             // mode. Resume the network audio track at the same logical clock
@@ -1577,6 +1649,7 @@ public class IrgunPlaybackService extends MediaSessionService {
 
     private void closeNativeVideoInternal(boolean keepAudio) {
         if (!nativeVideoSourceActive || player == null) return;
+        cancelNativeVideoStallWatch();
         if (keepAudio) {
             switchNativeVideoPresentationInternal(false);
             return;

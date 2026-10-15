@@ -105,7 +105,10 @@ async function setAndroidNativeVideoFullscreen(enabled, {fromSensor=false}={}) {
   if (enabled && !state.watchVimeo?.isIrgunNativeVideoPlayer) {
     throw new Error('Native fullscreen requires an active Media3 Video');
   }
-  await IrgunNativeVideo.fullscreen({enabled:Boolean(enabled)});
+  // Pass the origin of the request to native before the sensor can poll.
+  // A manual Exit must suppress a repeat landscape re-entry while the tablet
+  // remains tilted; an upright sensor exit must NOT suppress the next tilt.
+  await IrgunNativeVideo.fullscreen({enabled:Boolean(enabled),fromSensor:Boolean(fromSensor)});
   await setNativeVideoFullscreen(Boolean(enabled),{fromSensor});
 }
 window.__irgunSetVideoFullscreenFromRotation = enabled => {

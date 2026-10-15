@@ -58,6 +58,19 @@ test('controller reveal taps never hit a seek bar or custom top controls',()=>{
  assert.ok(wide[1]>50&&wide[1]<500);
 });
 
+test('manual fullscreen Exit suppresses sensor re-entry immediately, but upright sensor exit does not',()=>{
+ const javascript=readFileSync('src/main.js','utf8');
+ const java=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
+ const controller=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunVideoDisplayController.java','utf8');
+ assert.match(javascript,/IrgunNativeVideo\.fullscreen\(\{enabled:Boolean\(enabled\),fromSensor:Boolean\(fromSensor\)\}\)/);
+ const nativeMethod=java.slice(java.indexOf('public void fullscreen(PluginCall call)'),java.indexOf('private String approvedOfflineAudio('));
+ assert.match(nativeMethod,/final boolean fromSensor = Boolean\.TRUE\.equals\(call\.getBoolean\("fromSensor", false\)\)/);
+ assert.match(nativeMethod,/if \(!expand && !fromSensor && fullscreen && getActivity\(\) instanceof MainActivity\)/);
+ assert.ok(nativeMethod.indexOf('setVideoFullscreen(false, false)')<nativeMethod.indexOf('fullscreen = expand'),
+   'ManualExit must reach the orientation policy before the PlayerView changes');
+ assert.match(controller,/policy\.manualExit\(\)/);
+});
+
 test('locked tablet rotates native Media3 fullscreen and its corner timestamps inside actual display',()=>{
  const java=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
  assert.match(java,/boolean rotateInWindow=!systemPip && tabletTilt != VideoRotationPolicy\.PORTRAIT/);
