@@ -3810,8 +3810,67 @@ async function togglePersistentMiniVideoPlayback(event) {
   } catch (_) {}
 }
 
+// Android Watch can be swiped down from the lecture information BELOW the
+// native video, not just the native player/controller. This is a pull-to-mini
+// gesture only when the detail scroller is at its top: ordinary scrolling,
+// horizontal swipes, comment fields and action buttons keep their own touches.
+function bindAndroidWatchDetailsSwipeToMini(overlay) {
+  if (Capacitor.getPlatform() !== 'android' || !overlay || overlay.dataset.detailsMiniSwipeBound) return;
+  const scroller = overlay.querySelector('.watch-scroll');
+  if (!scroller) return;
+  overlay.dataset.detailsMiniSwipeBound = '1';
+  let startX=0,startY=0,startAt=0,down=0,tracking=false,dragging=false;
+  const reset=()=>{tracking=false;dragging=false;down=0;};
+  const available=()=>Boolean(state.watchVideo && state.watchMode==='video' &&
+    !state.watchMinimized && !state.systemPipActive && !nativeVideoFullscreen &&
+    !document.querySelector('.admin-editor-backdrop, .playlist-picker-backdrop, .sheet-backdrop'));
+  scroller.addEventListener('touchstart',event=>{
+    reset();
+    if(!available() || event.touches.length!==1 || scroller.scrollTop>3 ||
+       event.target.closest('button, a, input, select, textarea, [contenteditable="true"], [role="button"], .watch-player-card, .watch-audio-panel'))
+      return;
+    const touch=event.touches[0];
+    startX=touch.clientX;startY=touch.clientY;startAt=performance.now();
+    tracking=true;
+  },{passive:true});
+  scroller.addEventListener('touchmove',event=>{
+    if(!tracking)return;
+    if(event.touches.length!==1 || !available() || scroller.scrollTop>3){reset();return;}
+    const touch=event.touches[0],dy=touch.clientY-startY,dx=Math.abs(touch.clientX-startX);
+    if(dy<0 || dx>Math.max(26,dy*0.75)){reset();return;}
+    if(dy<18)return;
+    dragging=true;down=dy;
+    // Don't overscroll the detail page while intentionally pulling Watch down.
+    event.preventDefault();
+  },{passive:false});
+  scroller.addEventListener('touchend',()=>{
+    if(tracking && dragging && available()){
+      const velocity=down/Math.max(1,performance.now()-startAt);
+      if(down>=110 || (down>=68 && velocity>=0.7)){
+        reset();
+        void minimizeWatchToPersistent();
+        return;
+      }
+    }
+    reset();
+  },{passive:true});
+  scroller.addEventListener('touchcancel',reset,{passive:true});
+}
+
+function syncAndroidMiniDialogVisibility() {
+  if(Capacitor.getPlatform()!=='android')return;
+  // Mini playback continues, but dialogs must own the ENTIRE screen. Native
+  // PlayerView is separately hidden by positionFrame() while one is present.
+  const modal=Boolean(document.querySelector(
+    '.admin-editor-backdrop, .playlist-picker-backdrop, .paid-modal-backdrop, ' +
+    '.paid-pdf-backdrop, .sheet-backdrop, .download-dialog-backdrop, ' +
+    '.download-manager-backdrop, [aria-modal="true"]'));
+  document.body.classList.toggle('irgun-mini-modal-open',modal);
+}
+
 function bindPersistentVideoChrome() {
   if (!persistentVideoMount) return;
+  bindAndroidWatchDetailsSwipeToMini(persistentVideoMount.querySelector('.watch-overlay'));
   persistentVideoMount.querySelectorAll('[data-expand-watch]').forEach(expand => {
     if (expand.dataset.bound) return;
     expand.dataset.bound = '1';
@@ -6622,6 +6681,7 @@ function render() {
     isAndroid:()=>Capacitor.getPlatform()==='android'&&state.playerOpen,
     playerKey:`${state.current?.kind||''}:${state.current?.id||''}`});
   app.innerHTML = shell(content + playlistPickerHtml());
+  syncAndroidMiniDialogVisibility();
   bind();
   // Reconcile the native Android Video surface after every modal change.
   // Physical PlayerView must never cover native WebView dialog controls.
@@ -7232,6 +7292,7 @@ function bind() {
   document.querySelectorAll('[data-switch-video]').forEach(el => bindWatchClick(el, () => switchWatchMode('video')));
 
   document.querySelectorAll('[data-minimize-watch]').forEach(el => bindWatchClick(el, minimizeWatchToPersistent));
+  document.querySelectorAll('.watch-overlay').forEach(bindAndroidWatchDetailsSwipeToMini);
   document.querySelectorAll('[data-native-video-fullscreen]').forEach(el => {
     if (el.dataset.bound) return;
     el.dataset.bound = '1';
