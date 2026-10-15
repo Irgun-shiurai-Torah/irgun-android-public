@@ -175,9 +175,25 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
       // The downloaded local MP3 may replace HLS only in AUDIO, using the same
       // native ExoPlayer and validated private file path. VIDEO reopens its
       // original HLS/MP4 source at the shared live clock.
-      await native.mode({mode:next,offlineUri:next==='audio'?String(options.offlineUri||''):''});
+      const previousMode=mode;
+      if(next==='video'){
+        // Start positioning the EXISTING PlayerView while Media3 selects its
+        // video track. Without this, the Activity measures an audio-parked
+        // offscreen rectangle, and the first visible frame waits for a second
+        // WebView render/resize after the native mode command finishes.
+        mode='video';
+        framePlacedOnScreen=false;
+        trackFrame();
+      }
+      try {
+        await native.mode({mode:next,offlineUri:next==='audio'?String(options.offlineUri||''):''});
+      } catch(error) {
+        mode=previousMode;
+        framePlacedOnScreen=false;
+        throw error;
+      }
       mode=next;
-      if(next==='video'){framePlacedOnScreen=false;trackFrame();await positionFrame();}
+      if(next==='video'){trackFrame();await positionFrame();}
       else framePlacedOnScreen=false;
       return next;
     },

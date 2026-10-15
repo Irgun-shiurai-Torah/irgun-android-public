@@ -731,6 +731,24 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void shareSheet(PluginCall call) {
+        // A system ACTION_CHOOSER is a temporary overlay. It may invoke
+        // Activity.onUserLeaveHint(), but unlike Home it must keep the
+        // current Media3 video track, PlayerView and playback clock intact.
+        // This bridge is presentation-only; it never creates a media player.
+        final boolean active = Boolean.TRUE.equals(call.getBoolean("active", false));
+        final android.app.Activity activity = getActivity();
+        if (!(activity instanceof MainActivity)) {
+            call.resolve();
+            return;
+        }
+        activity.runOnUiThread(() -> {
+            ((MainActivity) activity).setNativeShareSheetActive(active);
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
     public void frame(PluginCall call) {
         x = (float)(double)call.getDouble("x", 0.0);
         y = (float)(double)call.getDouble("y", 0.0);

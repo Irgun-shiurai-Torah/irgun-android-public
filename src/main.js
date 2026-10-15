@@ -7560,8 +7560,22 @@ async function shareItem(kind, id) {
     if (item) title = displayShiurTitle(item.title || item.name, title);
     url = `${WEBSITE}videos.html?tab=audio&audio=${encodeURIComponent(id)}`;
   }
+  const sharingNativeVideo = Capacitor.getPlatform() === 'android' && kind === 'video' &&
+    state.watchMode === 'video' && state.watchVimeo?.isIrgunNativeVideoPlayer &&
+    videoId(state.watchVideo) === String(id);
+  // Capture the exact player. A stale Share result must not reflow a newer
+  // lecture if the user changes screens while Android has its chooser open.
+  const sharedPlayer = sharingNativeVideo ? state.watchVimeo : null;
+  let shareGuardActive = false;
   try {
     if (Capacitor.isNativePlatform()) {
+      if (sharingNativeVideo) {
+        // Android ACTION_CHOOSER can fire onUserLeaveHint() as if Home was
+        // pressed. Arm the short-lived native guard BEFORE launching Share,
+        // so Media3 does not disable video or restart the decoder.
+        await IrgunNativeVideo.shareSheet({active:true});
+        shareGuardActive = true;
+      }
       await Share.share({ title, text: title, url, dialogTitle: tr('Share Shiur') });
     } else if (navigator.share) {
       await navigator.share({ title, text: title, url });
@@ -7569,7 +7583,25 @@ async function shareItem(kind, id) {
       await navigator.clipboard.writeText(url);
       setToast('Link copied.');
     }
-  } catch (_) {}
+  } catch (error) {
+    // Dismissing the Android chooser is a normal cancellation, not a reason
+    // to pause or rebuild the same playback session.
+    if (sharingNativeVideo && !shareGuardActive)
+      console.warn('[Share] Android video chooser could not arm its lifecycle guard',error);
+  } finally {
+    if (shareGuardActive) {
+      await IrgunNativeVideo.shareSheet({active:false}).catch(()=>{});
+      const restoreSharedFrame = () => {
+        if (state.watchVimeo === sharedPlayer && state.watchMode === 'video' &&
+            videoId(state.watchVideo) === String(id)) sharedPlayer.updateFrame?.();
+      };
+      // Android may finish recompositing its Window shortly after the Share
+      // chooser closes. Reposition the SAME native PlayerView, never reload it.
+      restoreSharedFrame();
+      requestAnimationFrame(restoreSharedFrame);
+      setTimeout(restoreSharedFrame, 180);
+    }
+  }
 }
 
 function closeDownloadDialog() {
@@ -9094,7 +9126,18 @@ async function performWatchModeSwitch(mode) {
     // Merely hiding HLS's Video track does not use the downloaded MP3. When a
     // verified offline copy exists, route the SAME Media3 ExoPlayer to that
     // private file and retain the exact clock. Video restores original HLS.
-    await player.setMode(mode,{offlineUri});
+    // Put the parked host back onscreen BEFORE re-enabling the native Video
+    // track. Previously the first native layout measurement happened while
+    // the host was 12,000px offscreen, adding a second black-frame delay.
+    const videoHostPrepared = mode==='video' && restoreParkedHostedVideo();
+    if(mode==='video' && !videoHostPrepared)
+      throw new Error('Native Media3 Video cannot restore its single persistent Watch host');
+    try {
+      await player.setMode(mode,{offlineUri});
+    } catch (error) {
+      if(videoHostPrepared) parkHostedVideoForAudio();
+      throw error;
+    }
     let observed=null;
     for(let attempt=0;attempt<12;attempt++){
       observed=await player.refresh();
@@ -9105,6 +9148,7 @@ async function performWatchModeSwitch(mode) {
         (mode==='audio'&&offlineUri&&observed.sourceType!=='offline-mp3')){
       console.warn('[Media3] native mode/file source switch did not commit',observed);
       await player.setMode(previous).catch(()=>{});
+      if(videoHostPrepared) parkHostedVideoForAudio();
       return false;
     }
     state.watchResumeSeconds=Math.max(0,Number(observed.positionMs||0)/1000);
@@ -9121,9 +9165,6 @@ async function performWatchModeSwitch(mode) {
     // Previous emulator runs saw two overlays and a visually blocked mini
     // Expand control even though ExoPlayer kept moving.
     if(mode==='video'){
-      if(!restoreParkedHostedVideo()){
-        throw new Error('Native Media3 Video cannot restore its single persistent Watch host');
-      }
       clearCurrentAudioStateForVideo();
     }else{
       parkHostedVideoForAudio();
