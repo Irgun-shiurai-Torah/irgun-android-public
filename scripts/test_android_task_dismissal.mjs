@@ -111,6 +111,27 @@ test('task dismissal requires the actual ActivityManager recent task to disappea
  assert.equal(hasIrgunRecentTask(task.replace('org.irgunshiuraitorah.app/.SplashActivity','other.app/.Main')),false);
 });
 
+test('Android Recents HOME entry preceding Irgun must not fail real app task discovery',()=>{
+ const dump=[
+   'ACTIVITY MANAGER RECENT TASKS',
+   '  Recent tasks:',
+   '  * Recent #0: Task{abc #8 visible=false type=home A=1000:com.google.android.apps.nexuslauncher}',
+   '    intent={cmp=com.google.android.apps.nexuslauncher/.NexusLauncherActivity}',
+   '  * Recent #1: Task{def #9 visible=false type=standard A=10168:org.irgunshiuraitorah.app}',
+   '    intent={cmp=org.irgunshiuraitorah.app/.SplashActivity}',
+   '  * Recent #2: Task{ghi #10 visible=false type=standard A=com.android.settings}',
+   '    intent={cmp=com.android.settings/.Settings}',
+   '  Visible recent tasks (most recent first):',
+   '  * RecentTaskInfo #0:',
+   '    baseIntent=Intent { cmp=org.irgunshiuraitorah.app/.SplashActivity }'
+ ].join('\\n');
+ assert.equal(hasIrgunRecentTask(dump),true);
+ assert.equal(topRecentTaskIsIrgun(dump),true,'HOME must not masquerade as an app card');
+ const settingsFirst=dump.replace('type=standard A=10168:org.irgunshiuraitorah.app','type=standard A=com.android.settings')
+   .replace('intent={cmp=org.irgunshiuraitorah.app/.SplashActivity}', 'intent={cmp=com.android.settings/.Settings}');
+ assert.equal(topRecentTaskIsIrgun(settingsFirst),false,'An unrelated first app must still be rejected');
+});
+
 test('separate visible-task section cannot misattribute an unrelated actual recent task',()=>{
  const other='Recent tasks:\n  * Recent #0: Task{abc #12 type=standard}\n    realActivity=other.app/.Main\n';
  const visible='\nVisible recent tasks (most recent first):\n * RecentTaskInfo #0:\n realActivity=org.irgunshiuraitorah.app/.MainActivity';
