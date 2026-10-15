@@ -109,3 +109,24 @@ test('Android render and persistent host both bind the gesture and modal without
   assert.match(adapter,/\.admin-editor-backdrop/);
   assert.doesNotMatch(gestureSource,/\.pause\(|\.destroy\(|\.setMode\(|\.seekTo\(/);
 });
+
+test('Audio -> Video removes stale in-app Watch but keeps original external native host',()=>{
+  const latest=readFileSync('src/main.js','utf8');
+  const restore=between(latest,'function restoreParkedHostedVideo() {','async function switchVideoToAudioSeamlessly(');
+  assert.match(restore,/document\.querySelector\('#app \.watch-overlay'\)\?\.remove\(\)/);
+  assert.doesNotMatch(restore,/\.destroy\(|\.pause\(|\.setMode\(/);
+  const host=between(latest,'function hostCurrentWatchOverlay(mode = \'full\') {','async function resetWatchVimeoPlayer() {');
+  assert.match(host,/document\.querySelector\('#app \.watch-overlay'\)\?\.remove\(\)/);
+  const stale={removed:false,remove(){this.removed=true;}};
+  const mount={className:'watch-audio-parked',querySelector:selector=>selector==='#watchVimeoFrame'?{}:null};
+  const state={watchVimeo:{},watchMode:'video',watchMinimized:false,watchHostedExternally:false};
+  const bodyClasses={removed:[],remove(name){this.removed.push(name);}};
+  const document={body:{classList:bodyClasses},querySelector:selector=>selector==='#app .watch-overlay'?stale:null};
+  const restoreFn=new Function('persistentVideoMount','state','document','Capacitor',
+    restore+'return restoreParkedHostedVideo;')(mount,state,document,{getPlatform:()=> 'android'});
+  assert.equal(restoreFn(),true);
+  assert.equal(stale.removed,true,'stale overlay is removed before the next physical native tap');
+  assert.equal(state.watchHostedExternally,true);
+  assert.equal(state.watchMinimized,false);
+  assert.ok(state.watchVimeo,'same native player remains alive');
+});
