@@ -7,6 +7,7 @@ import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Rational;
+import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -25,6 +26,11 @@ public class MainActivity extends BridgeActivity {
     private static volatile boolean instanceAlive = false;
     private boolean videoFullscreen = false;
     private boolean irgunPipActive = false;
+    // Unlike the provisional entry guard, this only changes after Android has
+    // CONFIRMED a real pinned window. Failed entry must not reset fullscreen.
+    private boolean confirmedSystemPip = false;
+    private int pipEntrySerial = 0;
+    private static final String PIP_TAG = "IrgunSystemPiP";
     private OnBackPressedCallback fullscreenBackCallback;
     private IrgunVideoDisplayController videoDisplay;
 
@@ -167,40 +173,62 @@ public class MainActivity extends BridgeActivity {
 
     /** Enter Android system Picture-in-Picture for the currently playing video. */
     public boolean enterIrgunPictureInPicture() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) { explainUnavailablePip(); return false; }
-        try {
-            // Mark PiP as active BEFORE Android begins the transition. onPause() can
-            // run before onPictureInPictureModeChanged(); without this guard the app
-            // may hand video playback to the background-audio service during the PiP
-            // transition and the floating video never appears or immediately stops.
-            irgunPipActive = true;
-            if (videoDisplay != null) videoDisplay.pip(true);
-            IrgunNativeVideoPlugin.systemPipChanged(true);
-            // Do not resize/reflow the WebView before Android captures the current
-            // video frame for PiP. The PiP callback applies the compact layout after
-            // entry, which avoids the black-frame regression seen on WebView/Vimeo.
-            PictureInPictureParams.Builder builder = new PictureInPictureParams.Builder()
-                .setAspectRatio(new Rational(16, 9));
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                builder.setSeamlessResizeEnabled(true);
-            }
-            boolean entered = enterPictureInPictureMode(builder.build());
-            if (!entered) {
-                irgunPipActive = false;
-                if (videoDisplay != null) videoDisplay.pip(false);
-                IrgunNativeVideoPlugin.systemPipChanged(false);
-                prepareWebForPip(false);
-                explainUnavailablePip();
-            }
-            return entered;
-        } catch (Exception ignored) {
-            irgunPipActive = false;
-            if (videoDisplay != null) videoDisplay.pip(false);
-            IrgunNativeVideoPlugin.systemPipChanged(false);
-            prepareWebForPip(false);
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             explainUnavailablePip();
             return false;
         }
+        if (isInPictureInPictureMode()) return true;
+        final int attempt = ++pipEntrySerial;
+        try {
+            // Guard Home's background-Audio handoff while Android enters pinned
+            // mode, but DO NOT resize/reparent the native PlayerView yet. The
+            // successful onPictureInPictureModeChanged callback owns all PiP
+            // presentation changes; otherwise a rejected entry breaks fullscreen.
+            irgunPipActive = true;
+            if (videoDisplay != null) videoDisplay.pip(true);
+            PictureInPictureParams.Builder builder = new PictureInPictureParams.Builder()
+                .setAspectRatio(new Rational(16, 9));
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                builder.setSeamlessResizeEnabled(true);
+            boolean entered = enterPictureInPictureMode(builder.build());
+            if (!entered && isInPictureInPictureMode()) entered = true;
+            if (!entered) {
+                Log.w(PIP_TAG, "Android did not confirm PiP immediately; waiting for the real OS callback");
+                confirmRejectedPictureInPictureAfterSettling(attempt);
+            }
+            return entered;
+        } catch (Exception error) {
+            Log.w(PIP_TAG, "Android PiP entry threw; checking for delayed OS confirmation", error);
+            confirmRejectedPictureInPictureAfterSettling(attempt);
+            return false;
+        }
+    }
+
+    private void confirmRejectedPictureInPictureAfterSettling(int attempt) {
+        // Some Samsung builds deliver the pinned-window callback shortly AFTER
+        // a native enter request returns. An immediate permission AlertDialog
+        // can itself end up IN the tiny PiP window, exactly like the screenshot.
+        // Give Android a moment to confirm entry before showing any error.
+        getWindow().getDecorView().postDelayed(() -> {
+            if (attempt != pipEntrySerial || confirmedSystemPip ||
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode()) ||
+                isFinishing() || isDestroyed()) return;
+            rollbackRejectedPictureInPicture();
+            explainUnavailablePip();
+        }, 350);
+    }
+
+    private void rollbackRejectedPictureInPicture() {
+        // Only provisional flags were set. In particular, DO NOT call
+        // IrgunNativeVideoPlugin.systemPipChanged(false) or prepareWebForPip
+        // here: neither was entered and those calls erase native fullscreen
+        // or force a stale mobile viewport onto a still-running PlayerView.
+        if (confirmedSystemPip || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+            && isInPictureInPictureMode())) return;
+        irgunPipActive = false;
+        if (videoDisplay != null) videoDisplay.pip(false);
+        if (videoFullscreen) hideSystemBarsForVideo();
+        else restoreNormalSystemBars();
     }
 
     private void explainUnavailablePip() {
@@ -209,7 +237,7 @@ public class MainActivity extends BridgeActivity {
         android.app.AlertDialog.Builder dialog=new android.app.AlertDialog.Builder(this)
             .setTitle("Picture-in-Picture").setNegativeButton("Close",null);
         if(supported){
-            dialog.setMessage("Picture-in-Picture could not open. Check that it is allowed for this app in Android settings.")
+            dialog.setMessage("Picture-in-Picture could not open just now. Try again from the video controls. If it keeps failing, check Picture-in-Picture permission in Android settings.")
                 .setPositiveButton("Open settings",(d,which)->{
                     try {
                         startActivity(new android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -285,17 +313,25 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onPictureInPictureModeChanged(boolean isInPictureInPictureMode, Configuration newConfig) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+        final boolean wasConfirmed = confirmedSystemPip;
+        confirmedSystemPip = isInPictureInPictureMode;
         irgunPipActive = isInPictureInPictureMode;
         if (videoDisplay != null) videoDisplay.pip(isInPictureInPictureMode);
-        IrgunNativeVideoPlugin.systemPipChanged(isInPictureInPictureMode);
         IrgunAnalyticsReporter.get(this).setPictureInPictureActive(isInPictureInPictureMode);
-        prepareWebForPip(isInPictureInPictureMode);
-        if (!isInPictureInPictureMode) {
-            // Returning from PiP is not Vimeo fullscreen. Always restore the normal
-            // app window immediately so the web player comes back at its regular
-            // in-page size instead of briefly remaining stretched to the PiP surface.
+        if (isInPictureInPictureMode) {
+            ++pipEntrySerial; // Cancel any delayed rejection after real PiP.
+            // The ONLY path which converts a running native PlayerView to a
+            // pinned-window presentation. Do not run this before Android enters.
+            IrgunNativeVideoPlugin.systemPipChanged(true);
+            prepareWebForPip(true);
+        } else if (wasConfirmed) {
+            // A confirmed PiP exit, not a failed attempt or a generic Activity
+            // resume. Keep the same ExoPlayer and restore its in-page geometry.
+            IrgunNativeVideoPlugin.systemPipChanged(false);
             videoFullscreen = false;
+            if (fullscreenBackCallback != null) fullscreenBackCallback.setEnabled(false);
             restoreNormalSystemBars();
+            prepareWebForPip(false);
             restoreWebViewportAfterPip();
         }
     }
@@ -360,23 +396,29 @@ public class MainActivity extends BridgeActivity {
         IrgunAnalyticsReporter.get(this).setForeground(true);
 
         boolean actuallyInPip = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode();
-        boolean pipWasActive = irgunPipActive;
+        boolean pipWasActive = confirmedSystemPip;
         if (!actuallyInPip) {
             irgunPipActive = false;
-            videoFullscreen = false;
-            restoreNormalSystemBars();
-
-            // Only a real PiP exit needs WebView cleanup. A normal Home -> reopen
-            // never evaluates JavaScript from Activity.onResume.
             if (pipWasActive) {
+                // Rare devices resume before the PiP exit callback arrives.
+                // Restore only after real confirmed PiP, never after a rejected
+                // entry or a generic Home/notification/dialog transition.
+                confirmedSystemPip = false;
+                IrgunNativeVideoPlugin.systemPipChanged(false);
+                if (videoDisplay != null) videoDisplay.pip(false);
+                videoFullscreen = false;
+                if (fullscreenBackCallback != null) fullscreenBackCallback.setEnabled(false);
+                restoreNormalSystemBars();
                 getWindow().getDecorView().post(() -> {
                     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N || !isInPictureInPictureMode()) {
-                        irgunPipActive = false;
                         prepareWebForPip(false);
                         restoreWebViewportAfterPip();
                     }
                 });
-            }
+            } else if (videoFullscreen) {
+                // A failed PiP attempt is still the original native fullscreen.
+                hideSystemBarsForVideo();
+            } else restoreNormalSystemBars();
         }
         if (videoDisplay != null) videoDisplay.foreground(true);
     }

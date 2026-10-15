@@ -434,7 +434,9 @@ test('native PiP, resolution and swipe controls are exercised through real Andro
   assert.match(bridge,/new NativePlayerView/);
   assert.match(bridge,/dispatchTouchEvent/);
   assert.match(bridge,/NativeVideoSwipe.shouldMinimize/);
-  assert.match(bridge,/enterIrgunPictureInPicture/);
+  assert.match(bridge,/__irgunEnterSystemPipFromNative/);
+  assert.doesNotMatch(bridge.slice(bridge.indexOf('pipButton=iconButton'),bridge.indexOf('pipButton.setVisibility')),/enterIrgunPictureInPicture\(/,
+    'Toolbar PiP must never bypass the working prepared JS entry path');
   const quality=bridge.slice(bridge.indexOf('    private void showQualityMenu()'),bridge.indexOf('    private void updateVideoActions()'));
   assert.match(quality,/getTrackSelectionParameters/);
   assert.match(quality,/clearOverridesOfType\(C.TRACK_TYPE_VIDEO\)/);
@@ -447,6 +449,45 @@ test('native PiP, resolution and swipe controls are exercised through real Andro
   assert.match(integration,/tapNativeLabel\('Expand mini video'\)/);
   assert.match(integration,/after.playerIdentity,before.playerIdentity/);
   assert.match(integration,/after.mediaItemIdentity,before.mediaItemIdentity/);
+});
+
+test('native top PiP and video header PiP share one prepared entry; rejected PiP keeps fullscreen intact',()=>{
+  const activity=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/MainActivity.java','utf8');
+  const top=bridge.slice(bridge.indexOf('pipButton=iconButton'),bridge.indexOf('pipButton.setVisibility'));
+  const enter=activity.slice(activity.indexOf('public boolean enterIrgunPictureInPicture()'),activity.indexOf('private void rollbackRejectedPictureInPicture()'));
+  const rollback=activity.slice(activity.indexOf('private void rollbackRejectedPictureInPicture()'),activity.indexOf('private void explainUnavailablePip()'));
+  const callback=activity.slice(activity.indexOf('public void onPictureInPictureModeChanged('),activity.indexOf('public void onWindowFocusChanged('));
+  assert.match(top,/__irgunEnterSystemPipFromNative/);
+  assert.match(app,/window\.__irgunEnterSystemPipFromNative = \(\) =>/);
+  assert.match(app,/pip\.addEventListener\('click', event => \{ event\.stopPropagation\(\); enterSystemPictureInPicture\(\)/);
+  assert.doesNotMatch(enter,/IrgunNativeVideoPlugin\.systemPipChanged\(/,
+    'PiP entry cannot resize/reflow the native view until Android confirms it');
+  assert.match(rollback,/if \(videoFullscreen\) hideSystemBarsForVideo\(\)/,
+    'Entry failure must retain the previous native fullscreen window');
+  assert.match(activity,/confirmRejectedPictureInPictureAfterSettling\(attempt\)/,
+    'Do not launch a permission dialog before the actual Android PiP callback settles');
+  assert.match(activity,/attempt != pipEntrySerial \|\| confirmedSystemPip/,
+    'A delayed PiP rejection must be cancelled by actual OS confirmation');
+  assert.match(activity,/\+\+pipEntrySerial; \/\/ Cancel any delayed rejection after real PiP/);
+  assert.doesNotMatch(rollback,/IrgunNativeVideoPlugin\.systemPipChanged\(false\);/);
+  assert.match(callback,/if \(isInPictureInPictureMode\) \{[\s\S]*?systemPipChanged\(true\)/);
+  assert.match(callback,/else if \(wasConfirmed\) \{[\s\S]*?systemPipChanged\(false\)/);
+  assert.match(activity,/else if \(videoFullscreen\) \{\s*\/\/ A failed PiP attempt[\s\S]*?hideSystemBarsForVideo\(\)/);
+  assert.match(app,/state\.watchVimeo\.updateFrame\?\.\(\)/,
+    'Real PiP exit must recalculate the native Media3 viewport');
+  // Execute actual JS top-button delegate, not only a source-pattern check.
+  const start=app.indexOf('window.__irgunEnterSystemPipFromNative = () => {');
+  const end=app.indexOf('async function restoreAfterSystemPip()',start);
+  assert.ok(start>0&&end>start);
+  let calls=0;
+  const window={},state={watchVideo:{id:'lecture'},watchMode:'video',
+    watchVimeo:{isIrgunNativeVideoPlayer:true},systemPipActive:false};
+  runInNewContext(app.slice(start,end),{window,state,Capacitor:{getPlatform:()=> 'android'},
+    enterSystemPictureInPicture:()=>{calls++;return Promise.resolve();}});
+  window.__irgunEnterSystemPipFromNative();
+  assert.equal(calls,1);
+  state.systemPipActive=true;window.__irgunEnterSystemPipFromNative();
+  assert.equal(calls,1,'No second PiP transition while already pinned');
 });
 
 test('native PiP restoration only repositions the same engine and cannot seek a stale saved clock',async()=>{

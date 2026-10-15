@@ -506,8 +506,13 @@ public final class IrgunNativeVideoPlugin extends Plugin {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(44), Gravity.TOP);
             surface.addView(videoActions, actionParams);
             pipButton=iconButton(R.drawable.irgun_pip, "Enter Picture-in-Picture", () -> {
-                if(getActivity() instanceof MainActivity)
-                    ((MainActivity)getActivity()).enterIrgunPictureInPicture();
+                if (!visible || mini || systemPip) return;
+                // The header PiP button works because JS first captures the
+                // playing state, then uses IrgunPictureInPicture.enter(). Route
+                // the native top-toolbar through that SAME path. Directly
+                // calling the Activity here skipped preparation and could
+                // leave fullscreen native geometry broken after PiP denial.
+                webAction("window.__irgunEnterSystemPipFromNative && window.__irgunEnterSystemPipFromNative();");
             });
             pipButton.setVisibility(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? View.VISIBLE : View.GONE);

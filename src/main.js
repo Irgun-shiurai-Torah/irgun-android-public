@@ -2,7 +2,10 @@ import './style.css';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
 import { usageAnalytics } from './usageAnalytics.js';
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
+import {BELSKY_VOL1_ID,nextPaidTrackInFolder} from './android-paid-collections.js';
+import {paidFolderTreeHtml} from './android-paid-catalog-ui.js';
+import {createAndroidPaidQuestionController} from './android-paid-index-controller.js';
 import {bindAndroidPlayerSheetInteractions,preserveAndroidPlayerSheetScroll} from './android-player-controls.js';
 import {isAndroidVimeoOnlyVideo,createAndroidVimeoPlayer} from './android-vimeo-playback.js';
 import {createAndroidVideoDisplaySync} from './android-video-display.js';
@@ -243,6 +246,17 @@ const state = {
   paidProgressLastAt: 0,
   paidPlaySessionCache: new Map(),
   paidPlaySessionPrefetch: new Map(),
+  paidOpenFolders: new Set(),
+  paidLastFinishedKey: '',
+  paidPlaybackGeneration: 0,
+  paidQuestionIndexOpen: false,
+  paidQuestionIndexLoaded: false,
+  paidQuestionIndexLoading: false,
+  paidQuestionIndexError: '',
+  paidQuestionSessions: [],
+  paidQuestionSearch: '',
+  paidQuestionDisc: 'all',
+  paidQuestionLimit: 70,
   recurringDonations: [],
   recurringLoaded: false,
   recurringLoading: false,
@@ -4080,9 +4094,19 @@ function paidMaterialsHtml(item) {
   return `<div class="paid-materials"><div class="paid-materials-title">${svgIcon('library')} <strong>Included PDF downloads</strong></div><div class="paid-materials-list">${files.map(file=>`<article class="paid-material"><div><strong>${esc(file.title || file.fileName || 'PDF')}</strong><small>${esc(file.fileName || '')}${file.size ? ` • ${Math.max(1,Math.round(Number(file.size)/1024))} KB` : ''}</small></div><div class="paid-material-actions"><button type="button" data-paid-attachment-view="${esc(file.id)}" data-paid-product="${esc(item.id)}">View</button><button type="button" class="primary" data-paid-attachment-download="${esc(file.id)}" data-paid-product="${esc(item.id)}">Download</button></div></article>`).join('')}</div></div>`;
 }
 
+const androidPaidQuestionIndex=createAndroidPaidQuestionController({
+  state,CapacitorHttp,render,esc,isHebrew:()=>currentLanguage()==='he'
+});
+function androidPaidFolderHtml(item, expanded) {
+  const tree=paidFolderTreeHtml(item,{esc,openFolders:state.paidOpenFolders,isHebrew:currentLanguage()==='he'});
+  if(!item.owned)return tree;
+  return '<div class="paid-album" '+(expanded?'':'hidden')+'><div class="paid-track-head"><strong>Your Audio</strong><span>Protected personal listening</span></div>'+tree+paidMaterialsHtml(item)+'</div>';
+}
 function paidProductCard(item) {
   const id = String(item.id || '');
   const expanded = state.paidExpandedId === id;
+  const androidIndexButton = Capacitor.getPlatform()==='android' && id===BELSKY_VOL1_ID
+    ? '<button class="paid-index-entry" type="button" data-paid-index-open="1">Search Halacha Questions &amp; Topics</button>' : '';
   const images = paidProductImageUrls(item);
   const status = item.owned ? tr('Purchased') : item.available ? tr('Available now') : tr('Coming Soon');
   const statusClass = item.owned ? 'owned' : item.available ? 'available' : 'coming';
@@ -4092,8 +4116,8 @@ function paidProductCard(item) {
     <div class="paid-body"><div class="paid-card-topline"><span class="paid-category">${esc(item.category || 'Audio Collection')}</span><span class="paid-status-chip ${statusClass}">${esc(status)}</span></div><h2>${esc(paidProductTitle(item))}</h2>${item.speaker ? `<strong class="paid-speaker">${esc(item.speaker)}</strong>` : ''}<div class="paid-meta">${esc([item.catalogDetails, item.audience].filter(Boolean).join(' • '))}</div>
       <div class="paid-price-row"><strong>${esc(paidProductPriceLabel(item))}</strong><span>${item.trackCount ? `${Number(item.trackCount)} tracks` : ''}</span></div>
       <div class="paid-actions">${item.owned ? `<button class="paid-primary" data-paid-expand="${esc(id)}">${svgIcon('play')} ${expanded ? 'Close' : 'Listen'}</button>` : item.available ? `<button class="paid-primary" data-paid-purchase="${esc(id)}">${svgIcon('store')} Buy Securely</button>` : `<button class="paid-primary paid-coming-button" disabled>${tr('Coming Soon')}</button>`}<button class="paid-secondary" data-paid-description="${esc(id)}">Details</button></div>
-      <div class="paid-description paid-description-rich" data-paid-description-panel="${esc(id)}" hidden>${paidRichDescription(item.description)}</div>
-      ${item.owned ? `<div class="paid-album" ${expanded ? '' : 'hidden'}><div class="paid-track-head"><strong>Your Audio</strong><span>Protected personal listening</span></div>${(item.tracks || []).length ? `<div class="paid-track-list">${item.tracks.map((track,index)=>`<button class="paid-track" data-paid-track="${esc(track.id)}" data-paid-product="${esc(id)}"><span>${index+1}</span><div><strong>${esc(track.title || `Track ${index+1}`)}</strong><small>${track.size ? `${Math.round(Number(track.size)/1024/1024)} MB` : 'Secure streaming'}</small></div>${svgIcon('play')}</button>`).join('')}</div>` : '<div class="empty">This purchase is connected, but its tracks are not available right now.</div>'}${paidMaterialsHtml(item)}</div>` : ''}
+      <div class="paid-description paid-description-rich" data-paid-description-panel="${esc(id)}" hidden>${paidRichDescription(item.description)}</div>${androidIndexButton}
+      ${Capacitor.getPlatform()==='android' ? androidPaidFolderHtml(item,expanded) : (item.owned ? `<div class="paid-album" ${expanded ? '' : 'hidden'}><div class="paid-track-head"><strong>Your Audio</strong><span>Protected personal listening</span></div>${(item.tracks || []).length ? `<div class="paid-track-list">${item.tracks.map((track,index)=>`<button class="paid-track" data-paid-track="${esc(track.id)}" data-paid-product="${esc(id)}"><span>${index+1}</span><div><strong>${esc(track.title || `Track ${index+1}`)}</strong><small>${track.size ? `${Math.round(Number(track.size)/1024/1024)} MB` : 'Secure streaming'}</small></div>${svgIcon('play')}</button>`).join('')}</div>` : '<div class="empty">This purchase is connected, but its tracks are not available right now.</div>'}${paidMaterialsHtml(item)}</div>` : '')}
       ${state.isAdmin && state.adminMode ? `<div class="admin-card-tools"><button data-admin-paid-edit="${esc(id)}">Edit Product</button><button class="danger" data-admin-paid-delete="${esc(id)}">Delete</button></div>` : ''}
     </div>
   </article>`;
@@ -4106,6 +4130,7 @@ function paidCheckoutModalHtml() {
 }
 
 function paidShiurimHtml() {
+  if(Capacitor.getPlatform()==='android' && state.paidQuestionIndexOpen) return androidPaidQuestionIndex.html();
   if (!state.paidLoaded && !state.paidError) return `<div class="page-title pro-page-title"><span class="page-kicker">PREMIUM TORAH AUDIO</span><h1>${currentLanguage()==='he'?'רכישה':'Purchase'}</h1><p>${currentLanguage()==='he'?'טוען את האוספים הזמינים ואת הרכישות שלכם…':'Loading available collections and your purchases…'}</p></div><div class="loading">${currentLanguage()==='he'?'טוען אוספים…':'Loading audio collections…'}</div>`;
   const owned = state.paidCatalog.filter(item => item.owned).length;
   const ordered = [...state.paidCatalog].sort((a,b)=>Number(Boolean(b.featured))-Number(Boolean(a.featured)) || paidProductTitle(a).localeCompare(paidProductTitle(b)));
@@ -6388,21 +6413,26 @@ function warmPaidPurchases() {
   owned.forEach((product,index)=>setTimeout(()=>prefetchPaidTrack(product.id,product.tracks[0]?.id),150+index*250));
 }
 
-async function playPaidTrack(productId, trackId) {
+async function playPaidTrack(productId, trackId, options = {}) {
   if (!state.user) {
     state.screen = 'account';
     state.authMessage = 'Please sign in to listen to your purchased shiurim.';
     render();
     return;
   }
+  if(options.fromAutoAdvance && String(state.current?.id||'')!==String(options.expectedCurrentId||'')) return false;
   resetWatchPresentationForStandaloneAudio();
   const product = state.paidCatalog.find(item => String(item.id) === String(productId));
   const track = product?.tracks?.find(item => String(item.id) === String(trackId));
-  if (!product?.owned || !track) return;
+  if (!product?.owned || !track) return false;
+  if(Capacitor.getPlatform()==='android' && !options.fromAutoAdvance){state.paidLastFinishedKey='';state.paidPlaybackGeneration++;}
+  const playbackGeneration=state.paidPlaybackGeneration;
   try {
     setToast('Preparing secure playback...');
     const data = await requestPaidPlaySession(productId, trackId, false);
     state.paidPlaySessionCache.delete(paidPlaySessionKey(productId, trackId));
+    if(options.fromAutoAdvance && (state.paidPlaybackGeneration!==playbackGeneration || String(state.current?.id||'')!==String(options.expectedCurrentId||''))) return false;
+    if(Capacitor.getPlatform()==='android' && !data?.playbackUrl)throw new Error('Protected audio session has no playable URL.');
     audio.crossOrigin = 'use-credentials';
     await startAudio({
       kind:'paid-audio',
@@ -6416,11 +6446,35 @@ async function playPaidTrack(productId, trackId) {
       url:String(data.playbackUrl || ''),
       bookmarkSeconds:Number(data.progress?.bookmarkSeconds)||0
     }, Number(data.progress?.positionSeconds)||0);
+    return true;
   } catch (error) {
-    alert(error.message || 'Could not start protected playback.');
+    if(options.fromAutoAdvance)setToast('Could not play the next track. Choose it again to retry.');
+    else alert(error.message || 'Could not start protected playback.');
+    return false;
   }
 }
 
+// Continue protected Audio only inside the same deepest Google Drive folder.
+// The native Media3 MediaSession is reused; changing the signed MediaItem does
+// not create a second ExoPlayer or a WebView audio decoder.
+async function finishPaidNativeTrack(ended) {
+  if(!ended || ended.kind!=='paid-audio' || String(state.current?.id||'')!==String(ended.id||'')) return;
+  if(state.paidLastFinishedKey===ended.id)return;
+  state.paidLastFinishedKey=ended.id;
+  // Capture the just-ended track before requesting the next protected session.
+  // The network history write must not block consecutive playback.
+  void savePaidAudioProgress(false,true).catch(()=>{});
+  if(state.sleepMode==='end'){setToast('Playback stopped at the end of this track.');updatePlayerUi();return;}
+  const product=state.paidCatalog.find(item=>String(item.id)===String(ended.paidAudioId));
+  const next=product?.owned ? nextPaidTrackInFolder(product.tracks,ended.trackId) : null;
+  if(!next){setToast('Finished. End of this folder.');updatePlayerUi();return;}
+  const started=await playPaidTrack(String(product.id),String(next.id),{fromAutoAdvance:true,expectedCurrentId:ended.id});
+  if(started){
+    setToast('Playing the next track in this folder.');
+    const after=nextPaidTrackInFolder(product.tracks,next.id);
+    if(after?.id)prefetchPaidTrack(String(product.id),after.id);
+  }
+}
 async function savePaidAudioProgress(bookmark = false, force = false) {
   const current = state.current;
   if (!current || current.kind !== 'paid-audio' || !state.user) return;
@@ -6850,6 +6904,7 @@ function bind() {
   document.querySelectorAll('[data-paid-attachment-view]').forEach(el=>el.addEventListener('click',()=>openPaidAttachment(el.dataset.paidProduct,el.dataset.paidAttachmentView,false)));
   document.querySelectorAll('[data-paid-attachment-download]').forEach(el=>el.addEventListener('click',()=>openPaidAttachment(el.dataset.paidProduct,el.dataset.paidAttachmentDownload,true)));
   document.querySelectorAll('[data-paid-track]').forEach(el => { el.addEventListener('pointerdown', () => prefetchPaidTrack(el.dataset.paidProduct, el.dataset.paidTrack), {passive:true}); el.addEventListener('click', () => playPaidTrack(el.dataset.paidProduct, el.dataset.paidTrack)); });
+  if(Capacitor.getPlatform()==='android') androidPaidQuestionIndex.bind(document);
   document.querySelectorAll('[data-paid-purchase]').forEach(el => el.addEventListener('click', () => initPaidCheckout(el.dataset.paidPurchase)));
   document.querySelectorAll('[data-paid-checkout-close]').forEach(el => el.addEventListener('click', closePaidCheckout));
   document.querySelectorAll('[data-paid-modal-backdrop]').forEach(el => el.addEventListener('click', event => { if (event.target === el) closePaidCheckout(); }));
@@ -7762,7 +7817,9 @@ async function startAudio(item, resumeAt = 0) {
   const replacingLecture = Boolean(previous && (String(previous.id || '') !== String(effective.id || '') || String(previous.kind || '') !== String(effective.kind || '')));
   if (replacingLecture) {
     if (previous.kind === 'paid-audio') {
-      await savePaidAudioProgress(false, true).catch(() => {});
+      if(Capacitor.getPlatform()==='android') void savePaidAudioProgress(false,true).catch(()=>{});
+      else await savePaidAudioProgress(false, true).catch(() => {});
+      if(Capacitor.getPlatform()==='android')state.paidProgressLastAt=0;
     } else {
       const outgoing = captureCurrentAudioHistorySnapshot();
       if (outgoing) saveAudioHistorySnapshot(outgoing, false, { reconcile:true }).catch(() => {});
@@ -7935,6 +7992,15 @@ async function enterSystemPictureInPicture() {
   }
 }
 
+// The native top-row PiP button is NOT a separate Android entry path.
+// It must perform the same preparation as the working video-header button.
+window.__irgunEnterSystemPipFromNative = () => {
+  if (Capacitor.getPlatform() !== 'android' || state.watchMode !== 'video' ||
+      !state.watchVideo || !state.watchVimeo?.isIrgunNativeVideoPlayer ||
+      state.systemPipActive) return;
+  void enterSystemPictureInPicture();
+};
+
 async function restoreAfterSystemPip() {
   if (!state.watchVideo || state.watchMode !== 'video' || !state.watchVimeo) return;
   const player = state.watchVimeo;
@@ -8038,7 +8104,18 @@ window.__irgunRestoreViewportAfterPip = function() {
     requestAnimationFrame(() => {
       void document.body.offsetWidth;
       window.dispatchEvent(new Event('resize'));
-      setTimeout(() => window.dispatchEvent(new Event('resize')), 120);
+      // A native Media3 PlayerView is positioned OUTSIDE the WebView. After
+      // Android restores the Activity size, remeasure the actual video frame
+      // twice rather than keeping stale PiP/fullscreen pixel coordinates.
+      if (Capacitor.getPlatform() === 'android' &&
+          state.watchVimeo?.isIrgunNativeVideoPlayer) {
+        state.watchVimeo.updateFrame?.();
+      }
+      setTimeout(() => {
+        window.dispatchEvent(new Event('resize'));
+        if (Capacitor.getPlatform() === 'android' &&
+            state.watchVimeo?.isIrgunNativeVideoPlayer) state.watchVimeo.updateFrame?.();
+      }, 120);
     });
   } catch (_) {}
 };
@@ -8380,7 +8457,16 @@ const PlaybackController = {
       });
       plugin.addListener('audioReady', event => applyState(event));
       plugin.addListener('ended', async event => {
+        const endedPaid=Capacitor.getPlatform()==='android' && state.current?.kind==='paid-audio' && String(state.current.id||'')===String(event?.lectureId||'') ? state.current : null;
         applyState(event);
+        if(endedPaid){
+          await finishPaidNativeTrack(endedPaid);
+          if(state.sleepTimer)clearTimeout(state.sleepTimer);
+          state.sleepTimer=null;
+          state.sleepEndsAt=null;
+          if(state.sleepMode==='end')state.sleepMode='off';
+          return;
+        }
         await saveCurrentAudioHistory(true, true);
         if (state.sleepMode === 'end') state.sleepMode = 'off';
         if (state.sleepTimer) clearTimeout(state.sleepTimer);

@@ -659,6 +659,39 @@ try {
   samePlayback(headerBefore,headerAfter.media3,'Header PiP',Date.now()-headerPipStart);
   report.checks.push({label:'Visible header PiP icon enters real pinned mode and preserves one player',before:headerBefore,after:headerAfter.media3});
 
+  // Regression: on a real Samsung tablet the NATIVE TOP-ROW PiP button
+  // previously called MainActivity directly while fullscreen. Android could
+  // reject entry and leave a stretched/black PlayerView on return.
+  // Exercise the physical fullscreen -> toolbar PiP -> return path with ADB.
+  await showNativeControls();
+  await tapNativeLabel('Enter video fullscreen');
+  const fullscreenPipBefore=await waitNative(s=>s.media3.fullscreen&&s.media3.playing,
+    'Native fullscreen must be active before entering top-row PiP');
+  await showNativeControls();
+  await tapNativeLabel('Enter Picture-in-Picture');
+  const fullscreenPip=await waitNative(s=>s.media3.systemPip&&s.media3.playing,
+    'Native TOP toolbar must enter actual Android PiP from fullscreen');
+  assert.match(adb('shell','dumpsys','activity','activities'),/mode=pinned/,
+    'Fullscreen toolbar PiP must be a real pinned Android Activity');
+  samePlayback(fullscreenPipBefore.media3,fullscreenPip.media3,'Fullscreen PiP',Date.now()-headerPipStart);
+  adb('shell','am','start','-W','-n','org.irgunshiuraitorah.app/.MainActivity');
+  await delay(900);
+  if((await sample()).media3.systemPip){
+    adb('shell','am','start','-W','-a','android.intent.action.MAIN',
+      '-c','android.intent.category.LAUNCHER',
+      '-n','org.irgunshiuraitorah.app/.SplashActivity');
+  }
+  const fullscreenPipAfter=await waitNative(s=>!s.media3.systemPip&&
+    s.media3.videoSelected&&s.media3.playing&&s.media3.surfaceVisibleOnScreen&&
+    s.media3.surfaceVisibleWidth>120&&s.media3.surfaceVisibleHeight>65,
+    'Return from fullscreen PiP must restore real visible Media3 video dimensions');
+  samePlayback(fullscreenPipBefore.media3,fullscreenPipAfter.media3,'Fullscreen PiP return',Date.now()-headerPipStart);
+  assert.ok(fullscreenPipAfter.media3.surfaceVisibleWidth<=fullscreenPipAfter.media3.rootWidth+4,
+    'After PiP return, native PlayerView cannot retain the oversize pinned/fullscreen width');
+  assert.equal(fullscreenPipAfter.video,null,'Fullscreen PiP cannot create a second WebView video decoder');
+  report.checks.push({label:'Fullscreen native PiP/return preserves one decoded video and restores visible geometry',
+    before:fullscreenPipBefore.media3,pip:fullscreenPip.media3,after:fullscreenPipAfter.media3});
+
   if (process.env.IRGUN_NATIVE_MEDIA3_SOAK === '1') {
     // A REAL wall-clock 15-minute Media3 HLS soak, not a mock clock or a
     // WebView/HLS.js precondition. Keep checking one ExoPlayer and its decoded

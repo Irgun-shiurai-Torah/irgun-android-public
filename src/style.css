@@ -2794,3 +2794,53 @@ body.irgun-android .android-floating-nav .nav-btn > span:last-child {
   text-overflow: ellipsis;
   line-height: 14px;
 }
+
+
+/* Android purchased-collection folder browser and public Belsky Q&A directory. */
+.irgun-android .paid-folder-overview{margin:14px 0 16px;padding:14px;border:1px solid #e5dfd5;background:#fffdfa;border-radius:16px}
+.irgun-android .paid-folder-overview-title{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:12px;color:var(--navy,#172b43);font-size:14px}
+.irgun-android .paid-folder-overview-title>span,.irgun-android .paid-folder-node summary small,.irgun-android .paid-folder-leaf small{color:var(--muted,#667085);font-size:11px;font-weight:600;white-space:nowrap}
+.irgun-android .paid-folder-tree{display:flex;flex-direction:column;gap:7px;max-height:min(64vh,640px);overflow:auto;overscroll-behavior:contain}
+.irgun-android .paid-folder-node{margin:0;border:1px solid #e7e2d9;border-radius:12px;background:#fff;min-width:0;overflow:hidden}
+.irgun-android .paid-folder-node>summary{display:flex;align-items:center;gap:9px;padding:12px 10px;cursor:pointer;list-style:none;min-height:45px;outline-offset:-3px}
+.irgun-android .paid-folder-node>summary::-webkit-details-marker,.irgun-android .paid-index-session>summary::-webkit-details-marker{display:none}
+.irgun-android .paid-folder-node[open]>summary{background:#f7f5f0;border-bottom:1px solid #eee8df}
+.irgun-android .paid-folder-name{flex:1;min-width:0;font-weight:700;overflow-wrap:anywhere;font-size:13px}
+.irgun-android .paid-folder-chevron{font-size:19px;line-height:1;transform:rotate(0deg);transition:transform .16s}
+.irgun-android .paid-folder-node[open]>summary .paid-folder-chevron{transform:rotate(180deg)}
+.irgun-android .paid-folder-children{display:flex;flex-direction:column;gap:6px;padding:8px 7px 9px 12px}
+.irgun-android .paid-folder-track{margin:0;display:flex;align-items:center;gap:9px;border:1px solid #e8e4de;border-radius:10px;background:#fff;color:var(--navy,#172b43);min-width:0;width:100%;text-align:start}
+.irgun-android .paid-folder-track>div{min-width:0;flex:1}
+.irgun-android .paid-folder-track strong{overflow-wrap:anywhere}
+.irgun-android .paid-folder-track .paid-track-num{font-size:11px;min-width:25px;text-align:center;color:#94713b}
+.irgun-android .paid-folder-leaf{display:flex;gap:8px;align-items:center;padding:11px 9px;border:1px solid #ece7e0;border-radius:10px;min-width:0}
+.irgun-android .paid-folder-leaf>span:nth-child(2){flex:1;overflow-wrap:anywhere;font-size:13px;font-weight:650}
+.irgun-android .paid-folder-locked{font-size:12px;line-height:1.55;color:var(--muted,#667085);margin:12px 0 0}
+.irgun-android .paid-index-entry,.irgun-android .paid-index-session-button,.irgun-android .paid-index-back{display:inline-flex;align-items:center;gap:6px;padding:10px 13px;border:1px solid #d9c29a;border-radius:10px;background:#fff8ed;color:#765a32;font-size:13px;font-weight:700;cursor:pointer}
+.irgun-android .paid-index-entry{width:100%;justify-content:center;margin-top:10px}
+.irgun-android .paid-index-page{padding:10px 0 40px}
+.irgun-android .paid-index-back{margin-bottom:12px}
+.irgun-android .paid-index-searchbar{display:grid;grid-template-columns:minmax(0,1fr) minmax(110px,33%);gap:11px;padding:14px;border:1px solid #e9e4db;border-radius:14px;background:#fff}
+.irgun-android .paid-index-searchbar label{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:700;min-width:0;color:var(--navy,#172b43)}
+.irgun-android .paid-index-searchbar input,.irgun-android .paid-index-searchbar select{width:100%;min-width:0;border:1px solid #d6dce4;border-radius:10px;font:inherit;padding:12px 9px;min-height:43px;background:#fff;color:var(--navy,#172b43)}
+.irgun-android .paid-question-count{font-size:12px;color:#64748b;margin:11px 2px}
+.irgun-android .paid-index-album{margin:16px 0;background:#fff;border:1px solid #e6e4dd;border-radius:15px;padding:13px}
+.irgun-android .paid-index-album h3{color:var(--navy,#172b43);margin:0 0 12px;font-size:16px;line-height:1.5}
+.irgun-android .paid-index-sessions{display:flex;flex-direction:column;gap:7px}
+.irgun-android .paid-index-session{border:1px solid #e8e4db;border-radius:11px;overflow:hidden}
+.irgun-android .paid-index-session>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:9px;padding:12px;font-size:14px}
+.irgun-android .paid-index-session summary strong{flex:1}
+.irgun-android .paid-index-session summary small{font-size:11px;color:#64748b}
+.irgun-android .paid-index-session[open]>summary{background:#f9f6ef;border-bottom:1px solid #e8e4db}
+.irgun-android .paid-index-session-content{padding:8px 12px 14px}
+.irgun-android .paid-question-title{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid #f1efeb;color:#263448;line-height:1.5;font-size:13px;overflow-wrap:anywhere}
+.irgun-android .paid-question-title span{min-width:36px;max-width:90px;flex:none;color:#987440;font-size:12px;font-weight:800}
+.irgun-android .paid-question-title strong{font-weight:650;min-width:0}
+.irgun-android .paid-question-title p{margin:0;min-width:0}
+.irgun-android .paid-question-result{padding:14px;margin-bottom:10px;background:#fff;border:1px solid #e7e4dd;border-radius:12px}
+.irgun-android .paid-question-result>small{color:#735c3d;font-weight:700}
+.irgun-android .paid-index-session-button{margin-top:10px}
+.irgun-android #paidQuestionMore{margin:12px auto 0;display:block;padding:12px;border-radius:11px;border:1px solid #d9c29a;background:#fff8ed;color:#765a32;font-weight:700}
+.irgun-android #paidQuestionMore[hidden]{display:none}
+@media(max-width:390px){.irgun-android .paid-index-searchbar{grid-template-columns:minmax(0,1fr)}.irgun-android .paid-folder-overview{padding:10px}.irgun-android .paid-folder-children{padding-inline-start:8px}}
+@media(prefers-reduced-motion:reduce){.irgun-android .paid-folder-chevron{transition:none}}
