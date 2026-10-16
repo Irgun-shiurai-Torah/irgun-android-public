@@ -124,7 +124,10 @@ try{
     assert.ok(await tap('[data-nav="paid"]'),'Cannot reach Android Purchases via a physical tap');
     for(let n=0;n<32;n++){if((await paidView()).screen==='paid')break;await delay(350);}
   }
-  const page=await paidView();
+  // Fetching the paid catalog is asynchronous; absence while loading isn't
+  // evidence of a missing product or entitlement.
+  let page=await paidView();
+  for(let i=0;i<36&&!page.productVisible;i++){await delay(500);page=await paidView();}
   if(!page.productVisible){report.status='skipped';report.reason='Paid fixture absent from this dedicated QA catalog';}
   else {
     assert.equal(page.lockedPreviewHidden,true,
