@@ -5,6 +5,7 @@ import {BELSKY_VOL1_ID,BELSKY_INDEX_URL,belskyAlbumForSession,belskySessionLabel
   paidFolderPath,paidFolderKey,buildPaidFolderTree,nextPaidTrackInFolder,
   parseBelskyIndex,findBelskyQuestions} from '../src/android-paid-collections.js';
 import {paidFolderTreeHtml,paidQuestionResultsHtml,paidQuestionIndexHtml} from '../src/android-paid-catalog-ui.js';
+import {paidResumePositionSeconds,createPaidPlaybackEvidence,observePaidPlayback,verifiedPaidTrackEnd} from '../src/android-paid-playback-guard.js';
 
 const escape=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const product={id:'pap-childrens-stories-complete',owned:true};
@@ -151,4 +152,129 @@ test('Android folder albums and long paid-track lists use page scrolling, not a 
   assert.match(html,/class="paid-track-info"/);
   assert.match(html,/class="paid-folder-count"/);
   assert.doesNotMatch(html,/<audio|<video|<iframe/,'Native Media3 ownership remains unchanged');
+});
+
+test('locked album folders render ONLY inside the closed Description panel',()=>{
+  const source=readFileSync('src/main.js','utf8');
+  const begin=source.indexOf('function androidPaidFolderHtml(');
+  const end=source.indexOf('function paidCheckoutModalHtml()',begin);
+  assert.ok(begin>=0&&end>begin,'Paid storefront functions exist');
+  const context={
+    state:{paidExpandedId:'',paidOpenFolders:new Set(),isAdmin:false,adminMode:false},
+    Capacitor:{getPlatform:()=> 'android'}, currentLanguage:()=> 'en',
+    paidFolderTreeHtml, esc:escape, BELSKY_VOL1_ID,svgIcon:()=>'',logoArtworkHtml:()=>'<span>logo</span>',
+    paidProductImageUrls:()=>[],paidProductTitle:item=>item.title||'Collection',
+    paidProductPriceLabel:()=>'$9',paidRichDescription:value=>'<p>'+escape(value||'')+'</p>',
+    tr:value=>value
+  };
+  const card=new Function(...Object.keys(context),source.slice(begin,end)+
+    '\nreturn paidProductCard;')(...Object.values(context));
+  const locked=card({id:'locked',title:'A paid collection',description:'About these recordings',
+    available:true,owned:false,folderPreview:[{folders:['Halacha','Shabbos'],trackCount:12}]});
+  const descriptionAt=locked.indexOf('data-paid-description-panel="locked"');
+  const folderAt=locked.indexOf('data-paid-scroll-container="page"');
+  assert.ok(descriptionAt>0 && folderAt>descriptionAt,'Folder content must follow the hidden Description panel');
+  assert.match(locked.slice(descriptionAt,folderAt),/hidden>/);
+  assert.doesNotMatch(locked.slice(0,descriptionAt),/paid-folder-overview|data-paid-folder-key=/);
+  assert.equal((locked.match(/data-paid-scroll-container="page"/g)||[]).length,1);
+  assert.match(locked,/data-paid-description="locked" aria-expanded="false">Description/);
+  assert.doesNotMatch(locked,/data-paid-track=/);
+  const owned=card({id:'owned',title:'Owned collection',available:true,owned:true,
+    tracks:[{id:'t1',title:'Recording',folders:['Halacha']}]});
+  assert.match(owned,/<div class="paid-album" hidden>/,'Purchased audio starts collapsed behind Listen');
+  assert.match(owned,/data-paid-track="t1"/);
+  assert.doesNotMatch(owned,/data-paid-description-panel="owned" hidden>[\s\S]*?paid-folder-overview/);
+});
+
+test('stored paid-track progress at EOF always resumes from the beginning',()=>{
+  assert.equal(paidResumePositionSeconds({positionSeconds:180,durationSeconds:180}),0);
+  assert.equal(paidResumePositionSeconds({positionSeconds:178,durationSeconds:180}),0);
+  assert.equal(paidResumePositionSeconds({positionSeconds:181,durationSeconds:180}),0);
+  assert.equal(paidResumePositionSeconds({positionSeconds:90,durationSeconds:180}),90);
+  assert.equal(paidResumePositionSeconds({positionSeconds:0,durationSeconds:180}),0);
+  assert.equal(paidResumePositionSeconds({positionSeconds:9.5},10),0);
+  assert.equal(paidResumePositionSeconds({positionSeconds:20},0),20);
+});
+
+test('Media3 buffering, instant END and mismatched old event never advance a paid track',()=>{
+  const now=100000;
+  const id='pap-whats-halacha-vol1-belsky:track-1';
+  const g=createPaidPlaybackEvidence(id,now);
+  observePaidPlayback(g,{lectureId:id,mode:'AUDIO',durationMs:180000,
+    currentPositionMs:0,isPlaying:false,audioReady:false},now+200);
+  assert.equal(verifiedPaidTrackEnd(g,{lectureId:id,durationMs:180000,currentPositionMs:180000},now+350),false);
+  observePaidPlayback(g,{lectureId:'other-track',mode:'AUDIO',durationMs:180000,
+    currentPositionMs:179000,isPlaying:true},now+1000);
+  assert.equal(g.firstPlayingAt,0,'Stale snapshot must not make track ready');
+  observePaidPlayback(g,{lectureId:id,mode:'AUDIO',durationMs:180000,
+    currentPositionMs:0,isPlaying:true,audioReady:true},now+1100);
+  assert.equal(verifiedPaidTrackEnd(g,{lectureId:id,durationMs:180000,currentPositionMs:180000},now+1200),false,
+    'A brief prepared source at EOF is not actual listening');
+  observePaidPlayback(g,{lectureId:id,mode:'AUDIO',durationMs:180000,
+    currentPositionMs:1100,isPlaying:true},now+2300);
+  assert.equal(verifiedPaidTrackEnd(g,{lectureId:'other-track',durationMs:180000,
+    currentPositionMs:180000},now+2400),false);
+  assert.equal(verifiedPaidTrackEnd(g,{lectureId:id,durationMs:180000,
+    currentPositionMs:1100},now+2400),false,'Buffering at 1 second cannot finish the album');
+  const completed=createPaidPlaybackEvidence(id,now);
+  observePaidPlayback(completed,{lectureId:id,mode:'AUDIO',durationMs:180000,
+    currentPositionMs:177000,isPlaying:true,audioReady:true},now+1500);
+  observePaidPlayback(completed,{lectureId:id,mode:'AUDIO',durationMs:180000,
+    currentPositionMs:178300,isPlaying:true,audioReady:true},now+2900);
+  observePaidPlayback(completed,{lectureId:id,mode:'AUDIO',durationMs:180000,
+    currentPositionMs:179500,isPlaying:true},now+4200);
+  assert.equal(verifiedPaidTrackEnd(completed,{lectureId:id,durationMs:180000,
+    currentPositionMs:180000},now+4500),true,
+    'Verified Media3 duration completion should play next in same folder');
+});
+
+test('premature ended paid track retries ITSELF only once, never cascading through the folder',async()=>{
+  const source=readFileSync('src/main.js','utf8');
+  const start=source.indexOf('async function finishPaidNativeTrack(ended, event) {');
+  const end=source.indexOf('async function savePaidAudioProgress(',start);
+  assert.ok(start>=0&&end>start);
+  const trace=[];
+  const productId=BELSKY_VOL1_ID;
+  const id=productId+':t1';
+  const product={id:productId,owned:true,tracks:[
+    {id:'t1',title:'Part 1',folders:['Album 1','Session 01']},
+    {id:'t2',title:'Part 2',folders:['Album 1','Session 01']},
+    {id:'t3',title:'Another folder',folders:['Album 1','Session 02']}
+  ]};
+  const state={
+    current:{kind:'paid-audio',id,paidAudioId:productId,trackId:'t1'},
+    paidCatalog:[product],paidTrackEvidence:createPaidPlaybackEvidence(id,Date.now()-100),
+    paidLastFinishedKey:'',paidPrematureRetryId:'',sleepMode:'off',
+    user:{id:'qa-user'}
+  };
+  const ctx={
+    state,verifiedPaidTrackEnd,paidResumePositionSeconds,
+    savePaidAudioProgress:async()=>{},setToast:m=>trace.push(['toast',m]),
+    playPaidTrack:async(p,t,options)=>{trace.push(['play',p,t,options]);return true;},
+    updatePlayerUi:()=>{},nextPaidTrackInFolder,prefetchPaidTrack:()=>{}
+  };
+  const finish=new Function(...Object.keys(ctx),source.slice(start,end)+
+    '\nreturn finishPaidNativeTrack;')(...Object.values(ctx));
+  const ended={...state.current};
+  const fakeEnd={lectureId:id,mode:'AUDIO',durationMs:180000,currentPositionMs:180000};
+  assert.equal(await finish(ended,fakeEnd),false);
+  assert.deepEqual(trace.filter(x=>x[0]==='play').map(x=>x[2]),['t1']);
+  assert.equal(trace[0][0],'toast');
+  assert.equal(state.paidPrematureRetryId,id);
+  // Simulate the retried item replacing the evidence, then ENDing instantly
+  // a second time: no second retry, and certainly no t2/t3.
+  state.paidTrackEvidence=createPaidPlaybackEvidence(id,Date.now()-100);
+  await finish(ended,fakeEnd);
+  assert.deepEqual(trace.filter(x=>x[0]==='play').map(x=>x[2]),['t1']);
+  const good=createPaidPlaybackEvidence(id,Date.now()-6000);
+  const now=Date.now();
+  observePaidPlayback(good,{lectureId:id,mode:'AUDIO',durationMs:180000,
+    currentPositionMs:177000,isPlaying:true},now-3000);
+  observePaidPlayback(good,{lectureId:id,mode:'AUDIO',durationMs:180000,
+    currentPositionMs:178600,isPlaying:true},now-1700);
+  state.paidTrackEvidence=good;
+  assert.equal(await finish(ended,fakeEnd),true);
+  assert.deepEqual(trace.filter(x=>x[0]==='play').map(x=>x[2]),['t1','t2'],
+    'Only a verified end should advance to the next recording');
+  assert.equal(state.paidLastFinishedKey,id);
 });
