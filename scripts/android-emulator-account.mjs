@@ -60,7 +60,7 @@ async function read(){
 }
 
 async function closeSavePicker(){if((await read()).playlistPickerOpen)await tap('closePicker');await wait(s=>!s.playlistPickerOpen,'Save dialog did not close');}
-async function wait(test,message){report.stage=message;let s;const deadline=Date.now()+30000;while(Date.now()<deadline){s=await read();if(test(s))return s;await delay(300);}throw new Error(message);}
+async function wait(test,message,timeoutMs=30000){report.stage=message;let s;const deadline=Date.now()+timeoutMs;while(Date.now()<deadline){s=await read();if(test(s))return s;await delay(300);}throw new Error(message);}
 
 async function readNativeBounds() {
  const window=await readSnapshot("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{}).then(JSON.stringify)");
@@ -274,7 +274,12 @@ async function cleanupQaComment(){
  await fetch('https://api.irgunshiuraitorah.com/logout',{method:'POST',headers:protectedHeaders}).catch(()=>{});
 }
 try{
- readSnapshot=await connect();await wait(s=>s.ready,'Library unavailable');
+ readSnapshot=await connect();
+  // The first WebView request may arrive while Android 15 initializes its
+  // network interface. The app now makes a bounded retry itself. Keep the
+  // real libraryReady assertion, allow that second request to finish, and
+  // still FAIL with the last diagnostic if the library remains unavailable.
+  await wait(s=>s.ready,'Library unavailable',65000);
  // Pin one eligible lecture for this entire run, including process restarts
  // and cleanup. Do not mistake the newest Vimeo-only upload for an Audio test.
  const catalogResponse=await fetch('https://api.irgunshiuraitorah.com/video-map?driveLibrary=1',{
@@ -498,7 +503,7 @@ try{
  try{const diagnostics=execFileSync('adb',['logcat','-d','-t','3000','-s','AndroidRuntime:E','chromium:E','cr_AwContents:E','IrgunPlayback:D','ActivityTaskManager:W','*:S'],{encoding:'utf8'});
   writeFileSync('emulator-report/account-android-errors.log',diagnostics.replaceAll(email,'[email]').replaceAll(password,'[password]'));}catch(_){}
  try{const s=await read();report.failurePlayback={watchMode:s.watchMode,audioPlaying:s.audioPlaying,audioTime:s.audioTime,currentId:s.currentId,nativeAudio:s.nativeAudio};
-  report.startupAtFailure={libraryReady:s.libraryReady,loading:s.loading,bootstrapInFlight:s.bootstrapInFlight,
+  report.startupAtFailure={libraryReady:s.libraryReady,loading:s.loading,bootstrapInFlight:s.bootstrapInFlight,libraryError:s.libraryError||'unknown',
     authBusy:s.authBusy,authMode:s.authMode,authError:s.authError,authFields:s.authFields,
     loggedIn:s.loggedIn,hasStoredSession:s.hasStoredSession,playlistsCount:s.playlists.length,
     qaPlaylistFound:!!restartPlaylistName&&s.playlists.some(p=>p.name===restartPlaylistName)};}catch(_){}
