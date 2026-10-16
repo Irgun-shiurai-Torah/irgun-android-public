@@ -4,10 +4,8 @@ on:
   push:
     branches:
       - main
-      - fix/android-paid-folder-description-and-track-end-20261016
     paths-ignore:
-      # Test-branch only: include this workflow's own change so this commit
-      # produces a signed APK / Google Play INTERNAL build without merging.
+      - ".github/**"
       - "README*"
       - "**/*.md"
       - "**/*.txt"

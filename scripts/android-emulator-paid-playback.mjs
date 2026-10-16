@@ -77,7 +77,7 @@ async function tap(selector,{tries=18}={}){
       return true;
     }
     const b=await bounds(),height=Math.max(200,b.bottom-b.top),width=b.right-b.left;
-    const down=point.found && point.y < 100;
+    const down=point.found && point.y < (point.heightScreen||height)*0.29;
     const x=Math.round(b.left+width*.65);
     const fromY=Math.round(b.top+height*(down ? 0.25 : 0.78));
     const toY=Math.round(b.top+height*(down ? 0.77 : 0.30));
@@ -100,8 +100,10 @@ async function openPurchasedLibrary(){
     if(point.visible){
       adb('shell','input','tap',...(await toPixels(point)).map(String));
       await delay(500);
-      const view=await observe('JSON.stringify({section:state.librarySection,screen:state.screen})');
-      if(view.section==='purchased'){report.checks.push('Physical Library → Purchased tab navigation');return;}
+      // DevTools cannot access module-scoped "state" directly. Read the
+      // visible, selected Purchased tab from the DOM instead.
+      const view=await observe('JSON.stringify({selected:[...document.querySelectorAll("[data-library-section]")].some(el=>el.dataset.librarySection==="purchased"&&el.classList.contains("active"))})');
+      if(view.selected){report.checks.push('Physical Library → Purchased tab navigation');return;}
     }
     const strip=await observe('JSON.stringify((()=>{const e=document.querySelector(".library-tabs-scroll");if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scrollLeft:e.scrollLeft,scrollWidth:e.scrollWidth,clientWidth:e.clientWidth,viewportW:innerWidth,viewportH:innerHeight};})())');
     assert.ok(strip&&strip.height>0,'Purchased Library tab strip is not displayed');
@@ -131,7 +133,7 @@ const nextUnopened=()=>observe(`JSON.stringify((()=>{
  const item=document.querySelector('[data-paid-collection-id="${productId}"]');
  for(const details of item?.querySelectorAll('.paid-folder-node:not([open])')||[]){
    if(!details.parentElement.closest('details:not([open])')) {
-     return '[data-paid-folder-key='+JSON.stringify(details.dataset.paidFolderKey)+'] > summary';
+     return '[data-paid-folder-key="'+CSS.escape(details.dataset.paidFolderKey)+'"] > summary';
    }
  }
  return null;
@@ -140,7 +142,7 @@ const firstVisibleTrack=()=>observe(`JSON.stringify((()=>{
  const item=document.querySelector('[data-paid-collection-id="${productId}"]');
  for(const e of item?.querySelectorAll('[data-paid-track]')||[]){
    if(!e.closest('details:not([open])'))
-     return {selector:'[data-paid-track='+JSON.stringify(e.dataset.paidTrack)+']',id:e.dataset.paidTrack};
+     return {selector:'[data-paid-track="'+CSS.escape(e.dataset.paidTrack)+'"]',id:e.dataset.paidTrack};
  }
  return null;
 })())`);

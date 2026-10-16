@@ -280,3 +280,12 @@ test('premature ended paid track retries ITSELF only once, never cascading throu
     'Only a verified end should advance to the next recording');
   assert.equal(state.paidLastFinishedKey,id);
 });
+
+test('paid emulator observes actual selected Purchased tab and safely escaped folder controls',()=>{
+  const qa=readFileSync('scripts/android-emulator-paid-playback.mjs','utf8');
+  assert.match(qa,/el\.dataset\.librarySection==="purchased"&&el\.classList\.contains\("active"\)/);
+  assert.doesNotMatch(qa,/JSON\.stringify\(\{section:state\.librarySection/);
+  assert.match(qa,/CSS\.escape\(details\.dataset\.paidFolderKey\)/);
+  assert.match(qa,/CSS\.escape\(e\.dataset\.paidTrack\)/);
+  assert.match(qa,/openPurchasedLibrary\(\)/);
+});
