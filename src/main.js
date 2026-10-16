@@ -2097,11 +2097,11 @@ async function bootstrapJson(path) {
       let data;
       for (let attempt=0;attempt<attempts;attempt++) {
         const requestPath = isCatalog
-          ? `${rawPath}${separator}_app_catalog=${Date.now()}&attempt=${attempt+1}` : rawPath;
+          ? `${rawPath}${separator}_app_catalog=${Date.now()}${Capacitor.getPlatform()==='android'?'&attempt='+String(attempt+1):''}` : rawPath;
         try {
           data = await fetchJsonWithTimeout(`${API}${requestPath}`, options,
             attempt>0?12000:timeoutMs);
-          if (rawPath.startsWith('/video-map') && !Array.isArray(data))
+          if (Capacitor.getPlatform()==='android' && rawPath.startsWith('/video-map') && !Array.isArray(data))
             throw new Error('Catalog response did not contain a video list');
           break;
         } catch (error) {
@@ -2235,7 +2235,7 @@ async function loadMetadata() {
       const response=await fetch('/library-metadata.json');
       if (!response.ok) throw new Error('Bundled library metadata HTTP '+response.status);
       const metadata=await response.json();
-      if (!Array.isArray(metadata?.speakers)||!Array.isArray(metadata?.topics))
+      if (Capacitor.getPlatform()==='android' && (!Array.isArray(metadata?.speakers)||!Array.isArray(metadata?.topics)))
         throw new Error('Incomplete bundled library metadata');
       loaded=metadata;
       break;
@@ -2246,7 +2246,7 @@ async function loadMetadata() {
   }
   if(!loaded) {
     const response=await fetch(`${WEBSITE}library-metadata.json`);
-    if(!response.ok)throw new Error('Website metadata HTTP '+response.status);
+    if(Capacitor.getPlatform()==='android'&&!response.ok)throw new Error('Website metadata HTTP '+response.status);
     loaded=await response.json();
   }
   state.metadata=loaded;
