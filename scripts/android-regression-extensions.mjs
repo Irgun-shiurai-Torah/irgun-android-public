@@ -200,7 +200,7 @@ async function section(name,fn){
 function noDuplicatePlayback(s){
   if(s.videoEngine==='native-media3'){
     if(s.watchMode==='video'){
-      assert.equal(s.overlays,1,'Native Video must have exactly one Watch overlay; a duplicate blocks physical mini-player buttons');
+      assert.equal(s.overlays,1,'Native Video must have exactly one Watch overlay; a duplicate blocks physical mini-player buttons; overlays='+JSON.stringify(s.overlayDetails||[]));
       assert.equal(s.iframes,1,'Native Video must keep exactly one about:blank anchor for its physical PlayerView');
     }
     assert.equal(s.videos,0,'Native Media3 must not use an HTML video decoder');
