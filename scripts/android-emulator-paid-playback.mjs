@@ -79,8 +79,8 @@ async function tap(selector,{tries=18}={}){
     const b=await bounds(),height=Math.max(200,b.bottom-b.top),width=b.right-b.left;
     const down=point.found && point.y < 100;
     const x=Math.round(b.left+width*.65);
-    const fromY=Math.round(b.top+height*(down?.25:.78));
-    const toY=Math.round(b.top+height*(down?.77:.30));
+    const fromY=Math.round(b.top+height*(down ? 0.25 : 0.78));
+    const toY=Math.round(b.top+height*(down ? 0.77 : 0.30));
     adb('shell','input','swipe',String(x),String(fromY),String(x),String(toY),'450');
     await delay(450);
   }
@@ -180,6 +180,13 @@ try{
   }
 }catch(e){report.status='failed';report.error=String(e.message||e).slice(0,400);process.exitCode=1;
 }finally{
+  // Leave the same signed-in session at Home for the existing independent
+  // HLS/notification test. Do not start a second audio player or clear tokens.
+  try{adb('shell','input','keyevent','KEYCODE_MEDIA_PAUSE');}catch(_){}
+  try{
+    const s=ws ? await snapshot() : null;
+    if(s?.screen!=='home') await tap('.bottom-nav [data-nav="home"]',{tries:5});
+  }catch(_){}
   report.finishedAt=new Date().toISOString();
   if(ws)ws.close();
   writeFileSync('emulator-report/paid-playback-qa.json',JSON.stringify(report,null,2));
