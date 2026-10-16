@@ -49,6 +49,7 @@ on:
       - 'scripts/test_android_video_display.mjs'
       - 'scripts/test_android_bottom_navigation.mjs'
       - 'scripts/android-emulator-account.mjs'
+      - 'scripts/android-emulator-paid-playback.mjs'
       - 'scripts/test_android_sources.mjs'
       - 'scripts/test_android_paid_collections.mjs'
       - 'scripts/test_android_share_video.mjs'
