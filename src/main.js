@@ -3771,7 +3771,10 @@ function shell(content) {
     ${donateFabHtml()}
     ${Capacitor.getPlatform()==='android'?'':bottomNavHtml()}
     ${state.playerOpen && state.current ? fullPlayerHtml() : ''}
-    ${state.watchVideo && !state.watchHostedExternally && !state.playerOpen ? watchHtml() : ''}
+    ${state.watchVideo && !state.watchHostedExternally && !state.playerOpen &&
+        !(Capacitor.getPlatform()==='android' && state.watchMode==='video' &&
+          state.watchVimeo?.isIrgunNativeVideoPlayer &&
+          persistentVideoMount?.querySelector('.watch-overlay')) ? watchHtml() : ''}
     <div id="downloadManagerMount">${downloadManagerHtml()}</div>
     <div id="offlineDeleteMount">${offlineDeleteDialogHtml()}</div>
     ${filterSheetHtml()}
@@ -3927,6 +3930,18 @@ function bindWatchClick(el, handler) {
   el.addEventListener('click', handler);
 }
 
+// The Android Audio UI may briefly coexist with the parked real video Watch.
+// When Media3 returns to VIDEO, only #persistentVideoMount is authoritative:
+// no second in-app Watch, no hidden competing controls, and no player reset.
+function reconcileAndroidNativeWatchOverlay() {
+  if (Capacitor.getPlatform() !== 'android' || state.watchMode !== 'video' ||
+      !state.watchVimeo?.isIrgunNativeVideoPlayer ||
+      !persistentVideoMount?.querySelector('#watchVimeoFrame') ||
+      !persistentVideoMount.querySelector('.watch-overlay')) return;
+  state.watchHostedExternally = true;
+  document.querySelectorAll('#app .watch-overlay').forEach(overlay => overlay.remove());
+}
+
 function hostCurrentWatchOverlay(mode = 'full') {
   if (!persistentVideoMount || !state.watchVideo || state.watchMode !== 'video') return false;
   let overlay = persistentVideoMount.querySelector('.watch-overlay');
@@ -3943,8 +3958,7 @@ function hostCurrentWatchOverlay(mode = 'full') {
   // Media3 video host remains parked outside #app. When VIDEO becomes active
   // again, remove that stale Audio-mode Watch overlay. It is NOT the native
   // player: the actual iframe/PlayerView stays in persistentVideoMount.
-  if (Capacitor.getPlatform() === 'android')
-    document.querySelector('#app .watch-overlay')?.remove();
+  reconcileAndroidNativeWatchOverlay();
   const mini = mode === 'mini';
   state.watchMinimized = mini;
   persistentVideoMount.className = `persistent-video-mount watch-video-host ${mini ? 'watch-mini-host' : 'watch-full-host'}`;
@@ -5621,8 +5635,7 @@ function restoreParkedHostedVideo() {
   // native VIDEO host. Its markup must be detached synchronously on return,
   // even if the full app render is temporarily deferred (e.g. settings sheet).
   // Otherwise two Watch overlays can steal physical Mini/Fullscreen taps.
-  if (Capacitor.getPlatform() === 'android')
-    document.querySelector('#app .watch-overlay')?.remove();
+  reconcileAndroidNativeWatchOverlay();
   return true;
 }
 
@@ -6762,6 +6775,10 @@ function render() {
     isAndroid:()=>Capacitor.getPlatform()==='android'&&state.playerOpen,
     playerKey:`${state.current?.kind||''}:${state.current?.id||''}`});
   app.innerHTML = shell(content + playlistPickerHtml());
+  // A delayed account/comment render during native Audio -> Video must not
+  // reintroduce an obsolete #app Watch over the real Media3 PlayerView.
+  if (typeof reconcileAndroidNativeWatchOverlay === 'function')
+    reconcileAndroidNativeWatchOverlay();
   // Isolated render regressions execute only this function, without helpers.
   // In the Android app the helper is always defined and updates mini layering.
   if (typeof syncAndroidMiniDialogVisibility === 'function') syncAndroidMiniDialogVisibility();
@@ -9328,8 +9345,12 @@ async function performWatchModeSwitch(mode) {
       setNativePipEligibility(false);
     }
     await PlaybackController.refreshFromNative().catch(()=>{});
+    if(mode==='video') reconcileAndroidNativeWatchOverlay();
     render();
-    if(mode==='video') player.updateFrame();
+    if(mode==='video') {
+      reconcileAndroidNativeWatchOverlay();
+      player.updateFrame();
+    }
     if(state.user){
       saveHistory(id,mode,state.watchResumeSeconds,Number(observed.durationMs||0)/1000,false,{reconcile:true}).catch(()=>{});
     }
