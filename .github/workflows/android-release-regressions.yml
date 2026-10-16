@@ -101,6 +101,7 @@ jobs:
         run: |
           node --check scripts/android-regression-extensions.mjs
           node --check scripts/android-website-account-sync.mjs
+          node --check scripts/android-emulator-paid-playback.mjs
           node --check scripts/android-hls-delivery-probe.mjs
       - name: Check source and gesture unit regressions
         timeout-minutes: 2
