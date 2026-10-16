@@ -1,3 +1,4 @@
+import {nativeVideoPictureVisible} from './android-native-picture-evidence.mjs';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
@@ -253,8 +254,7 @@ try {
       '+repage','-alpha','off','-colorspace','Gray',
       '-threshold','18%','-format','%[fx:mean]','info:'],
       {encoding:'utf8'}).trim());
-    assert.ok(Number.isFinite(mean)&&Number.isFinite(brightFraction)&&
-      (mean>.075||brightFraction>.08),
+    assert.ok(nativeVideoPictureVisible(mean,brightFraction),
       'SCREEN BLACK: no significant image pixels in real Android video viewport '+
       '(center luminance '+mean+', bright pixel fraction '+brightFraction+')'+
       '; screenshot='+png+'; native='+JSON.stringify(m));
