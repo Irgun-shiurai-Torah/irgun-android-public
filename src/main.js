@@ -3774,6 +3774,7 @@ function shell(content) {
     ${state.watchVideo && !state.watchHostedExternally && !state.playerOpen &&
         !(Capacitor.getPlatform()==='android' && state.watchMode==='video' &&
           state.watchVimeo?.isIrgunNativeVideoPlayer &&
+          typeof persistentVideoMount !== 'undefined' &&
           persistentVideoMount?.querySelector('.watch-overlay')) ? watchHtml() : ''}
     <div id="downloadManagerMount">${downloadManagerHtml()}</div>
     <div id="offlineDeleteMount">${offlineDeleteDialogHtml()}</div>
