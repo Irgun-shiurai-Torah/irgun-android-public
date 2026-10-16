@@ -103,7 +103,7 @@ test('published website JSON is the same index source; Android alone owns behavi
   assert.match(controller,/CapacitorHttp\.get/);
   assert.match(controller,/parseBelskyIndex\(data\)/);
   assert.match(main,/Capacitor\.getPlatform\(\)==='android' \? androidPaidFolderHtml/);
-  assert.match(main,/finishPaidNativeTrack\(endedPaid\)/);
+  assert.match(main,/finishPaidNativeTrack\(endedPaid,event\)/);
   assert.match(main,/nextPaidTrackInFolder\(product\.tracks,ended\.trackId\)/);
   assert.match(main,/requestPaidPlaySession\(productId, trackId, false\)/);
   assert.match(main,/await startAudio\(/);
