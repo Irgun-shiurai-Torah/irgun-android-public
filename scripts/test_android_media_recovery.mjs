@@ -88,6 +88,6 @@ test('Visible moving pixels above partial letterboxing are video; a truly black 
   const physical=readFileSync('scripts/android-emulator-native-media3.mjs','utf8');
   assert.match(physical,/nativeVideoPictureVisible\(mean,brightFraction\)/);
   assert.match(physical,/surfaceVisibleOnScreen/);
-  assert.match(physical,/s\.media3\.frames>partial\.media3\.frames\+5/);
+  assert.match(physical,/partialMoved\.media3\.frames>partial\.media3\.frames\+5/);
   assert.match(physical,/-threshold','18%'/);
 });
