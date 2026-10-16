@@ -4241,7 +4241,7 @@ function paidProductCard(item) {
     ${coverHtml}
     <div class="paid-body"><div class="paid-card-topline"><span class="paid-category">${esc(item.category || 'Audio Collection')}</span><span class="paid-status-chip ${statusClass}">${esc(status)}</span></div><h2>${esc(paidProductTitle(item))}</h2>${item.speaker ? `<strong class="paid-speaker">${esc(item.speaker)}</strong>` : ''}<div class="paid-meta">${esc([item.catalogDetails, item.audience].filter(Boolean).join(' • '))}</div>
       <div class="paid-price-row"><strong>${esc(paidProductPriceLabel(item))}</strong><span>${item.trackCount ? `${Number(item.trackCount)} tracks` : ''}</span></div>
-      <div class="paid-actions">${item.owned ? `<button class="paid-primary" data-paid-expand="${esc(id)}">${svgIcon('play')} ${expanded ? 'Close' : 'Listen'}</button>` : item.available ? `<button class="paid-primary" data-paid-purchase="${esc(id)}">${svgIcon('store')} Buy Securely</button>` : `<button class="paid-primary paid-coming-button" disabled>${tr('Coming Soon')}</button>`}<button class="paid-secondary" data-paid-description="${esc(id)}" aria-expanded="false">${currentLanguage()==='he'?'תיאור':'Description'}</button></div>
+      <div class="paid-actions">${item.owned ? `<button class="paid-primary" data-paid-expand="${esc(id)}">${svgIcon('play')} ${expanded ? 'Close' : 'Listen'}</button>` : item.available ? `<button class="paid-primary" data-paid-purchase="${esc(id)}">${svgIcon('store')} Buy Securely</button>` : `<button class="paid-primary paid-coming-button" disabled>${tr('Coming Soon')}</button>`}<button class="paid-secondary" data-paid-description="${esc(id)}" aria-expanded="false">${Capacitor.getPlatform()==='android' ? (currentLanguage()==='he'?'תיאור':'Description') : 'Details'}</button></div>
       <div class="paid-description paid-description-rich" data-paid-description-panel="${esc(id)}" hidden>${paidRichDescription(item.description)}${Capacitor.getPlatform()==='android' && !item.owned ? androidPaidFolderHtml(item,false) : ''}</div>${androidIndexButton}
       ${Capacitor.getPlatform()==='android' ? (item.owned ? androidPaidFolderHtml(item,expanded) : '') : (item.owned ? `<div class="paid-album" ${expanded ? '' : 'hidden'}><div class="paid-track-head"><strong>Your Audio</strong><span>Protected personal listening</span></div>${(item.tracks || []).length ? `<div class="paid-track-list">${item.tracks.map((track,index)=>`<button class="paid-track" data-paid-track="${esc(track.id)}" data-paid-product="${esc(id)}"><span>${index+1}</span><div><strong>${esc(track.title || `Track ${index+1}`)}</strong><small>${track.size ? `${Math.round(Number(track.size)/1024/1024)} MB` : 'Secure streaming'}</small></div>${svgIcon('play')}</button>`).join('')}</div>` : '<div class="empty">This purchase is connected, but its tracks are not available right now.</div>'}${paidMaterialsHtml(item)}</div>` : '')}
       ${state.isAdmin && state.adminMode ? `<div class="admin-card-tools"><button data-admin-paid-edit="${esc(id)}">Edit Product</button><button class="danger" data-admin-paid-delete="${esc(id)}">Delete</button></div>` : ''}
@@ -6650,8 +6650,10 @@ async function playPaidTrack(productId, trackId, options = {}) {
     if(Capacitor.getPlatform()==='android' && !data?.playbackUrl)throw new Error('Protected audio session has no playable URL.');
     // Match website paid playback: auto-advanced recordings start at 0:00,
     // never at the NEXT track's previously saved end-of-file position.
-    const resume=(options.fromAutoAdvance||options.retryPrematureEnd) ? 0
-      : paidResumePositionSeconds(data.progress,track.durationSeconds);
+    const resume=Capacitor.getPlatform()==='android'
+      ? ((options.fromAutoAdvance||options.retryPrematureEnd) ? 0
+          : paidResumePositionSeconds(data.progress,track.durationSeconds))
+      : (Number(data.progress?.positionSeconds)||0);
     // Only real native READY/playing/position callbacks can satisfy this gate.
     // A stored EOF bookmark or unprepared Media3 player may emit STATE_ENDED
     // immediately; that is not permission to skip to the next paid recording.
