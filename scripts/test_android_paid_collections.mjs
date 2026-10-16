@@ -102,7 +102,7 @@ test('published website JSON is the same index source; Android alone owns behavi
   assert.equal(BELSKY_INDEX_URL,'https://irgunshiuraitorah.com/assets/belsky-question-index.json');
   assert.match(controller,/CapacitorHttp\.get/);
   assert.match(controller,/parseBelskyIndex\(data\)/);
-  assert.match(main,/Capacitor\.getPlatform\(\)==='android' \? androidPaidFolderHtml/);
+  assert.match(main,/Capacitor\.getPlatform\(\)==='android' \? \(item\.owned \? androidPaidFolderHtml/);
   assert.match(main,/finishPaidNativeTrack\(endedPaid,event\)/);
   assert.match(main,/nextPaidTrackInFolder\(product\.tracks,ended\.trackId\)/);
   assert.match(main,/requestPaidPlaySession\(productId, trackId, false\)/);
@@ -165,6 +165,7 @@ test('locked album folders render ONLY inside the closed Description panel',()=>
     paidFolderTreeHtml, esc:escape, BELSKY_VOL1_ID,svgIcon:()=>'',logoArtworkHtml:()=>'<span>logo</span>',
     paidProductImageUrls:()=>[],paidProductTitle:item=>item.title||'Collection',
     paidProductPriceLabel:()=>'$9',paidRichDescription:value=>'<p>'+escape(value||'')+'</p>',
+    paidMaterialsHtml:()=>'',
     tr:value=>value
   };
   const card=new Function(...Object.keys(context),source.slice(begin,end)+
