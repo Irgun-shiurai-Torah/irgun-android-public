@@ -84,7 +84,36 @@ async function tap(selector,{tries=18}={}){
     adb('shell','input','swipe',String(x),String(fromY),String(x),String(toY),'450');
     await delay(450);
   }
+  // Preserve geometry only; never record tokens, credentials, or signed media.
+  try { report.lastUnreachableControl={selector,geometry:await placement(selector),
+    scroll:await observe('JSON.stringify({y:window.scrollY,body:document.body.scrollHeight,viewport:innerHeight})')}; }catch(_){}
   return false;
+}
+async function openPurchasedLibrary(){
+  assert.ok(await tap('.bottom-nav [data-nav="library"]',{tries:5}),
+    'Cannot reach Library through the actual Android bottom navigation');
+  for(let n=0;n<18;n++){if((await snapshot()).screen==='library')break;await delay(320);}
+  assert.equal((await snapshot()).screen,'library','Physical Library tap did not navigate to Library');
+  const selector='[data-library-section="purchased"]';
+  for(let attempt=0;attempt<12;attempt++){
+    const point=await placement(selector);
+    if(point.visible){
+      adb('shell','input','tap',...(await toPixels(point)).map(String));
+      await delay(500);
+      const view=await observe('JSON.stringify({section:state.librarySection,screen:state.screen})');
+      if(view.section==='purchased'){report.checks.push('Physical Library → Purchased tab navigation');return;}
+    }
+    const strip=await observe('JSON.stringify((()=>{const e=document.querySelector(".library-tabs-scroll");if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,scrollLeft:e.scrollLeft,scrollWidth:e.scrollWidth,clientWidth:e.clientWidth,viewportW:innerWidth,viewportH:innerHeight};})())');
+    assert.ok(strip&&strip.height>0,'Purchased Library tab strip is not displayed');
+    const towardsRight=point.found&&point.x<strip.x;
+    const from={x:strip.x+strip.width*(towardsRight?0.18:0.84),
+      y:strip.y+strip.height/2,widthScreen:strip.viewportW,heightScreen:strip.viewportH};
+    const to={...from,x:strip.x+strip.width*(towardsRight?0.84:0.18)};
+    adb('shell','input','swipe',...(await toPixels(from)).map(String),
+      ...(await toPixels(to)).map(String),'420');
+    await delay(500);
+  }
+  throw new Error('Unable to reveal Purchased tab with real horizontal Android swipes');
 }
 const paidView=()=>observe(`JSON.stringify((()=>{
   const item=document.querySelector('[data-paid-collection-id="${productId}"]');
@@ -138,8 +167,16 @@ try{
       report.reason='Dedicated GitHub QA account does not own the Belsky test product; assign the test purchase to IRGUN_TEST_EMAIL';
     }else{
       assert.equal(page.listen,true,'Entitled Whats the Halacha collection must have Listen');
-      assert.ok(await tap('[data-paid-collection-id="${productId}"] [data-paid-expand]'),
-        'The real owned Listen button is not accessible');
+      // The all-products Store can put Belsky many screens below the fold.
+      // Exercise the SAME owned card from Library → Purchased, which is how
+      // users actually access previously purchased recordings. Keep all taps,
+      // horizontal tab swipes and folder opening physical via Android ADB.
+      await openPurchasedLibrary();
+      const ownedPage=await paidView();
+      assert.ok(ownedPage.productVisible&&ownedPage.owned,
+        'Belsky product missing from the authenticated Purchased Library');
+      assert.ok(await tap('[data-paid-collection-id="${productId}"] [data-paid-expand]',{tries:28}),
+        'The real owned Listen button is not accessible in Purchased Library');
       let track=null;
       for(let i=0;i<10;i++){
         track=await firstVisibleTrack();
