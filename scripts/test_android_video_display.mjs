@@ -5,6 +5,7 @@ import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createAndroidVideoDisplaySync} from '../src/android-video-display.js';
+import {nativeVideoPictureVisible} from './android-native-picture-evidence.mjs';
 import {assertAndroidVideoTimes,nativeControllerRevealPoint,nativeDoubleTapPoint} from './android-video-display-regression.mjs';
 
 test('native Media3 surface uses TextureView to preserve actual scroll-clipped video pixels',()=>{
@@ -265,7 +266,7 @@ test('partly scrolled picture measurement waits for real controller auto-hide wi
  const hidden={media3:{...visible.media3,controllerFullyVisible:false,qualityButtonVisible:false}};
  const commands=[],report={checks:[]};let waited=false,captured=false;
  const capture=runInNewContext(source.slice(start,end)+'captureVisibleNativePicture',{
-  assert,report,delay:async()=>{},sample:async()=>{assert.equal(waited,true);return hidden;},
+  assert,report,nativeVideoPictureVisible,delay:async()=>{},sample:async()=>{assert.equal(waited,true);return hidden;},
   waitNative:async predicate=>{assert.equal(predicate(visible),false);assert.equal(predicate(hidden),true);waited=true;return hidden;},
   adb:()=>{throw Error('No Android touch or seek is allowed during screenshot observation');},
   writeFileSync:()=>{captured=true;},execFileSync:(command,args)=>{
@@ -275,5 +276,6 @@ test('partly scrolled picture measurement waits for real controller auto-hide wi
   }
  });
  assert.equal(await capture(visible,'partial'),.5);assert.ok(captured);
- assert.equal(commands.length,2);assert.equal(report.checks.length,1);
+ assert.equal(commands.length,3);assert.equal(report.checks.length,1);
+  assert.equal(report.checks[0].brightFraction,.5,'Measure the entire exposed native surface');
 });

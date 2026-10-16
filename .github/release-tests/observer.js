@@ -18,6 +18,11 @@ window.ISTReleaseQA = { snapshot() {
     speed: Number(state.playbackSpeed),
     hostClass: String(host?.className || ''),
     overlays: document.querySelectorAll('#persistentVideoMount .watch-overlay, #app .watch-overlay').length,
+    overlayDetails: [...document.querySelectorAll('#persistentVideoMount .watch-overlay, #app .watch-overlay')].map(e=>{
+      const r=e.getBoundingClientRect();
+      return {root:e.closest('#persistentVideoMount')?'native-host':'in-app',
+        visible:r.width>0&&r.height>0,rect:{x:r.x,y:r.y,w:r.width,h:r.height}};
+    }),
     videos: document.querySelectorAll('#watchDirectHlsVideo').length,
     iframes: document.querySelectorAll('#watchVimeoFrame').length,
     sourceType: String(state.watchVimeo?.getSourceType?.() || ''),

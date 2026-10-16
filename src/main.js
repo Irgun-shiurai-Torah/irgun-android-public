@@ -2089,8 +2089,29 @@ async function bootstrapJson(path) {
       const options = isCatalog ? { cache:'no-store' } : undefined;
       const timeoutMs = isCatalog ? 20000 : 7000;
       const separator = rawPath.includes('?') ? '&' : '?';
-      const requestPath = isCatalog ? `${rawPath}${separator}_app_catalog=${Date.now()}` : rawPath;
-      const data = await fetchJsonWithTimeout(`${API}${requestPath}`, options, timeoutMs);
+      // A cold Android WebView can fail its FIRST live catalog request before
+      // the network stack settles. Retry the authoritative Drive-backed video
+      // catalog once, with a new cache-busting key, before offline fallback.
+      // This is Android-only: iOS/Web keep their existing request behavior.
+      const attempts = Capacitor.getPlatform()==='android' && rawPath.startsWith('/video-map') ? 2 : 1;
+      let data;
+      for (let attempt=0;attempt<attempts;attempt++) {
+        const requestPath = isCatalog
+          ? `${rawPath}${separator}_app_catalog=${Date.now()}${Capacitor.getPlatform()==='android'?'&attempt='+String(attempt+1):''}` : rawPath;
+        try {
+          data = await fetchJsonWithTimeout(`${API}${requestPath}`, options,
+            attempt>0?12000:timeoutMs);
+          if (Capacitor.getPlatform()==='android' && rawPath.startsWith('/video-map') && !Array.isArray(data))
+            throw new Error('Catalog response did not contain a video list');
+          break;
+        } catch (error) {
+          if (attempt===attempts-1) throw error;
+          // No fake empty catalog, no hidden permanent failure. A transient
+          // connection is given one brief recovery window only.
+          console.warn('[Catalog] retry initial Android video map after network error',error);
+          await new Promise(resolve=>setTimeout(resolve,350));
+        }
+      }
       offlineCachePut(key, data).catch(() => {});
       if (isCatalog) {
         state.offlineMode = false;
@@ -2204,14 +2225,31 @@ function resetUserState() {
 
 
 async function loadMetadata() {
-  try {
-    const response = await fetch('/library-metadata.json');
-    if (!response.ok) throw new Error('metadata');
-    state.metadata = await response.json();
-  } catch (_) {
-    const response = await fetch(`${WEBSITE}library-metadata.json`);
-    state.metadata = await response.json();
+  let loaded=null;
+  // Prefer the copy actually bundled into the native app. Early WebView
+  // startup can temporarily fail its first local asset request; Android
+  // retries that local source rather than immediately depending on the web.
+  const attempts = Capacitor.getPlatform()==='android' ? 2 : 1;
+  for (let attempt=0;attempt<attempts;attempt++) {
+    try {
+      const response=await fetch('/library-metadata.json');
+      if (!response.ok) throw new Error('Bundled library metadata HTTP '+response.status);
+      const metadata=await response.json();
+      if (Capacitor.getPlatform()==='android' && (!Array.isArray(metadata?.speakers)||!Array.isArray(metadata?.topics)))
+        throw new Error('Incomplete bundled library metadata');
+      loaded=metadata;
+      break;
+    } catch (error) {
+      if(attempt+1<attempts)
+        await new Promise(resolve=>setTimeout(resolve,300));
+    }
   }
+  if(!loaded) {
+    const response=await fetch(`${WEBSITE}library-metadata.json`);
+    if(Capacitor.getPlatform()==='android'&&!response.ok)throw new Error('Website metadata HTTP '+response.status);
+    loaded=await response.json();
+  }
+  state.metadata=loaded;
 
   state.speakerById = new Map((state.metadata.speakers || []).map(s => [String(s.id), s]));
   state.topicById = new Map((state.metadata.topics || []).map(t => [String(t.id), t]));
@@ -2512,6 +2550,7 @@ async function hydrateInitialCatalogCache() {
 async function bootstrap(options = {}) {
   if (bootstrapInFlight) return;
   bootstrapInFlight = true;
+  state.libraryLastFailure = '';
   const hadLibrary = state.libraryReady;
   if (!hadLibrary) {
     state.loading = true;
@@ -2547,6 +2586,7 @@ async function bootstrap(options = {}) {
     state.counter = Number(counter.count || counter.total || counter.value) || 1124579;
     state.likeCounts = likeCounts || {};
     state.error = '';
+    state.libraryLastFailure = '';
 
     if(state.offlineMode||navigator.onLine===false)restoreOfflineAccount();
     // The catalog is complete. Account restoration and secondary feeds must
@@ -2561,6 +2601,8 @@ async function bootstrap(options = {}) {
     await handleAppReturn();
   } catch (error) {
     console.error(error);
+    // Read-only QA diagnostic; never include tokens, login data or user PII.
+    state.libraryLastFailure = String(error?.message||error).slice(0,180);
     if (!state.libraryReady) {
       state.error = 'offline';
       state.offlineMode = navigator.onLine === false;
@@ -3771,7 +3813,11 @@ function shell(content) {
     ${donateFabHtml()}
     ${Capacitor.getPlatform()==='android'?'':bottomNavHtml()}
     ${state.playerOpen && state.current ? fullPlayerHtml() : ''}
-    ${state.watchVideo && !state.watchHostedExternally && !state.playerOpen ? watchHtml() : ''}
+    ${state.watchVideo && !state.watchHostedExternally && !state.playerOpen &&
+        !(Capacitor.getPlatform()==='android' && state.watchMode==='video' &&
+          state.watchVimeo?.isIrgunNativeVideoPlayer &&
+          typeof persistentVideoMount !== 'undefined' &&
+          persistentVideoMount?.querySelector('.watch-overlay')) ? watchHtml() : ''}
     <div id="downloadManagerMount">${downloadManagerHtml()}</div>
     <div id="offlineDeleteMount">${offlineDeleteDialogHtml()}</div>
     ${filterSheetHtml()}
@@ -3927,6 +3973,18 @@ function bindWatchClick(el, handler) {
   el.addEventListener('click', handler);
 }
 
+// The Android Audio UI may briefly coexist with the parked real video Watch.
+// When Media3 returns to VIDEO, only #persistentVideoMount is authoritative:
+// no second in-app Watch, no hidden competing controls, and no player reset.
+function reconcileAndroidNativeWatchOverlay() {
+  if (Capacitor.getPlatform() !== 'android' || state.watchMode !== 'video' ||
+      !state.watchVimeo?.isIrgunNativeVideoPlayer ||
+      !persistentVideoMount?.querySelector('#watchVimeoFrame') ||
+      !persistentVideoMount.querySelector('.watch-overlay')) return;
+  state.watchHostedExternally = true;
+  document.querySelectorAll('#app .watch-overlay').forEach(overlay => overlay.remove());
+}
+
 function hostCurrentWatchOverlay(mode = 'full') {
   if (!persistentVideoMount || !state.watchVideo || state.watchMode !== 'video') return false;
   let overlay = persistentVideoMount.querySelector('.watch-overlay');
@@ -3943,8 +4001,7 @@ function hostCurrentWatchOverlay(mode = 'full') {
   // Media3 video host remains parked outside #app. When VIDEO becomes active
   // again, remove that stale Audio-mode Watch overlay. It is NOT the native
   // player: the actual iframe/PlayerView stays in persistentVideoMount.
-  if (Capacitor.getPlatform() === 'android')
-    document.querySelector('#app .watch-overlay')?.remove();
+  reconcileAndroidNativeWatchOverlay();
   const mini = mode === 'mini';
   state.watchMinimized = mini;
   persistentVideoMount.className = `persistent-video-mount watch-video-host ${mini ? 'watch-mini-host' : 'watch-full-host'}`;
@@ -5621,8 +5678,7 @@ function restoreParkedHostedVideo() {
   // native VIDEO host. Its markup must be detached synchronously on return,
   // even if the full app render is temporarily deferred (e.g. settings sheet).
   // Otherwise two Watch overlays can steal physical Mini/Fullscreen taps.
-  if (Capacitor.getPlatform() === 'android')
-    document.querySelector('#app .watch-overlay')?.remove();
+  reconcileAndroidNativeWatchOverlay();
   return true;
 }
 
@@ -6762,6 +6818,10 @@ function render() {
     isAndroid:()=>Capacitor.getPlatform()==='android'&&state.playerOpen,
     playerKey:`${state.current?.kind||''}:${state.current?.id||''}`});
   app.innerHTML = shell(content + playlistPickerHtml());
+  // A delayed account/comment render during native Audio -> Video must not
+  // reintroduce an obsolete #app Watch over the real Media3 PlayerView.
+  if (typeof reconcileAndroidNativeWatchOverlay === 'function')
+    reconcileAndroidNativeWatchOverlay();
   // Isolated render regressions execute only this function, without helpers.
   // In the Android app the helper is always defined and updates mini layering.
   if (typeof syncAndroidMiniDialogVisibility === 'function') syncAndroidMiniDialogVisibility();
@@ -9328,8 +9388,12 @@ async function performWatchModeSwitch(mode) {
       setNativePipEligibility(false);
     }
     await PlaybackController.refreshFromNative().catch(()=>{});
+    if(mode==='video') reconcileAndroidNativeWatchOverlay();
     render();
-    if(mode==='video') player.updateFrame();
+    if(mode==='video') {
+      reconcileAndroidNativeWatchOverlay();
+      player.updateFrame();
+    }
     if(state.user){
       saveHistory(id,mode,state.watchResumeSeconds,Number(observed.durationMs||0)/1000,false,{reconcile:true}).catch(()=>{});
     }

@@ -1,3 +1,4 @@
+import {nativeVideoPictureVisible} from './android-native-picture-evidence.mjs';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
@@ -240,11 +241,26 @@ try {
     const mean=Number(execFileSync('convert',[png,'-crop',w+'x'+h+'+'+x+'+'+y,
       '+repage','-alpha','off','-colorspace','Gray','-format','%[fx:mean]','info:'],
       {encoding:'utf8'}).trim());
-    assert.ok(Number.isFinite(mean)&&mean>.075,
-      'SCREEN BLACK: real Android video viewport has luminance '+mean+
-      ' despite a moving ExoPlayer clock; screenshot='+png+'; native='+JSON.stringify(m));
+    // A partially scrolled 16:9 video may expose only its top, with black
+    // letterboxing over most of the *center* crop. The saved failing frame
+    // contained live beis-midrash video above the black band; mean=.067 was
+    // a false negative. Count substantial non-black pixels across the WHOLE
+    // clipped native surface while controller chrome is hidden. A genuinely
+    // black native surface still has no bright pixels and MUST fail.
+    const clipW=Math.round(m.surfaceVisibleWidth),clipH=Math.round(m.surfaceVisibleHeight);
+    const clipX=Math.round(m.surfaceX),clipY=Math.round(m.surfaceY);
+    const brightFraction=Number(execFileSync('convert',[png,
+      '-crop',clipW+'x'+clipH+'+'+clipX+'+'+clipY,
+      '+repage','-alpha','off','-colorspace','Gray',
+      '-threshold','18%','-format','%[fx:mean]','info:'],
+      {encoding:'utf8'}).trim());
+    assert.ok(nativeVideoPictureVisible(mean,brightFraction),
+      'SCREEN BLACK: no significant image pixels in real Android video viewport '+
+      '(center luminance '+mean+', bright pixel fraction '+brightFraction+')'+
+      '; screenshot='+png+'; native='+JSON.stringify(m));
     report.checks.push({label:'Real Android screenshot shows nonblack VIDEO pixels',
-      image:png,physicalViewport:{x,y,w,h},meanLuminance:mean});
+      image:png,physicalViewport:{x,y,w,h},clipViewport:{x:clipX,y:clipY,w:clipW,h:clipH},
+      meanLuminance:mean,brightFraction});
     return mean;
   };
   const first=await waitNative(s=>s.activeMode==='video'&&
