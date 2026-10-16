@@ -153,7 +153,7 @@ try{
       report.trackId=String(track.id);
       assert.ok(await tap('[data-paid-collection-id="${productId}"] '+track.selector),
         'Cannot physically tap the purchased Belsky track');
-      let observedPlaying=false,advancing=false,startedAt=0,lastAt=0;
+      let observedPlaying=false,advancing=false,startedAt=0,lastAt=0,selectedSeen=false;
       const samples=[];
       const wanted=`${productId}:${track.id}`;
       for(let n=0;n<25;n++){
@@ -163,8 +163,13 @@ try{
           nativeId:s.nativeAudio?.lectureId||'',ready:s.nativeAudio?.audioReady,
           playing:s.nativeAudio?.audioIsPlaying,ms:s.nativeAudio?.audioPositionMs||0};
         samples.push(sample);
-        if(sample.id&&sample.id!==wanted)throw new Error('Purchased playback skipped selected track before it finished');
-        if(sample.nativeId&&sample.nativeId!==wanted&&sample.elapsedMs>2500)
+        // Signing/loading a paid URL is asynchronous. The previous ordinary
+        // shiur may remain selected until the FIRST paid Media3 item loads.
+        // Only a transition AWAY after seeing the selected paid track is a skip.
+        if(sample.id===wanted) selectedSeen=true;
+        if(selectedSeen&&sample.id&&sample.id!==wanted)
+          throw new Error('Purchased playback skipped selected track before it finished');
+        if(selectedSeen&&sample.nativeId&&sample.nativeId!==wanted&&sample.elapsedMs>3500)
           throw new Error('Media3 switched away from the selected purchased track');
         if(sample.playing&&sample.nativeId===wanted){
           observedPlaying=true;
