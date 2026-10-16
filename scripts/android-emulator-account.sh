@@ -28,6 +28,9 @@ sleep 4
 adb exec-out screencap -p > emulator-report/after-splash.png || true
 export IRGUN_KEEP_QA_SESSION=1
 node scripts/android-emulator-account.mjs
+# Exercise the already-entitled Belsky purchased lectures on the real native
+# Media3 player when this CI account has the collection. No new purchase.
+node scripts/android-emulator-paid-playback.mjs
 # A separate signed-in playback report uses the same real media assertions as
 # the logged-out matrix. Never substitute account/API responses for playback.
 export IRGUN_EXPECT_SIGNED_IN=1
