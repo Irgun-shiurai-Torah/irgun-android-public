@@ -57,6 +57,7 @@ test('Android still reports a real catalog outage when both attempts fail, and f
   const ios=fetchLibrary('ios',()=>{throw Error('network unavailable');});
   await assert.rejects(ios.run(),/network unavailable/);
   assert.equal(ios.requests.length,1,'iOS network behavior must not change');
+  assert.doesNotMatch(ios.requests[0].url,/attempt=/,'iOS catalog request URL must retain its original shape');
 });
 
 test('Android retries the bundled speaker metadata without changing its canonical speaker IDs',async()=>{
