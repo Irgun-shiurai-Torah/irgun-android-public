@@ -183,7 +183,8 @@ test('locked album folders render ONLY inside the closed Description panel',()=>
     tracks:[{id:'t1',title:'Recording',folders:['Halacha']}]});
   assert.match(owned,/<div class="paid-album" hidden>/,'Purchased audio starts collapsed behind Listen');
   assert.match(owned,/data-paid-track="t1"/);
-  assert.doesNotMatch(owned,/data-paid-description-panel="owned" hidden>[\s\S]*?paid-folder-overview/);
+  const ownedDescription=owned.slice(owned.indexOf('data-paid-description-panel="owned"'),owned.indexOf('<div class="paid-album"'));
+  assert.doesNotMatch(ownedDescription,/paid-folder-overview/);
 });
 
 test('stored paid-track progress at EOF always resumes from the beginning',()=>{
