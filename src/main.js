@@ -6648,7 +6648,9 @@ async function playPaidTrack(productId, trackId, options = {}) {
     if((options.fromAutoAdvance||options.retryPrematureEnd) &&
         String(state.current?.id||'')!==String(options.expectedCurrentId||'')) return false;
     if(Capacitor.getPlatform()==='android' && !data?.playbackUrl)throw new Error('Protected audio session has no playable URL.');
-    const resume=options.retryPrematureEnd ? 0
+    // Match website paid playback: auto-advanced recordings start at 0:00,
+    // never at the NEXT track's previously saved end-of-file position.
+    const resume=(options.fromAutoAdvance||options.retryPrematureEnd) ? 0
       : paidResumePositionSeconds(data.progress,track.durationSeconds);
     // Only real native READY/playing/position callbacks can satisfy this gate.
     // A stored EOF bookmark or unprepared Media3 player may emit STATE_ENDED
