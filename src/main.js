@@ -2089,8 +2089,29 @@ async function bootstrapJson(path) {
       const options = isCatalog ? { cache:'no-store' } : undefined;
       const timeoutMs = isCatalog ? 20000 : 7000;
       const separator = rawPath.includes('?') ? '&' : '?';
-      const requestPath = isCatalog ? `${rawPath}${separator}_app_catalog=${Date.now()}` : rawPath;
-      const data = await fetchJsonWithTimeout(`${API}${requestPath}`, options, timeoutMs);
+      // A cold Android WebView can fail its FIRST live catalog request before
+      // the network stack settles. Retry the authoritative Drive-backed video
+      // catalog once, with a new cache-busting key, before offline fallback.
+      // This is Android-only: iOS/Web keep their existing request behavior.
+      const attempts = Capacitor.getPlatform()==='android' && rawPath.startsWith('/video-map') ? 2 : 1;
+      let data;
+      for (let attempt=0;attempt<attempts;attempt++) {
+        const requestPath = isCatalog
+          ? `${rawPath}${separator}_app_catalog=${Date.now()}&attempt=${attempt+1}` : rawPath;
+        try {
+          data = await fetchJsonWithTimeout(`${API}${requestPath}`, options,
+            attempt>0?12000:timeoutMs);
+          if (rawPath.startsWith('/video-map') && !Array.isArray(data))
+            throw new Error('Catalog response did not contain a video list');
+          break;
+        } catch (error) {
+          if (attempt===attempts-1) throw error;
+          // No fake empty catalog, no hidden permanent failure. A transient
+          // connection is given one brief recovery window only.
+          console.warn('[Catalog] retry initial Android video map after network error',error);
+          await new Promise(resolve=>setTimeout(resolve,350));
+        }
+      }
       offlineCachePut(key, data).catch(() => {});
       if (isCatalog) {
         state.offlineMode = false;
@@ -2204,14 +2225,31 @@ function resetUserState() {
 
 
 async function loadMetadata() {
-  try {
-    const response = await fetch('/library-metadata.json');
-    if (!response.ok) throw new Error('metadata');
-    state.metadata = await response.json();
-  } catch (_) {
-    const response = await fetch(`${WEBSITE}library-metadata.json`);
-    state.metadata = await response.json();
+  let loaded=null;
+  // Prefer the copy actually bundled into the native app. Early WebView
+  // startup can temporarily fail its first local asset request; Android
+  // retries that local source rather than immediately depending on the web.
+  const attempts = Capacitor.getPlatform()==='android' ? 2 : 1;
+  for (let attempt=0;attempt<attempts;attempt++) {
+    try {
+      const response=await fetch('/library-metadata.json');
+      if (!response.ok) throw new Error('Bundled library metadata HTTP '+response.status);
+      const metadata=await response.json();
+      if (!Array.isArray(metadata?.speakers)||!Array.isArray(metadata?.topics))
+        throw new Error('Incomplete bundled library metadata');
+      loaded=metadata;
+      break;
+    } catch (error) {
+      if(attempt+1<attempts)
+        await new Promise(resolve=>setTimeout(resolve,300));
+    }
   }
+  if(!loaded) {
+    const response=await fetch(`${WEBSITE}library-metadata.json`);
+    if(!response.ok)throw new Error('Website metadata HTTP '+response.status);
+    loaded=await response.json();
+  }
+  state.metadata=loaded;
 
   state.speakerById = new Map((state.metadata.speakers || []).map(s => [String(s.id), s]));
   state.topicById = new Map((state.metadata.topics || []).map(t => [String(t.id), t]));
@@ -2512,6 +2550,7 @@ async function hydrateInitialCatalogCache() {
 async function bootstrap(options = {}) {
   if (bootstrapInFlight) return;
   bootstrapInFlight = true;
+  state.libraryLastFailure = '';
   const hadLibrary = state.libraryReady;
   if (!hadLibrary) {
     state.loading = true;
@@ -2547,6 +2586,7 @@ async function bootstrap(options = {}) {
     state.counter = Number(counter.count || counter.total || counter.value) || 1124579;
     state.likeCounts = likeCounts || {};
     state.error = '';
+    state.libraryLastFailure = '';
 
     if(state.offlineMode||navigator.onLine===false)restoreOfflineAccount();
     // The catalog is complete. Account restoration and secondary feeds must
@@ -2561,6 +2601,8 @@ async function bootstrap(options = {}) {
     await handleAppReturn();
   } catch (error) {
     console.error(error);
+    // Read-only QA diagnostic; never include tokens, login data or user PII.
+    state.libraryLastFailure = String(error?.message||error).slice(0,180);
     if (!state.libraryReady) {
       state.error = 'offline';
       state.offlineMode = navigator.onLine === false;
