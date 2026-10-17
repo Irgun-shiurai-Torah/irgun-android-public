@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
@@ -67,6 +67,7 @@ try {
   const [left, top, right, bottom] = bounds.slice(1).map(Number);
   report.bounds = { left, top, right, bottom };
   const nativePoint = p => [Math.round(left + p.x * (right - left) / p.width), Math.round(top + p.y * (bottom - top) / p.height)];
+  let sampledFingerTrackedSlide = false;
   const swipe = async dx => {
     const from = await read();
     const point = JSON.parse(await evaluate(`JSON.stringify((()=>{
@@ -84,7 +85,43 @@ try {
     const start = nativePoint(point), end = nativePoint({ ...point, x: point.endX });
     const index = from.tabs.indexOf(from.tab);
     const expected = from.tabs[index + (dx < 0 ? 1 : -1)] || from.tab;
-    adb('shell', 'input', 'swipe', ...start.map(String), ...end.map(String), '400');
+    // Observe the intermediate PHYSICAL finger drag; verifying the tab
+    // changed at the end would miss the original jump-without-motion bug.
+    if (!sampledFingerTrackedSlide && expected !== from.tab) {
+      const command=['shell','input','swipe',...start.map(String),...end.map(String),'1100'];
+      const child=spawn('adb',command,{stdio:'ignore'});
+      const finished=new Promise((resolve,reject)=>{
+        child.on('error',reject);
+        child.on('close',code=>code===0?resolve():reject(Error('ADB horizontal swipe exit '+code)));
+      });
+      let seen=null;
+      for(let i=0;i<15;i++){
+        await delay(55);
+        try {
+          const sample=JSON.parse(await evaluate(`JSON.stringify((()=>{
+            const old=document.querySelector('#app .app-shell > .content');
+            const next=document.querySelector('.android-tab-slide-preview');
+            const px=el=>Number(el?.style.transform.match(/translate3d\\((-?\\d+)px/)?.[1]||0);
+            return {previousX:px(old),incomingX:px(next),hasPreview:!!next,
+              previewInert:next?.inert===true,
+              navStillVisible:!!document.querySelector('#androidBottomNavigationMount .bottom-nav')};
+          })())`));
+          if(sample.hasPreview&&sample.previewInert&&sample.navStillVisible&&
+              Math.abs(sample.previousX)>12&&Math.abs(sample.incomingX)<point.width) {
+            seen=sample;break;
+          }
+        } catch (_) {
+          // A WebView reflow can temporarily make a CDP sample unavailable.
+          // The actual navigation assertion below still checks final state.
+        }
+      }
+      await finished;
+      assert.ok(seen,'The real Android page must visibly follow the finger and reveal an inert neighboring page BEFORE touch release');
+      sampledFingerTrackedSlide=true;
+      report.checks.push({label:'Physical finger-following Android tab slide before release, native navigation stays fixed',sample:seen});
+    } else {
+      adb('shell', 'input', 'swipe', ...start.map(String), ...end.map(String), '400');
+    }
     const after = await wait(s => s.tab === expected);
     await delay(650); // also observe the no-wrapping boundary and compatibility click
     assert.equal((await read()).tab, expected);
