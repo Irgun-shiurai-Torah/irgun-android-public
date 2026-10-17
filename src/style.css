@@ -2727,6 +2727,13 @@ body.irgun-android .android-swipe-peek {
   backface-visibility:hidden;
   will-change:transform;
 }
+/* Account forms end well above the bottom navigation on tall phones.
+   Keep the harmless empty area INSIDE .content so it receives tab gestures
+   instead of leaving half the screen outside the swipe handler. */
+body.irgun-android .app-shell > .content.android-account-swipe-surface {
+  min-height: calc(100vh - 68px);
+  min-height: calc(100dvh - 68px);
+}
 body.irgun-android .android-swipe-peek > .content {
   /* Inherit the app's regular padding, cards, images and theme exactly. */
   max-width:1000px;
