@@ -8,6 +8,16 @@ const adb=(...args)=>execFileSync('adb',args,{encoding:'utf8',timeout:30000});
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const report={checks:[],startedAt:new Date().toISOString()};let ws;
 try{
+ // Temporarily exclude live Vimeo-only lectures (including IST-DL6074)
+ // from the full Android emulator regression matrix while Google Drive
+ // ingestion is pending. Do NOT skip Drive-backed native Media3 checks.
+ // Run an independent, explicit Vimeo test only when requested with:
+ // IRGUN_QA_ENABLE_VIMEO_ONLY=1 node scripts/android-emulator-vimeo.mjs
+ if (process.env.IRGUN_QA_ENABLE_VIMEO_ONLY !== '1') {
+  report.status='skipped';
+  report.reason='Vimeo-only live playback intentionally excluded until Google Drive ingestion is ready; native Drive/HLS testing remains required.';
+  report.excludedCode='IST-DL6074';
+ } else {
  const response=await fetch('https://api.irgunshiuraitorah.com/video-map?driveLibrary=1',{
   headers:{Origin:'https://localhost','X-Irgun-App':'1'},signal:AbortSignal.timeout(30000)});
  assert.equal(response.status,200);
@@ -95,6 +105,7 @@ try{
   writeFileSync('emulator-report/vimeo-only-playing.png',execFileSync('adb',['exec-out','screencap','-p']));
   report.checks.push('Vimeo-only lecture remains visible and starts one actual Vimeo player with silent native Audio');
   report.before=playing;report.after=advanced;report.native=native;report.audio=audio;report.status='passed';
+ }
  }
 }catch(error){report.status='failed';report.error=String(error.stack||error);process.exitCode=1;
  try{writeFileSync('emulator-report/vimeo-only-failure.png',execFileSync('adb',['exec-out','screencap','-p']));}catch(_){}

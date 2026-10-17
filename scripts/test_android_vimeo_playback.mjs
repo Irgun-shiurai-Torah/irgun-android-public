@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createAndroidVimeoPlayer,isAndroidVimeoOnlyVideo} from '../src/android-vimeo-playback.js';
+import {spawnSync} from 'node:child_process';
+import {mkdtempSync,mkdirSync,readFileSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+
 
 const video={id:'1235511026',vimeoId:'1235511026',hasDriveVideo:false};
 test('Vimeo is selected only for an explicitly Vimeo-only numeric/unlisted catalog entry',()=>{
@@ -44,4 +49,25 @@ test('a native-ready lecture cannot reach the Vimeo preflight or create a second
  const f=fixture();f.options.video={...video,hasDriveVideo:true};
  await assert.rejects(createAndroidVimeoPlayer(f.options),/explicitly Vimeo-only/);
  assert.deepEqual(f.calls,[]);
+});
+
+test('live Vimeo-only integration is explicitly SKIPPED by default without touching network or ADB',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'irgun-vimeo-skip-'));
+  try {
+    mkdirSync(join(dir,'emulator-report'));
+    const processResult=spawnSync(process.execPath,[resolve('scripts/android-emulator-vimeo.mjs')],{
+      cwd:dir,
+      env:{...process.env,IRGUN_QA_ENABLE_VIMEO_ONLY:'0'},
+      encoding:'utf8',timeout:12000
+    });
+    assert.equal(processResult.status,0,processResult.stderr||processResult.stdout||String(processResult.error));
+    const result=JSON.parse(readFileSync(join(dir,'emulator-report','vimeo-only.json'),'utf8'));
+    assert.equal(result.status,'skipped','Vimeo-only playback must not masquerade as a passing playback test');
+    assert.equal(result.excludedCode,'IST-DL6074');
+    assert.match(result.reason,/Google Drive/);
+    assert.equal(result.fixture,undefined,'The skip must occur before catalog/network discovery');
+    assert.deepEqual(result.checks,[]);
+  } finally {
+    rmSync(dir,{recursive:true,force:true});
+  }
 });
