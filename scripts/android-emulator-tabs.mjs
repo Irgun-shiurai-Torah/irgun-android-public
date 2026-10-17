@@ -139,6 +139,39 @@ try {
   };
   await traverse();
   report.checks.push('English physical tab order, both directions, no wrapping');
+
+  // The Account page previously failed to change tabs from its lower half:
+  // the form's inputs were globally excluded and short content left empty
+  // space outside .content. Exercise a REAL native touch in the lower area,
+  // not just the header/title region.
+  await evaluate(`document.querySelector('#androidBottomNavigationMount .bottom-nav [data-nav="account"]')?.click()`);
+  await wait(s => s.tab === 'account');
+  const lowerAccountPoint = JSON.parse(await evaluate(`JSON.stringify((()=>{
+    const account=document.querySelector('#app .app-shell > .content');
+    const x=innerWidth*.30,endX=innerWidth*.70;
+    const nav=document.querySelector('#androidBottomNavigationMount .bottom-nav');
+    const navTop=nav?.getBoundingClientRect().top||innerHeight-92;
+    const lo=Math.round(innerHeight*.57);
+    const hi=Math.min(Math.round(innerHeight*.79),Math.round(navTop-18));
+    for(let y=lo;y<=hi;y+=12){
+      const target=document.elementFromPoint(x,y);
+      if(target?.closest('.content')===account && !target.closest('select,video,iframe,[role="dialog"]'))
+        return {x,endX,y,width:innerWidth,height:innerHeight,tag:target.tagName,
+          accountSurface:account.classList.contains('android-account-swipe-surface')};
+    }
+    return null;
+  })())`));
+  assert.ok(lowerAccountPoint?.accountSurface,'Account lower viewport must be inside swipeable content');
+  const startAccount=nativePoint(lowerAccountPoint);
+  const endAccount=nativePoint({...lowerAccountPoint,x:lowerAccountPoint.endX});
+  adb('shell','input','swipe',...startAccount.map(String),...endAccount.map(String),'600');
+  assert.ok(adb('shell','pidof','org.irgunshiuraitorah.app'),
+    'Lower Account swipe must not kill the Android app');
+  await wait(s => s.tab === 'library');
+  report.checks.push({label:'Native swipe starting in the lower Account form goes to Library',at:lowerAccountPoint});
+  await evaluate(`document.querySelector('#androidBottomNavigationMount .bottom-nav [data-nav="home"]')?.click()`);
+  await wait(s => s.tab === 'home');
+
   const languagePoint = JSON.parse(await evaluate(`JSON.stringify((()=>{
     const b=document.querySelector('[data-language-toggle]'),r=b.getBoundingClientRect();
     return {x:r.left+r.width/2,y:r.top+r.height/2,width:innerWidth,height:innerHeight};
