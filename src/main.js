@@ -6,6 +6,7 @@ import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
 import {BELSKY_VOL1_ID,nextPaidTrackInFolder} from './android-paid-collections.js';
 import {paidFolderTreeHtml} from './android-paid-catalog-ui.js';
 import {paidResumePositionSeconds,createPaidPlaybackEvidence,observePaidPlayback,verifiedPaidTrackEnd} from './android-paid-playback-guard.js';
+import {verifiedPurchasedIds,mergeVerifiedPaidCatalog,paidCatalogAccountKey} from './android-paid-entitlements.js';
 import {createAndroidPaidQuestionController} from './android-paid-index-controller.js';
 import {bindAndroidPlayerSheetInteractions,preserveAndroidPlayerSheetScroll} from './android-player-controls.js';
 import {isAndroidVimeoOnlyVideo,createAndroidVimeoPlayer} from './android-vimeo-playback.js';
@@ -236,6 +237,7 @@ const state = {
   paidCatalog: [],
   paidLoaded: false,
   paidLoading: false,
+  paidCatalogOwnerKey: '',
   paidError: '',
   paidExpandedId: '',
   paidCheckoutItemId: '',
@@ -2208,6 +2210,7 @@ function resetUserState() {
   state.notificationSettings = { pushEnabled:false, emailEnabled:false, pushConfigured:false, emailConfigured:false };
   state.paidLoaded = false;
   state.paidCatalog = [];
+  state.paidCatalogOwnerKey = '';
   state.paidExpandedId = '';
   state.recurringDonations = [];
   state.recurringLoaded = false;
@@ -4257,7 +4260,7 @@ function paidCheckoutModalHtml() {
 
 function paidShiurimHtml() {
   if(Capacitor.getPlatform()==='android' && state.paidQuestionIndexOpen) return androidPaidQuestionIndex.html();
-  if (!state.paidLoaded && !state.paidError) return `<div class="page-title pro-page-title"><span class="page-kicker">PREMIUM TORAH AUDIO</span><h1>${currentLanguage()==='he'?'רכישה':'Purchase'}</h1><p>${currentLanguage()==='he'?'טוען את האוספים הזמינים ואת הרכישות שלכם…':'Loading available collections and your purchases…'}</p></div><div class="loading">${currentLanguage()==='he'?'טוען אוספים…':'Loading audio collections…'}</div>`;
+  if ((!state.paidLoaded || state.paidCatalogOwnerKey!==paidCatalogAccountKey(state.user,Boolean(state.token))) && !state.paidError) return `<div class="page-title pro-page-title"><span class="page-kicker">PREMIUM TORAH AUDIO</span><h1>${currentLanguage()==='he'?'רכישה':'Purchase'}</h1><p>${currentLanguage()==='he'?'טוען את האוספים הזמינים ואת הרכישות שלכם…':'Loading available collections and your purchases…'}</p></div><div class="loading">${currentLanguage()==='he'?'טוען אוספים…':'Loading audio collections…'}</div>`;
   const owned = state.paidCatalog.filter(item => item.owned).length;
   const ordered = [...state.paidCatalog].sort((a,b)=>Number(Boolean(b.featured))-Number(Boolean(a.featured)) || paidProductTitle(a).localeCompare(paidProductTitle(b)));
   const available = ordered.filter(item => item.available || item.owned);
@@ -6445,30 +6448,61 @@ async function updateRecurringDonation(id, action) {
   }
 }
 
+let paidCatalogLoadPromise=null;
 async function loadPaidCatalog(force = false, options = {}) {
-  const silent = Boolean(options?.silent);
-  if (state.paidLoading) return;
-  if (state.paidLoaded && !force) return;
-  state.paidLoading = true;
-  state.paidError = '';
-  if (!silent && ['paid','library','account'].includes(state.screen)) render();
-  try {
-    const paidRequest = state.user
-      ? apiJson(`/paid-audio?v=${Date.now()}`)
-      : publicJson(`/paid-audio?v=${Date.now()}`);
-    const data = await promiseWithTimeout(paidRequest, 12000, currentLanguage()==='he' ? 'טעינת החנות ארכה זמן רב מדי. נסו שוב.' : 'The purchase page took too long to load. Please try again.');
-    state.paidCatalog = Array.isArray(data.items) ? data.items : [];
-    state.paidLoaded = true;
-    if (Capacitor.isNativePlatform() && state.user) setTimeout(warmPaidPurchases, 120);
-  } catch (error) {
-    state.paidError = error.message || 'Could not load paid shiurim.';
-  } finally {
-    state.paidLoading = false;
-    const paidSurfaceVisible = state.screen === 'paid'
-      || (state.screen === 'library' && state.librarySection === 'purchased')
-      || (state.screen === 'account' && state.accountSection === 'purchases');
-    if (paidSurfaceVisible) render();
+  const silent=Boolean(options?.silent);
+  // A catalog fetched before restoring /me belongs to the guest identity;
+  // never reuse its locked Buy buttons after restoring the signed-in account.
+  const identity=paidCatalogAccountKey(state.user,Boolean(state.token));
+  if(state.paidLoading&&paidCatalogLoadPromise){
+    await paidCatalogLoadPromise.catch(()=>{});
+    if(identity!==paidCatalogAccountKey(state.user,Boolean(state.token)))return;
+    if(!force&&state.paidLoaded&&state.paidCatalogOwnerKey===identity)return;
+    return loadPaidCatalog(force,options);
   }
+  if(state.paidLoaded&&!force&&state.paidCatalogOwnerKey===identity)return;
+  state.paidLoading=true;
+  state.paidError='';
+  if(!silent&&['paid','library','account'].includes(state.screen))render();
+  const request=(async()=>{
+    try{
+      let verifiedIds=new Set();
+      if(Capacitor.getPlatform()==='android'&&identity!=='guest'){
+        // /paid-audio/my repairs pending Stripe orders and alternate same-email
+        // purchases; /paid-audio intentionally skips pending Stripe lookups.
+        // Use the existing authenticated API instead of opening checkout to
+        // discover a purchase. No local or guest permission is ever granted.
+        try{
+          const mine=await promiseWithTimeout(apiJson('/paid-audio/my'),16000,
+            'Checking your purchased collections took too long.');
+          verifiedIds=verifiedPurchasedIds(mine);
+        }catch(error){
+          console.warn('[Paid audio] entitlement refresh unavailable',Number(error?.status)||'network');
+        }
+      }
+      const paidRequest=state.user&&state.token
+        ? apiJson(`/paid-audio?v=${Date.now()}`)
+        : publicJson(`/paid-audio?v=${Date.now()}`);
+      const data=await promiseWithTimeout(paidRequest,14000,
+        currentLanguage()==='he'?'טעינת האוספים ארכה זמן רב מדי. נסו שוב.':'The purchase page took too long to load. Please try again.');
+      if(identity!==paidCatalogAccountKey(state.user,Boolean(state.token)))return;
+      state.paidCatalog=mergeVerifiedPaidCatalog(data.items,verifiedIds);
+      state.paidCatalogOwnerKey=identity;
+      state.paidLoaded=true;
+      if(Capacitor.isNativePlatform()&&state.user)setTimeout(warmPaidPurchases,120);
+    }catch(error){
+      if(identity===paidCatalogAccountKey(state.user,Boolean(state.token)))
+        state.paidError=error.message||'Could not load paid shiurim.';
+    }finally{
+      state.paidLoading=false;
+      const visible=state.screen==='paid'
+        ||(state.screen==='library'&&state.librarySection==='purchased')
+        ||(state.screen==='account'&&state.accountSection==='purchases');
+      if(visible)render();
+    }
+  })();
+  paidCatalogLoadPromise=request;
+  try{await request;}finally{if(paidCatalogLoadPromise===request)paidCatalogLoadPromise=null;}
 }
 
 function warmNativePaidCatalog() {
@@ -6902,7 +6936,7 @@ function render() {
   if (['home','schedule','live','live-boro','live-flatbush'].includes(state.screen) && !state.scheduleDataLoaded && !state.scheduleDataLoading) setTimeout(loadScheduleData, 0);
   if (['home','live','live-boro','live-flatbush'].includes(state.screen) && !state.liveStatusLoaded) setTimeout(loadLiveStatus, 0);
   if (state.screen === 'schedule' && state.scheduleView === 'flyers') setTimeout(loadSchedule, 0);
-  if ((state.screen === 'paid' || (state.screen === 'library' && state.librarySection === 'purchased') || (state.screen === 'account' && state.accountSection === 'purchases')) && !state.paidLoaded && !state.paidLoading) setTimeout(loadPaidCatalog, 0);
+  if ((state.screen === 'paid' || (state.screen === 'library' && state.librarySection === 'purchased') || (state.screen === 'account' && state.accountSection === 'purchases')) && (!state.paidLoaded || state.paidCatalogOwnerKey!==paidCatalogAccountKey(state.user,Boolean(state.token))) && !state.paidLoading) setTimeout(loadPaidCatalog, 0);
   if (state.screen === 'account' && state.accountSection === 'purchases' && state.user && !state.recurringLoaded && !state.recurringLoading) setTimeout(loadRecurringDonations, 0);
   if (state.screen === 'account' && state.accountSection === 'admin' && state.isAdmin && !state.adminLoaded && !state.adminLoading) setTimeout(loadAdminData, 0);
   if (state.screen === 'donate' && !state.sponsorPricesLoaded && !state.sponsorPricesLoading) setTimeout(loadSponsorPrices, 0);
