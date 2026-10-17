@@ -254,7 +254,8 @@ test('authenticated purchases are recognized without pressing Buy Securely',()=>
   assert.ok(load.indexOf("apiJson('/paid-audio/my')")<load.indexOf('const paidRequest='),
     'Authenticated /my entitlement reconciliation must complete BEFORE catalog fetch');
   assert.match(load,/paidCatalogOwnerKey=identity/);
-  assert.match(main,/state\.paidCatalogOwnerKey!==paidCatalogAccountKey/);
+  assert.match(main,/state\.paidCatalogOwnerKey!==currentPaidCatalogOwnerKey\(\)/);
+  assert.match(main,/return Capacitor\.getPlatform\(\)==='android'[\s\S]*?paidCatalogAccountKey/);
 });
 
 test('premature paid END is silent during buffering and retries the SAME track only if really stalled',async()=>{
