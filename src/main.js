@@ -4260,7 +4260,7 @@ function paidCheckoutModalHtml() {
 
 function paidShiurimHtml() {
   if(Capacitor.getPlatform()==='android' && state.paidQuestionIndexOpen) return androidPaidQuestionIndex.html();
-  if ((!state.paidLoaded || state.paidCatalogOwnerKey!==paidCatalogAccountKey(state.user,Boolean(state.token))) && !state.paidError) return `<div class="page-title pro-page-title"><span class="page-kicker">PREMIUM TORAH AUDIO</span><h1>${currentLanguage()==='he'?'רכישה':'Purchase'}</h1><p>${currentLanguage()==='he'?'טוען את האוספים הזמינים ואת הרכישות שלכם…':'Loading available collections and your purchases…'}</p></div><div class="loading">${currentLanguage()==='he'?'טוען אוספים…':'Loading audio collections…'}</div>`;
+  if ((!state.paidLoaded || state.paidCatalogOwnerKey!==currentPaidCatalogOwnerKey()) && !state.paidError) return `<div class="page-title pro-page-title"><span class="page-kicker">PREMIUM TORAH AUDIO</span><h1>${currentLanguage()==='he'?'רכישה':'Purchase'}</h1><p>${currentLanguage()==='he'?'טוען את האוספים הזמינים ואת הרכישות שלכם…':'Loading available collections and your purchases…'}</p></div><div class="loading">${currentLanguage()==='he'?'טוען אוספים…':'Loading audio collections…'}</div>`;
   const owned = state.paidCatalog.filter(item => item.owned).length;
   const ordered = [...state.paidCatalog].sort((a,b)=>Number(Boolean(b.featured))-Number(Boolean(a.featured)) || paidProductTitle(a).localeCompare(paidProductTitle(b)));
   const available = ordered.filter(item => item.available || item.owned);
@@ -6449,14 +6449,20 @@ async function updateRecurringDonation(id, action) {
 }
 
 let paidCatalogLoadPromise=null;
+function currentPaidCatalogOwnerKey(){
+  // The purchase/account reconciliation is Android-only. Preserve the iOS
+  // catalog's existing lifetime while Android binds data to its signed-in user.
+  return Capacitor.getPlatform()==='android'
+    ? paidCatalogAccountKey(state.user,Boolean(state.token)) : 'standard';
+}
 async function loadPaidCatalog(force = false, options = {}) {
   const silent=Boolean(options?.silent);
   // A catalog fetched before restoring /me belongs to the guest identity;
   // never reuse its locked Buy buttons after restoring the signed-in account.
-  const identity=paidCatalogAccountKey(state.user,Boolean(state.token));
+  const identity=currentPaidCatalogOwnerKey();
   if(state.paidLoading&&paidCatalogLoadPromise){
     await paidCatalogLoadPromise.catch(()=>{});
-    if(identity!==paidCatalogAccountKey(state.user,Boolean(state.token)))return;
+    if(identity!==currentPaidCatalogOwnerKey())return;
     if(!force&&state.paidLoaded&&state.paidCatalogOwnerKey===identity)return;
     return loadPaidCatalog(force,options);
   }
@@ -6485,13 +6491,13 @@ async function loadPaidCatalog(force = false, options = {}) {
         : publicJson(`/paid-audio?v=${Date.now()}`);
       const data=await promiseWithTimeout(paidRequest,14000,
         currentLanguage()==='he'?'טעינת האוספים ארכה זמן רב מדי. נסו שוב.':'The purchase page took too long to load. Please try again.');
-      if(identity!==paidCatalogAccountKey(state.user,Boolean(state.token)))return;
+      if(identity!==currentPaidCatalogOwnerKey())return;
       state.paidCatalog=mergeVerifiedPaidCatalog(data.items,verifiedIds);
       state.paidCatalogOwnerKey=identity;
       state.paidLoaded=true;
       if(Capacitor.isNativePlatform()&&state.user)setTimeout(warmPaidPurchases,120);
     }catch(error){
-      if(identity===paidCatalogAccountKey(state.user,Boolean(state.token)))
+      if(identity===currentPaidCatalogOwnerKey())
         state.paidError=error.message||'Could not load paid shiurim.';
     }finally{
       state.paidLoading=false;
@@ -6981,7 +6987,7 @@ function render() {
   if (['home','schedule','live','live-boro','live-flatbush'].includes(state.screen) && !state.scheduleDataLoaded && !state.scheduleDataLoading) setTimeout(loadScheduleData, 0);
   if (['home','live','live-boro','live-flatbush'].includes(state.screen) && !state.liveStatusLoaded) setTimeout(loadLiveStatus, 0);
   if (state.screen === 'schedule' && state.scheduleView === 'flyers') setTimeout(loadSchedule, 0);
-  if ((state.screen === 'paid' || (state.screen === 'library' && state.librarySection === 'purchased') || (state.screen === 'account' && state.accountSection === 'purchases')) && (!state.paidLoaded || state.paidCatalogOwnerKey!==paidCatalogAccountKey(state.user,Boolean(state.token))) && !state.paidLoading && !state.paidError) setTimeout(loadPaidCatalog, 0);
+  if ((state.screen === 'paid' || (state.screen === 'library' && state.librarySection === 'purchased') || (state.screen === 'account' && state.accountSection === 'purchases')) && (!state.paidLoaded || state.paidCatalogOwnerKey!==currentPaidCatalogOwnerKey()) && !state.paidLoading && !state.paidError) setTimeout(loadPaidCatalog, 0);
   if (state.screen === 'account' && state.accountSection === 'purchases' && state.user && !state.recurringLoaded && !state.recurringLoading) setTimeout(loadRecurringDonations, 0);
   if (state.screen === 'account' && state.accountSection === 'admin' && state.isAdmin && !state.adminLoaded && !state.adminLoading) setTimeout(loadAdminData, 0);
   if (state.screen === 'donate' && !state.sponsorPricesLoaded && !state.sponsorPricesLoading) setTimeout(loadSponsorPrices, 0);
