@@ -3980,6 +3980,17 @@ function bindWatchClick(el, handler) {
   el.addEventListener('click', handler);
 }
 
+// An Audio -> Video handoff can finish while another UI update is still
+// scheduled. That late update may insert an Audio-era Watch into #app after
+// the synchronous native-host cleanup. Drop only that extra WebView chrome:
+// the single permanent Media3 PlayerView/MediaItem and its clock stay intact.
+const nativeWatchOverlayGuard = Capacitor.getPlatform() === 'android' && typeof MutationObserver === 'function'
+  ? new MutationObserver(() => {
+      if (state.watchMode === 'video' && state.watchVimeo?.isIrgunNativeVideoPlayer)
+        reconcileAndroidNativeWatchOverlay();
+    }) : null;
+nativeWatchOverlayGuard?.observe(app, { childList:true, subtree:true });
+
 // The Android Audio UI may briefly coexist with the parked real video Watch.
 // When Media3 returns to VIDEO, only #persistentVideoMount is authoritative:
 // no second in-app Watch, no hidden competing controls, and no player reset.
@@ -6923,6 +6934,9 @@ function preserveAuthFormDraft() {
 function render() {
   syncAndroidBottomNavigation();
   syncAndroidVideoDisplay();
+  // A deferred render must not leave an earlier Audio Watch covering native Video.
+  if (typeof reconcileAndroidNativeWatchOverlay === 'function')
+    reconcileAndroidNativeWatchOverlay();
   if (tabSwipeRenderGate.shouldDefer()) return;
   // Closing Audio or opening Video must replace the sheet immediately: the
   // persistent Video host consumes the newly rendered overlay synchronously.

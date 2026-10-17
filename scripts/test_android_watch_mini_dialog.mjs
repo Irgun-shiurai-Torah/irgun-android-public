@@ -138,3 +138,17 @@ test('native Media3 Watch is unique after returning from Audio, including later 
 });
 
 
+
+test('native Watch guard removes a late duplicate after an Audio to Video return',()=>{
+  const latest=readFileSync('src/main.js','utf8');
+  const guard=between(latest,'const nativeWatchOverlayGuard =','// The Android Audio UI may briefly coexist');
+  assert.match(guard,/MutationObserver/);
+  assert.match(guard,/childList:true, subtree:true/);
+  assert.match(guard,/state\.watchMode === 'video'/);
+  assert.match(guard,/state\.watchVimeo\?\.isIrgunNativeVideoPlayer/);
+  assert.match(guard,/reconcileAndroidNativeWatchOverlay\(\)/);
+  const rendered=between(latest,'function render() {','function syncOpenFilterChecks(');
+  assert.match(rendered,/reconcileAndroidNativeWatchOverlay\(\);[\s\S]*?if \(tabSwipeRenderGate\.shouldDefer\(\)\) return;/);
+  // Audio has its own valid Watch; the observer must not discard that panel.
+  assert.doesNotMatch(guard,/\.remove\(/);
+});
