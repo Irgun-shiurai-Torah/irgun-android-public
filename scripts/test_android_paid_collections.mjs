@@ -293,7 +293,8 @@ test('premature paid END is silent during buffering and retries the SAME track o
     paidLastFinishedKey:'',paidPrematureRetryId:'',paidPlaybackGeneration:4,
     sleepMode:'off',user:{id:'qa'}};
   const ctx={state,Date:fakeDate,setTimeout:setTimer,clearTimeout:id=>timers.delete(id),
-    verifiedPaidTrackEnd,observePaidPlayback,savePaidAudioProgress:async()=>{},
+    verifiedPaidTrackEnd,observePaidPlayback:(e,s,at=clock.now)=>observePaidPlayback(e,s,at),
+    savePaidAudioProgress:async()=>{},
     setToast:m=>trace.push(['toast',m]),updatePlayerUi:()=>{},
     nextPaidTrackInFolder,prefetchPaidTrack:()=>{},
     playPaidTrack:async(p,t,options)=>{trace.push(['play',t,options]);return true;},
