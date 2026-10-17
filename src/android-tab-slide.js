@@ -36,6 +36,10 @@ export function createAndroidTabSlider({
     // The preview is strictly visual. Never start a second Video, Audio or
     // live iframe decoder, nor duplicate executable page code.
     nextPage.querySelectorAll('iframe, video, audio, script').forEach(element => element.remove());
+    // Android 11 WebView predates native `inert` support. The preview is
+    // pointer-inert AND removed from hardware-keyboard tab navigation.
+    nextPage.querySelectorAll('a, button, input, select, textarea, [tabindex]')
+      .forEach(element => element.setAttribute('tabindex', '-1'));
     snapshot.appendChild(nextPage);
     const header = document.querySelector('#app .topbar');
     snapshot.style.top = `${Math.max(0, Math.round(header?.getBoundingClientRect().bottom || 0))}px`;
