@@ -6,6 +6,7 @@ import {BELSKY_VOL1_ID,BELSKY_INDEX_URL,belskyAlbumForSession,belskySessionLabel
   parseBelskyIndex,findBelskyQuestions} from '../src/android-paid-collections.js';
 import {paidFolderTreeHtml,paidQuestionResultsHtml,paidQuestionIndexHtml} from '../src/android-paid-catalog-ui.js';
 import {paidResumePositionSeconds,createPaidPlaybackEvidence,observePaidPlayback,verifiedPaidTrackEnd} from '../src/android-paid-playback-guard.js';
+import {verifiedPurchasedIds,mergeVerifiedPaidCatalog,paidCatalogAccountKey} from '../src/android-paid-entitlements.js';
 
 const escape=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const product={id:'pap-childrens-stories-complete',owned:true};
@@ -230,55 +231,106 @@ test('Media3 buffering, instant END and mismatched old event never advance a pai
     'Verified Media3 duration completion should play next in same folder');
 });
 
-test('premature ended paid track retries ITSELF only once, never cascading through the folder',async()=>{
+
+test('authenticated purchases are recognized without pressing Buy Securely',()=>{
+  const confirmed=verifiedPurchasedIds({items:[
+    {id:'pap-whats-halacha-vol1-belsky',accessOwned:true},
+    {id:'pap-public',accessOwned:false}
+  ]});
+  assert.deepEqual([...confirmed],['pap-whats-halacha-vol1-belsky']);
+  const catalog=mergeVerifiedPaidCatalog([
+    {id:'pap-whats-halacha-vol1-belsky',owned:false,available:true,tracks:[]},
+    {id:'pap-public',owned:false,available:true}
+  ],confirmed);
+  assert.equal(catalog[0].owned,true,'Verified purchase must display Listen, not Buy Securely');
+  assert.equal(catalog[1].owned,false,'Do not fabricate a purchase for a different product');
+  assert.equal(catalog[0].tracks.length,0,'Ownership UI never invents private media URLs');
+  assert.equal(mergeVerifiedPaidCatalog(catalog,confirmed)[0].owned,true);
+  assert.equal(paidCatalogAccountKey(null,false),'guest');
+  assert.equal(paidCatalogAccountKey({id:12},true),'account:12');
+  const main=readFileSync('src/main.js','utf8');
+  const load=main.slice(main.indexOf('async function loadPaidCatalog('),
+    main.indexOf('function warmNativePaidCatalog('));
+  assert.ok(load.indexOf("apiJson('/paid-audio/my')")<load.indexOf('const paidRequest='),
+    'Authenticated /my entitlement reconciliation must complete BEFORE catalog fetch');
+  assert.match(load,/paidCatalogOwnerKey=identity/);
+  assert.match(main,/state\.paidCatalogOwnerKey!==paidCatalogAccountKey/);
+});
+
+test('premature paid END is silent during buffering and retries the SAME track only if really stalled',async()=>{
   const source=readFileSync('src/main.js','utf8');
-  const start=source.indexOf('async function finishPaidNativeTrack(ended, event) {');
-  const end=source.indexOf('async function savePaidAudioProgress(',start);
-  assert.ok(start>=0&&end>start);
-  const trace=[];
-  const productId=BELSKY_VOL1_ID;
-  const id=productId+':t1';
+  const begin=source.indexOf('let pendingPaidEndCheck=null;');
+  const end=source.indexOf('async function savePaidAudioProgress(',begin);
+  assert.ok(begin>=0&&end>begin,'Delayed Media3 end-recovery source must exist');
+  const clock={now:100000},timers=new Map(),trace=[];
+  let serial=0,playing=false;
+  const fakeDate={now:()=>clock.now};
+  const setTimer=(fn,delay)=>{const id=++serial;timers.set(id,{fn,at:clock.now+delay});return id;};
+  const runUntil=async until=>{
+    for(let attempts=0;attempts<20;attempts++){
+      const entries=[...timers.entries()].sort((a,b)=>a[1].at-b[1].at);
+      const next=entries[0];
+      if(!next||next[1].at>until)break;
+      clock.now=next[1].at;
+      timers.delete(next[0]);
+      await next[1].fn();
+    }
+    clock.now=until;
+  };
+  const productId=BELSKY_VOL1_ID,id=productId+':t1';
   const product={id:productId,owned:true,tracks:[
-    {id:'t1',title:'Part 1',folders:['Album 1','Session 01']},
-    {id:'t2',title:'Part 2',folders:['Album 1','Session 01']},
-    {id:'t3',title:'Another folder',folders:['Album 1','Session 02']}
+    {id:'t1',title:'First',folders:['Halacha','Session 1']},
+    {id:'t2',title:'Second',folders:['Halacha','Session 1']},
+    {id:'t3',title:'Another',folders:['Halacha','Session 2']}
   ]};
-  const state={
-    current:{kind:'paid-audio',id,paidAudioId:productId,trackId:'t1'},
-    paidCatalog:[product],paidTrackEvidence:createPaidPlaybackEvidence(id,Date.now()-100),
-    paidLastFinishedKey:'',paidPrematureRetryId:'',sleepMode:'off',
-    user:{id:'qa-user'}
+  const state={current:{kind:'paid-audio',id,paidAudioId:productId,trackId:'t1'},
+    paidCatalog:[product],paidTrackEvidence:createPaidPlaybackEvidence(id,clock.now-100),
+    paidLastFinishedKey:'',paidPrematureRetryId:'',paidPlaybackGeneration:4,
+    sleepMode:'off',user:{id:'qa'}};
+  const ctx={state,Date:fakeDate,setTimeout:setTimer,clearTimeout:id=>timers.delete(id),
+    verifiedPaidTrackEnd,observePaidPlayback,savePaidAudioProgress:async()=>{},
+    setToast:m=>trace.push(['toast',m]),updatePlayerUi:()=>{},
+    nextPaidTrackInFolder,prefetchPaidTrack:()=>{},
+    playPaidTrack:async(p,t,options)=>{trace.push(['play',t,options]);return true;},
+    nativeMediaPlugin:()=>({getState:async()=>({
+      lectureId:id,mode:'AUDIO',audioReady:playing,hasAudioSource:true,
+      isPlaying:playing,audioIsPlaying:playing,
+      currentPositionMs:playing?1400:0,durationMs:180000
+    })})
   };
-  const ctx={
-    state,verifiedPaidTrackEnd,paidResumePositionSeconds,
-    savePaidAudioProgress:async()=>{},setToast:m=>trace.push(['toast',m]),
-    playPaidTrack:async(p,t,options)=>{trace.push(['play',p,t,options]);return true;},
-    updatePlayerUi:()=>{},nextPaidTrackInFolder,prefetchPaidTrack:()=>{}
-  };
-  const finish=new Function(...Object.keys(ctx),source.slice(start,end)+
-    '\nreturn finishPaidNativeTrack;')(...Object.values(ctx));
+  const fns=new Function(...Object.keys(ctx),source.slice(begin,end)+
+    '\nreturn {finishPaidNativeTrack,clearPendingPaidEndCheck};')(...Object.values(ctx));
   const ended={...state.current};
-  const fakeEnd={lectureId:id,mode:'AUDIO',durationMs:180000,currentPositionMs:180000};
-  assert.equal(await finish(ended,fakeEnd),false);
-  assert.deepEqual(trace.filter(x=>x[0]==='play').map(x=>x[2]),['t1']);
-  assert.equal(trace[0][0],'toast');
-  assert.equal(state.paidPrematureRetryId,id);
-  // Simulate the retried item replacing the evidence, then ENDing instantly
-  // a second time: no second retry, and certainly no t2/t3.
-  state.paidTrackEvidence=createPaidPlaybackEvidence(id,Date.now()-100);
-  await finish(ended,fakeEnd);
-  assert.deepEqual(trace.filter(x=>x[0]==='play').map(x=>x[2]),['t1']);
-  const good=createPaidPlaybackEvidence(id,Date.now()-6000);
-  const now=Date.now();
-  observePaidPlayback(good,{lectureId:id,mode:'AUDIO',durationMs:180000,
-    currentPositionMs:177000,isPlaying:true},now-3000);
-  observePaidPlayback(good,{lectureId:id,mode:'AUDIO',durationMs:180000,
-    currentPositionMs:178600,isPlaying:true},now-1700);
-  state.paidTrackEvidence=good;
-  assert.equal(await finish(ended,fakeEnd),true);
-  assert.deepEqual(trace.filter(x=>x[0]==='play').map(x=>x[2]),['t1','t2'],
-    'Only a verified end should advance to the next recording');
-  assert.equal(state.paidLastFinishedKey,id);
+  const premature={lectureId:id,mode:'AUDIO',currentPositionMs:180000,durationMs:180000};
+  assert.equal(await fns.finishPaidNativeTrack(ended,premature),false);
+  assert.equal(trace.length,0,'No immediate error and no premature next-track transition');
+  clock.now+=1500;playing=true;
+  await runUntil(104000);
+  assert.equal(trace.length,0,'Media3 began playing after loading: do NOT emit a failure or retry');
+  const evidence=state.paidTrackEvidence;
+  assert.equal(evidence.endedHandled,false,'Actual playback evidence must still be observed after early END');
+  observePaidPlayback(evidence,{lectureId:id,mode:'AUDIO',isPlaying:true,
+    currentPositionMs:177000,durationMs:180000},104100);
+  observePaidPlayback(evidence,{lectureId:id,mode:'AUDIO',isPlaying:true,
+    currentPositionMs:178400,durationMs:180000},105400);
+  assert.equal(await fns.finishPaidNativeTrack(ended,premature),true);
+  assert.deepEqual(trace.filter(x=>x[0]==='play').map(x=>x[1]),['t2'],
+    'Only a genuine completed recording advances to the next track in the SAME folder');
+  // Another fresh recording fails to start for over seven seconds: retry the
+  // same recording, NOT track two, and never display a false error at 2 sec.
+  state.paidLastFinishedKey='';
+  state.paidTrackEvidence=createPaidPlaybackEvidence(id,200000);
+  state.paidPrematureRetryId='';
+  playing=false;clock.now=200000;
+  trace.length=0;
+  assert.equal(await fns.finishPaidNativeTrack(ended,premature),false);
+  await runUntil(202900);
+  assert.deepEqual(trace,[],'First premature native END remains silent while loading');
+  await runUntil(208100);
+  assert.deepEqual(trace.filter(x=>x[0]==='play').map(x=>x[1]),['t1'],
+    'After confirmed stall, retry only the SAME signed track');
+  assert.equal(trace.some(x=>x[0]==='toast'&&/Could not load/.test(x[1])),false);
+  fns.clearPendingPaidEndCheck();
 });
 
 test('paid emulator observes actual selected Purchased tab and safely escaped folder controls',()=>{
