@@ -3831,7 +3831,7 @@ function shell(content) {
       </div>
     </header>
     ${offlineBannerHtml()}
-    <main class="content">${content}</main>
+    <main class="content${Capacitor.getPlatform()==='android'&&state.screen==='account'?' android-account-swipe-surface':''}">${content}</main>
     ${state.current && !(state.watchVideo && state.watchMinimized && state.watchMode === 'video') ? miniPlayerHtml() : ''}
     ${donateFabHtml()}
     ${Capacitor.getPlatform()==='android'?'':bottomNavHtml()}
