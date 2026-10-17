@@ -44,7 +44,8 @@ const SKIP_SECONDS_KEY = 'istSkipSecondsV1';
 const audio = document.getElementById('audioEngine');
 const app = document.getElementById('app');
 const androidSwipeMotion=createAndroidSwipeMotion({document,view:window,
-  previewHtml:tab=>androidSwipePeekHtml(tab)});
+  previewHtml:tab=>androidSwipePeekHtml(tab),
+  previewKey:()=>`${currentLanguage()}:${state.user?.id||state.user?.email||'signed-out'}`});
 if (Capacitor.getPlatform() === 'android') document.body.classList.add('irgun-android');
 const persistentVideoMount = document.getElementById('persistentVideoMount');
 const IrgunDownloader = registerPlugin('IrgunDownloader');
@@ -3802,27 +3803,16 @@ function bottomNavHtml() {
     </button>`).join('')}</nav>`;
 }
 
-// Intentionally bounded to a few static, text-only elements. A drag must NOT
-// instantiate a second live stream, audio player, interactive account form,
-// 48-card Shiurim grid or network requests on a low-memory Android device.
+// Render the same existing Android tab content for an accurate first-screen
+// swipe preview. android-swipe-motion.js makes it inert and removes extra
+// below-fold cards, input values and media BEFORE mounting it.
 function androidSwipePeekHtml(tab) {
-  const he=currentLanguage()==='he';
-  const name={home:he?'בית':'Home',shiurim:he?'שיעורים':'Shiurim',
-    live:he?'שידור חי':'Live',library:he?'הספרייה שלכם':'Your Library',
-    account:he?'החשבון שלי':'My Account'}[tab]||'';
-  const title=label=>`<div class="page-title"><h1>${label}</h1></div>`;
-  const rows=state.videos.slice(0,3).map(v=>
-    `<div class="android-swipe-peek-row">${esc(String(v.titleEn||v.title||v.name||'Shiur'))}</div>`).join('');
-  let body='';
-  if(tab==='home')body=`<section class="hero pro-hero"><div class="hero-content"><h1>Torah, wherever you are.</h1><p>Live shiurim, recordings and your Torah library — in one app.</p></div></section>
-    <div class="android-swipe-peek-shortcuts"><span>Schedule</span><span>Purchase</span><span>Your Library</span></div>`;
-  else if(tab==='shiurim')body=title('Torah Shiurim Library')+
-    `<div class="toolbar-card"><div class="segmented large"><span>All</span><span>Video</span><span>Audio</span></div><div class="android-swipe-peek-search">Search title, speaker or lecture code…</div></div>
-    <div class="android-swipe-peek-list">${rows}</div>`;
-  else if(tab==='live')body=`${title('Listen &amp; Watch Live')}<div class="live-grid pro-live-grid"><div class="live-location-card"><div class="location-icon">BP</div><div><h2>Boro Park</h2><p>Open Live Stream</p></div></div><div class="live-location-card"><div class="location-icon">FB</div><div><h2>Flatbush</h2><p>Open Live Stream</p></div></div></div>`;
-  else if(tab==='library')body=`${title(name)}<div class="android-swipe-peek-tabs"><span>My Likes</span><span>Downloads</span><span>History</span></div><div class="account-card"><h2>${he?'השיעורים שלכם':'Your saved shiurim'}</h2><p>${he?'שיעורים והורדות':'Likes, history and offline downloads'}</p></div>`;
-  else if(tab==='account')body=`${title(name)}<div class="account-card"><h2>${state.user?esc(String(state.user.name||'Account')):he?'התחברות':'Sign In'}</h2><p>${he?'ניהול החשבון':'Your profile and settings'}</p></div>`;
-  return `<main class="android-swipe-peek-body">${body}</main>`;
+  if(tab==='home') return homeHtml();
+  if(tab==='shiurim') return shiurimHtml();
+  if(tab==='live') return liveHtml();
+  if(tab==='library') return libraryHtml();
+  if(tab==='account') return accountHtml();
+  return '';
 }
 
 function shell(content) {
@@ -7158,7 +7148,13 @@ function bindPlayerSpeedChoices() {
   }));
 }
 let androidNavigationSequence=0;
-async function navigateToScreen(el) {
+async function navigateToScreen(el, {fromSwipe=false}={}) {
+    if(Capacitor.getPlatform()==='android' && !androidSwipeMotion.active)
+      androidSwipeMotion.rememberPage(state.screen);
+    // During finger-following release the preview is still mounted, so
+    // remember the real outgoing page before replacing it as well.
+    else if(Capacitor.getPlatform()==='android')
+      androidSwipeMotion.rememberPage(state.screen);
     const sequence=++androidNavigationSequence;
     if(Capacitor.getPlatform()==='android'&&el.closest('.android-floating-nav')){
       state.screen=el.dataset.nav;
@@ -7184,7 +7180,7 @@ async function navigateToScreen(el) {
     state.libraryLimit = 48;
     state.filterDialog = '';
     render();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: fromSwipe ? 'instant' : 'smooth' });
 }
 function bind() {
   document.querySelectorAll('[data-retry-library]').forEach(el => el.addEventListener('click', () => bootstrap({ manual:true })));
@@ -10357,7 +10353,7 @@ if (Capacitor.getPlatform() === 'android' && Capacitor.isNativePlatform()) {
     // native player/miniplayer cleanup and destination render are done.
     navigate: tab => {
       const button=document.querySelector(`.bottom-nav [data-nav="${tab}"]`);
-      return button ? navigateToScreen(button) : undefined;
+      return button ? navigateToScreen(button,{fromSwipe:true}) : undefined;
     }
   });
 }
