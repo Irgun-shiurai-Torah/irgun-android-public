@@ -4,10 +4,8 @@ on:
   push:
     branches:
       - main
-      - fix/android-paid-folder-description-and-track-end-20261016
     paths-ignore:
-      # Test branch: permit this workflow's own update to start a signed
-      # Google Play INTERNAL test build without merging unfinished fixes.
+      - ".github/**"
       - "README*"
       - "**/*.md"
       - "**/*.txt"
