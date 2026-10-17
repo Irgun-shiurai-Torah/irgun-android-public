@@ -16,6 +16,7 @@ export function createSwipeRenderGate(render, schedule = queueMicrotask) {
 export function bindTabSwipes(root, { getActiveTab, getTabs, canNavigate, navigate,
   onGestureState = () => {}, onDrag = null, onRelease = null }) {
   let gesture = null;
+  let settling = false;
   let suppressClickUntil = 0;
   const view = root.ownerDocument.defaultView;
   const interactive = typeof onDrag === 'function' && typeof onRelease === 'function';
@@ -55,6 +56,7 @@ export function bindTabSwipes(root, { getActiveTab, getTabs, canNavigate, naviga
     const start = gesture;
     if (!start) return;
     gesture = null;
+    settling = true;
     const dx = touch ? touch.clientX - start.x : start.dx;
     const dy = touch ? touch.clientY - start.y : start.dy;
     const width = Math.max(280, Number(view.innerWidth) || 360);
@@ -74,11 +76,15 @@ export function bindTabSwipes(root, { getActiveTab, getTabs, canNavigate, naviga
     catch (error) { animation = Promise.reject(error); }
     void Promise.resolve(animation).catch(() => {}).then(() =>
       committed ? navigate(next, { fromSwipe:true }) : null
-    ).finally(() => onGestureState(false));
+    ).catch(() => {}).finally(() => {
+      settling = false;
+      onGestureState(false);
+    });
   };
   root.addEventListener('touchstart', event => {
     reset();
-    if (event.touches.length !== 1 || !canNavigate() || !allowedTarget(event.target)) return;
+    // A second finger must not interrupt the previous page's snap animation.
+    if (settling || event.touches.length !== 1 || !canNavigate() || !allowedTarget(event.target)) return;
     const touch = event.touches[0];
     gesture = { id:touch.identifier, x:touch.clientX, y:touch.clientY, dx:0, dy:0,
       tab:getActiveTab(), horizontal:false };
