@@ -7154,7 +7154,41 @@ function bindPlayerSpeedChoices() {
   }));
 }
 let androidNavigationSequence=0;
-async function navigateToScreen(el, {fromSwipe=false}={}) {
+// The Activity's edge Back gesture must restore the tab the user came from,
+// rather than finishing the Activity. Keep only bottom-tab transitions here:
+// detail pages continue using their existing parent tab.
+const androidPrimaryTabs=['home','shiurim','live','library','account'];
+const androidRecentTabHistory=[];
+function handleAndroidSystemBack() {
+  if (Capacitor.getPlatform() !== 'android' || !Capacitor.isNativePlatform()) return 0;
+  // Let the existing native/fullscreen player, IME and modal back handlers
+  // own their own Back actions. The tab handler is for browsing screens.
+  if (state.playerOpen || (state.watchVideo && !state.watchMinimized)
+      || document.querySelector('[aria-modal="true"], .admin-editor-backdrop, .sheet-backdrop, .playlist-picker-backdrop, .download-manager-backdrop')) return 0;
+  const goToTab=tab=>{
+    const button=document.querySelector(`#androidBottomNavigationMount .bottom-nav [data-nav="${tab}"]`);
+    if (!button) return false;
+    void navigateToScreen(button,{fromSwipe:true,fromSystemBack:true});
+    return true;
+  };
+  if (!androidPrimaryTabs.includes(state.screen)) {
+    // Schedule, purchases, Live subpages and other details return to the
+    // tab that opened them, without closing the entire Android Activity.
+    const root=androidNavigationRoot(state.screen,state.androidNavRoot);
+    return goToTab(root) ? 1 : 0;
+  }
+  while (androidRecentTabHistory.length) {
+    const previous=androidRecentTabHistory.pop();
+    if (previous!==state.screen && goToTab(previous)) return 1;
+  }
+  if (state.screen!=='home' && goToTab('home')) return 1;
+  // Only pressing Android Back twice while already on Home may exit.
+  return 2;
+}
+window.__irgunHandleAndroidSystemBack=handleAndroidSystemBack;
+async function navigateToScreen(el, {fromSwipe=false,fromSystemBack=false}={}) {
+    const previousScreen=state.screen;
+    const targetScreen=el.dataset.nav;
     const sequence=++androidNavigationSequence;
     if(Capacitor.getPlatform()==='android'&&el.closest('.android-floating-nav')){
       state.screen=el.dataset.nav;
@@ -7164,7 +7198,16 @@ async function navigateToScreen(el, {fromSwipe=false}={}) {
         minimizeVideo:()=>minimizeWatchToPersistent(),closeAudioWatch:()=>closeWatch(true)});
       if(sequence!==androidNavigationSequence)return;
     }
-    state.screen = el.dataset.nav;
+    if (Capacitor.getPlatform()==='android' && !fromSystemBack &&
+        previousScreen!==targetScreen && androidPrimaryTabs.includes(previousScreen) &&
+        androidPrimaryTabs.includes(targetScreen)) {
+      // Do not repopulate the Back stack while consuming Back, or Back would
+      // bounce forever between two tabs. Also bound memory for long sessions.
+      if(androidRecentTabHistory[androidRecentTabHistory.length-1]!==previousScreen)
+        androidRecentTabHistory.push(previousScreen);
+      if(androidRecentTabHistory.length>20)androidRecentTabHistory.shift();
+    }
+    state.screen = targetScreen;
     if (el.dataset.openPurchased) state.librarySection = 'purchased';
     if (el.dataset.openHistory) state.librarySection = 'history';
     if (state.screen === 'library' && !state.user && !el.dataset.openPurchased &&
