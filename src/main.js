@@ -1,6 +1,7 @@
 import './style.css';
 import { clearCommentComposerAfterPost } from './comment-draft.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
+import { createAndroidSwipeMotion } from './android-swipe-motion.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
 import { usageAnalytics } from './usageAnalytics.js';
 import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
@@ -42,6 +43,8 @@ const SCHEDULE_CITY_FILTER_KEY = 'istScheduleCityFilterV1';
 const SKIP_SECONDS_KEY = 'istSkipSecondsV1';
 const audio = document.getElementById('audioEngine');
 const app = document.getElementById('app');
+const androidSwipeMotion=createAndroidSwipeMotion({document,view:window,
+  previewHtml:tab=>androidSwipePeekHtml(tab)});
 if (Capacitor.getPlatform() === 'android') document.body.classList.add('irgun-android');
 const persistentVideoMount = document.getElementById('persistentVideoMount');
 const IrgunDownloader = registerPlugin('IrgunDownloader');
@@ -3797,6 +3800,29 @@ function bottomNavHtml() {
     <button class="nav-btn ${activeRoot === key ? 'active' : ''}" data-nav="${key}"${android?' type="button"'+(activeRoot===key?' aria-current="page"':''):''}>
       <span class="nav-icon">${svgIcon(icon)}</span><span>${tr(label)}</span>
     </button>`).join('')}</nav>`;
+}
+
+// Intentionally bounded to a few static, text-only elements. A drag must NOT
+// instantiate a second live stream, audio player, interactive account form,
+// 48-card Shiurim grid or network requests on a low-memory Android device.
+function androidSwipePeekHtml(tab) {
+  const he=currentLanguage()==='he';
+  const name={home:he?'בית':'Home',shiurim:he?'שיעורים':'Shiurim',
+    live:he?'שידור חי':'Live',library:he?'הספרייה שלכם':'Your Library',
+    account:he?'החשבון שלי':'My Account'}[tab]||'';
+  const title=label=>`<div class="page-title"><h1>${label}</h1></div>`;
+  const rows=state.videos.slice(0,3).map(v=>
+    `<div class="android-swipe-peek-row">${esc(String(v.titleEn||v.title||v.name||'Shiur'))}</div>`).join('');
+  let body='';
+  if(tab==='home')body=`<section class="hero pro-hero"><div class="hero-content"><h1>Torah, wherever you are.</h1><p>Live shiurim, recordings and your Torah library — in one app.</p></div></section>
+    <div class="android-swipe-peek-shortcuts"><span>Schedule</span><span>Purchase</span><span>Your Library</span></div>`;
+  else if(tab==='shiurim')body=title('Torah Shiurim Library')+
+    `<div class="toolbar-card"><div class="segmented large"><span>All</span><span>Video</span><span>Audio</span></div><div class="android-swipe-peek-search">Search title, speaker or lecture code…</div></div>
+    <div class="android-swipe-peek-list">${rows}</div>`;
+  else if(tab==='live')body=`${title('Listen &amp; Watch Live')}<div class="live-grid pro-live-grid"><div class="live-location-card"><div class="location-icon">BP</div><div><h2>Boro Park</h2><p>Open Live Stream</p></div></div><div class="live-location-card"><div class="location-icon">FB</div><div><h2>Flatbush</h2><p>Open Live Stream</p></div></div></div>`;
+  else if(tab==='library')body=`${title(name)}<div class="android-swipe-peek-tabs"><span>My Likes</span><span>Downloads</span><span>History</span></div><div class="account-card"><h2>${he?'השיעורים שלכם':'Your saved shiurim'}</h2><p>${he?'שיעורים והורדות':'Likes, history and offline downloads'}</p></div>`;
+  else if(tab==='account')body=`${title(name)}<div class="account-card"><h2>${state.user?esc(String(state.user.name||'Account')):he?'התחברות':'Sign In'}</h2><p>${he?'ניהול החשבון':'Your profile and settings'}</p></div>`;
+  return `<main class="android-swipe-peek-body">${body}</main>`;
 }
 
 function shell(content) {
@@ -10315,6 +10341,9 @@ if (Capacitor.isNativePlatform()) {
 if (Capacitor.getPlatform() === 'android' && Capacitor.isNativePlatform()) {
   bindTabSwipes(app, {
     onGestureState: active => tabSwipeRenderGate.setActive(active),
+    onDrag:details=>androidSwipeMotion.drag(details),
+    onRelease:details=>androidSwipeMotion.release(details),
+    onComplete:()=>androidSwipeMotion.cleanup(),
     getActiveTab: () => state.screen,
     getTabs: () => Array.from(document.querySelectorAll('.bottom-nav [data-nav]'))
       .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
@@ -10323,7 +10352,13 @@ if (Capacitor.getPlatform() === 'android' && Capacitor.isNativePlatform()) {
       && !state.loading && !state.error && !state.playerOpen && !state.filterDialog
       && (!state.watchVideo || state.watchMinimized)
       && !document.querySelector('[aria-modal="true"], .admin-editor-backdrop, .sheet-backdrop, .playlist-picker-backdrop, .download-manager-backdrop'),
-    navigate: tab => document.querySelector(`.bottom-nav [data-nav="${tab}"]`)?.click()
+    // Same navigation function as the unchanged bottom-nav click handler.
+    // Return its completion promise to avoid removing the preview before
+    // native player/miniplayer cleanup and destination render are done.
+    navigate: tab => {
+      const button=document.querySelector(`.bottom-nav [data-nav="${tab}"]`);
+      return button ? navigateToScreen(button) : undefined;
+    }
   });
 }
 
