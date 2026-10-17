@@ -9,7 +9,7 @@ import {paidFolderTreeHtml} from './android-paid-catalog-ui.js';
 import {paidResumePositionSeconds,createPaidPlaybackEvidence,observePaidPlayback,verifiedPaidTrackEnd} from './android-paid-playback-guard.js';
 import {verifiedPurchasedIds,mergeVerifiedPaidCatalog,paidCatalogAccountKey} from './android-paid-entitlements.js';
 import {createAndroidPaidQuestionController} from './android-paid-index-controller.js';
-import {bindAndroidPlayerSheetInteractions,preserveAndroidPlayerSheetScroll,preserveAndroidSpeedTapScroll} from './android-player-controls.js';
+import {bindAndroidPlayerSheetInteractions,preserveAndroidPlayerSheetScroll} from './android-player-controls.js';
 import {isAndroidVimeoOnlyVideo,createAndroidVimeoPlayer} from './android-vimeo-playback.js';
 import {createAndroidVideoDisplaySync} from './android-video-display.js';
 import {androidNavigationRoot,createAndroidBottomNavigation,prepareAndroidTabNavigation} from './android-bottom-navigation.js';
@@ -7125,16 +7125,9 @@ function refreshAndroidPlayerSpeedChoices() {
 }
 function bindPlayerSpeedChoices() {
   document.querySelectorAll('[data-speed-choice]').forEach(el=>el.addEventListener('click',()=>{
-    // Capture the physical sheet scroll BEFORE Media3 updates. A delayed native
-    // playback event / deferred WebView render can otherwise scroll the same
-    // settings panel to the top after the speed tap has already succeeded.
-    const restoreScroll=preserveAndroidSpeedTapScroll({document,
-      isAndroid:()=>Capacitor.getPlatform()==='android'});
-    const refresh=()=>{
-      if(Capacitor.getPlatform()==='android')refreshAndroidPlayerSpeedChoices();
-      else render();
-      restoreScroll();
-    };
+    const refresh=()=>Capacitor.getPlatform()==='android'?refreshAndroidPlayerSpeedChoices():render();
+    // Updating Android's buttons in place keeps the scrolled settings and the
+    // next touch target alive while the same Media3 player applies its speed.
     return PlaybackController.setSpeed(Number(el.dataset.speedChoice)||1).then(refresh).catch(refresh);
   }));
 }
