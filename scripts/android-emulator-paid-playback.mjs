@@ -158,7 +158,7 @@ try{
   // Fetching the paid catalog is asynchronous; absence while loading isn't
   // evidence of a missing product or entitlement.
   let page=await paidView();
-  for(let i=0;i<36&&!page.productVisible;i++){await delay(500);page=await paidView();}
+  for(let i=0;i<70&&!page.productVisible;i++){await delay(500);page=await paidView();}
   if(!page.productVisible){report.status='skipped';report.reason='Paid fixture absent from this dedicated QA catalog';}
   else {
     assert.equal(page.lockedPreviewHidden,true,
@@ -174,9 +174,15 @@ try{
       // users actually access previously purchased recordings. Keep all taps,
       // horizontal tab swipes and folder opening physical via Android ADB.
       await openPurchasedLibrary();
-      const ownedPage=await paidView();
+      let ownedPage=await paidView();
+      // The verified entitlement lookup can finish after the physical tab
+      // switches. Poll the real DOM until the authenticated catalog resolves.
+      for(let i=0;i<75&&(!ownedPage.productVisible||!ownedPage.owned);i++){
+        await delay(450);
+        ownedPage=await paidView();
+      }
       assert.ok(ownedPage.productVisible&&ownedPage.owned,
-        'Belsky product missing from the authenticated Purchased Library');
+        'Belsky product was not verified in the authenticated Purchased Library');
       assert.ok(await tap(`[data-paid-collection-id="${productId}"] [data-paid-expand]`,{tries:28}),
         'The real owned Listen button is not accessible in Purchased Library');
       let track=null;
