@@ -6659,6 +6659,7 @@ async function playPaidTrack(productId, trackId, options = {}) {
   const product = state.paidCatalog.find(item => String(item.id) === String(productId));
   const track = product?.tracks?.find(item => String(item.id) === String(trackId));
   if (!product?.owned || !track) return false;
+  if(Capacitor.getPlatform()==='android')clearPendingPaidEndCheck();
   if(Capacitor.getPlatform()==='android' && !options.fromAutoAdvance && !options.retryPrematureEnd){
     state.paidLastFinishedKey='';
     state.paidPrematureRetryId='';
@@ -6729,35 +6730,79 @@ function recordPaidNativePlayback(snapshot) {
 // Continue protected Audio only inside the same deepest Google Drive folder.
 // The native Media3 MediaSession is reused; changing the signed MediaItem does
 // not create a second ExoPlayer or a WebView audio decoder.
-async function finishPaidNativeTrack(ended, event) {
-  if(!ended || ended.kind!=='paid-audio' || String(state.current?.id||'')!==String(ended.id||''))return false;
-  if(state.paidLastFinishedKey===ended.id)return false;
-  const evidence=state.paidTrackEvidence;
-  if(!evidence || evidence.lectureId!==String(ended.id||'') || evidence.endedHandled)return false;
-  const legitimateEnd=verifiedPaidTrackEnd(evidence,event);
-  evidence.endedHandled=true;
-  if(!legitimateEnd){
-    // An immediate END during buffering, a bad session, or a saved EOF
-    // position is not "finished". Retry this SAME track once, from 0:00, with
-    // a fresh signed URL. Never cascade through its entire folder.
-    if(state.paidPrematureRetryId!==String(ended.id)){
-      state.paidPrematureRetryId=String(ended.id);
-      setToast('The track did not start correctly. Retrying this track...');
+// A signed Drive recording can take several seconds to buffer. Some Android
+// devices report an early Media3 END, then start playing that SAME track.
+// Check native state after a grace period rather than instantly showing a
+// false error or skipping the folder.
+let pendingPaidEndCheck=null;
+function clearPendingPaidEndCheck(){
+  if(pendingPaidEndCheck?.timer)clearTimeout(pendingPaidEndCheck.timer);
+  pendingPaidEndCheck=null;
+}
+function schedulePaidPrematureEndRecovery(ended,evidence){
+  if(pendingPaidEndCheck?.evidence===evidence)return;
+  clearPendingPaidEndCheck();
+  const task={id:String(ended.id||''),evidence,generation:state.paidPlaybackGeneration,
+    startedAt:Date.now(),timer:null};
+  pendingPaidEndCheck=task;
+  const check=async()=>{
+    if(pendingPaidEndCheck!==task || String(state.current?.id||'')!==task.id ||
+       state.paidTrackEvidence!==evidence || state.paidPlaybackGeneration!==task.generation){
+      if(pendingPaidEndCheck===task)clearPendingPaidEndCheck();
+      return;
+    }
+    // Query Media3 itself; a stale WebView isPlaying bit is not evidence.
+    const snapshot=await nativeMediaPlugin()?.getState?.().catch(()=>null);
+    if(pendingPaidEndCheck!==task || String(state.current?.id||'')!==task.id ||
+       state.paidTrackEvidence!==evidence || state.paidPlaybackGeneration!==task.generation)return;
+    if(snapshot && String(snapshot.lectureId||'')===task.id){
+      observePaidPlayback(evidence,snapshot);
+      if(snapshot.isPlaying===true||snapshot.audioIsPlaying===true ||
+         evidence.playedForwardMs>=150){
+        clearPendingPaidEndCheck();
+        return; // Playback really started: do not show an error.
+      }
+    }
+    if(Date.now()-task.startedAt<7500){
+      task.timer=setTimeout(check,2600);
+      return; // Still loading; don't report a failure after two seconds.
+    }
+    clearPendingPaidEndCheck();
+    if(state.paidPrematureRetryId!==task.id){
+      state.paidPrematureRetryId=task.id;
+      // Retry the SAME track once with a fresh short-lived signed URL.
+      // A genuinely failed load is not an instruction to skip this folder.
       const retried=await playPaidTrack(String(ended.paidAudioId),String(ended.trackId),
         {retryPrematureEnd:true,expectedCurrentId:ended.id});
-      if(!retried)setToast('Could not load this track. Tap it to try again.');
-    }else{
-      setToast('Could not load this track. Tap it to try again.');
+      if(!retried && String(state.current?.id||'')===task.id)
+        setToast('Still unable to start this recording. Tap it to retry.');
+    }else if(String(state.current?.id||'')===task.id){
+      setToast('Could not load this recording. Tap it to try again.');
     }
+  };
+  task.timer=setTimeout(check,2800);
+}
+
+async function finishPaidNativeTrack(ended,event){
+  if(!ended || ended.kind!=='paid-audio' ||
+     String(state.current?.id||'')!==String(ended.id||''))return false;
+  if(state.paidLastFinishedKey===ended.id)return false;
+  const evidence=state.paidTrackEvidence;
+  if(!evidence||evidence.lectureId!==String(ended.id||'')||evidence.endedHandled)return false;
+  if(!verifiedPaidTrackEnd(evidence,event)){
+    // Do not set endedHandled: the native player may resume on this source,
+    // and the eventual genuine completion still needs to auto-advance.
+    schedulePaidPrematureEndRecovery(ended,evidence);
     return false;
   }
+  clearPendingPaidEndCheck();
+  evidence.endedHandled=true;
   state.paidLastFinishedKey=String(ended.id);
   state.paidPrematureRetryId='';
-  // Capture the genuinely completed track before requesting the next session.
   void savePaidAudioProgress(false,true).catch(()=>{});
   if(state.sleepMode==='end'){setToast('Playback stopped at the end of this track.');updatePlayerUi();return true;}
   const product=state.paidCatalog.find(item=>String(item.id)===String(ended.paidAudioId));
-  const next=product?.owned ? nextPaidTrackInFolder(product.tracks,ended.trackId) : null;
+  const next=product?.owned?nextPaidTrackInFolder(product.tracks,ended.trackId):null;
   if(!next){setToast('Finished. End of this folder.');updatePlayerUi();return true;}
   const started=await playPaidTrack(String(product.id),String(next.id),
     {fromAutoAdvance:true,expectedCurrentId:ended.id});
@@ -6936,7 +6981,7 @@ function render() {
   if (['home','schedule','live','live-boro','live-flatbush'].includes(state.screen) && !state.scheduleDataLoaded && !state.scheduleDataLoading) setTimeout(loadScheduleData, 0);
   if (['home','live','live-boro','live-flatbush'].includes(state.screen) && !state.liveStatusLoaded) setTimeout(loadLiveStatus, 0);
   if (state.screen === 'schedule' && state.scheduleView === 'flyers') setTimeout(loadSchedule, 0);
-  if ((state.screen === 'paid' || (state.screen === 'library' && state.librarySection === 'purchased') || (state.screen === 'account' && state.accountSection === 'purchases')) && (!state.paidLoaded || state.paidCatalogOwnerKey!==paidCatalogAccountKey(state.user,Boolean(state.token))) && !state.paidLoading) setTimeout(loadPaidCatalog, 0);
+  if ((state.screen === 'paid' || (state.screen === 'library' && state.librarySection === 'purchased') || (state.screen === 'account' && state.accountSection === 'purchases')) && (!state.paidLoaded || state.paidCatalogOwnerKey!==paidCatalogAccountKey(state.user,Boolean(state.token))) && !state.paidLoading && !state.paidError) setTimeout(loadPaidCatalog, 0);
   if (state.screen === 'account' && state.accountSection === 'purchases' && state.user && !state.recurringLoaded && !state.recurringLoading) setTimeout(loadRecurringDonations, 0);
   if (state.screen === 'account' && state.accountSection === 'admin' && state.isAdmin && !state.adminLoaded && !state.adminLoading) setTimeout(loadAdminData, 0);
   if (state.screen === 'donate' && !state.sponsorPricesLoaded && !state.sponsorPricesLoading) setTimeout(loadSponsorPrices, 0);
