@@ -64,7 +64,13 @@ export function verifiedPaidTrackEnd(evidence, ended, now = Date.now()) {
   const duration = Math.max(seconds(ended.durationMs), seconds(ended.audioDurationMs), evidence.durationMs);
   const position = Math.max(0, Number(ended.currentPositionMs ?? ended.positionMs ?? ended.audioPositionMs ?? 0) || 0);
   if (!evidence.ready || !evidence.firstPlayingAt || !duration || !position) return false;
-  if (duration - position > Math.max(1500, Math.min(4500, duration * 0.015))) return false;
+  const endToleranceMs=Math.max(1500, Math.min(4500, duration * 0.015));
+  if (duration - position > endToleranceMs) return false;
+  // An old STATE_ENDED event can carry the full duration even though the NEW
+  // selected track has played only its first seconds. Require the native
+  // position observed WHILE actually playing to be near this item's end too.
+  const lastPlayedMs=Number(evidence.lastPlayingPositionMs);
+  if (!Number.isFinite(lastPlayedMs) || duration - lastPlayedMs > Math.max(4500,endToleranceMs)) return false;
   if (evidence.playedForwardMs < Math.min(650, duration * 0.35)) return false;
   if (evidence.lastPlayingAt - evidence.firstPlayingAt < 650) return false;
   // Stale end events from a previous item or an unloaded URL are not proof of
