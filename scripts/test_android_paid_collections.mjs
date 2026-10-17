@@ -289,3 +289,12 @@ test('paid emulator observes actual selected Purchased tab and safely escaped fo
   assert.match(qa,/CSS\.escape\(e\.dataset\.paidTrack\)/);
   assert.match(qa,/openPurchasedLibrary\(\)/);
 });
+
+test('paid playback emulator uses interpolated owned collection selectors',()=>{
+  const qa=readFileSync('scripts/android-emulator-paid-playback.mjs','utf8');
+  assert.ok(qa.includes('tap(`[data-paid-collection-id="${productId}"] [data-paid-expand]`'));
+  assert.ok(qa.includes('tap(`[data-paid-collection-id="${productId}"] ${summary}`'));
+  assert.ok(qa.includes('tap(`[data-paid-collection-id="${productId}"] ${track.selector}`'));
+  assert.ok(!qa.includes("tap('[data-paid-collection-id="),
+    'Single-quoted template placeholders never substitute the product ID in actual ADB taps');
+});

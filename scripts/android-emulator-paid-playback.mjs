@@ -177,7 +177,7 @@ try{
       const ownedPage=await paidView();
       assert.ok(ownedPage.productVisible&&ownedPage.owned,
         'Belsky product missing from the authenticated Purchased Library');
-      assert.ok(await tap('[data-paid-collection-id="${productId}"] [data-paid-expand]',{tries:28}),
+      assert.ok(await tap(`[data-paid-collection-id="${productId}"] [data-paid-expand]`,{tries:28}),
         'The real owned Listen button is not accessible in Purchased Library');
       let track=null;
       for(let i=0;i<10;i++){
@@ -185,12 +185,12 @@ try{
         if(track)break;
         const summary=await nextUnopened();
         if(!summary)break;
-        assert.ok(await tap('[data-paid-collection-id="${productId}"] '+summary),
+        assert.ok(await tap(`[data-paid-collection-id="${productId}"] ${summary}`),
           'The real nested paid folder could not be expanded');
       }
       assert.ok(track?.id,'No playable Belsky track reachable through native folder taps');
       report.trackId=String(track.id);
-      assert.ok(await tap('[data-paid-collection-id="${productId}"] '+track.selector),
+      assert.ok(await tap(`[data-paid-collection-id="${productId}"] ${track.selector}`),
         'Cannot physically tap the purchased Belsky track');
       let observedPlaying=false,advancing=false,startedAt=0,lastAt=0,selectedSeen=false;
       const samples=[];
