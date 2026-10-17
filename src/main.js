@@ -1,4 +1,5 @@
 import './style.css';
+import { clearCommentComposerAfterPost } from './comment-draft.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
 import { usageAnalytics } from './usageAnalytics.js';
@@ -10147,11 +10148,12 @@ async function postComment() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ videoId: postedVideoId, text })
     });
-    // Clear only the submitted draft, not text entered during the request.
-    // Check the active field so switching shiurim cannot clear another form.
-    if (document.getElementById('commentText') === field && field.value === draft) {
-      field.value = '';
-    }
+    clearCommentComposerAfterPost({
+      document,
+      currentVideoId: state.watchVideo ? videoId(state.watchVideo) : '',
+      postedVideoId,
+      postedText: text
+    });
   } catch (error) {
     alert(error.message || 'Could not post comment.');
     return;
