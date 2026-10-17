@@ -2717,7 +2717,10 @@ body.irgun-android.android-tab-sliding #app .app-shell > .content {
 }
 body.irgun-android .android-tab-slide-preview {
   position: fixed;
-  inset: 0 0 0 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   width: 100%;
   z-index: 35;
   overflow: hidden;
