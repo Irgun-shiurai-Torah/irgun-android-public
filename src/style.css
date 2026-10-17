@@ -2705,6 +2705,40 @@ body.irgun-android .rotation-fullscreen-exit {
   font-size: 24px;
 }
 
+/* Physical horizontal tab swipes: move the REAL current content beneath a
+   non-interactive adjacent-page preview. The native player, mini player, top
+   header and persistent bottom navigation never join this transform. */
+body.irgun-android.android-tab-sliding { overflow-x: hidden; }
+body.irgun-android.android-tab-sliding #app .app-shell > .content {
+  position: relative;
+  z-index: 36;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+body.irgun-android .android-tab-slide-preview {
+  position: fixed;
+  inset: 0 0 0 0;
+  width: 100%;
+  z-index: 35;
+  overflow: hidden;
+  pointer-events: none;
+  background: #f4f7fb;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+body.irgun-android .android-tab-slide-preview > .content {
+  width: 100%;
+  padding-top: 16px;
+  margin: 0 auto;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  body.irgun-android .android-tab-slide-preview,
+  body.irgun-android.android-tab-sliding #app .app-shell > .content {
+    transition: none !important;
+  }
+}
+
 /* Android navigation remains outside page/player renders, above ordinary pages. */
 body.irgun-android {
   --android-nav-height: 72px;
