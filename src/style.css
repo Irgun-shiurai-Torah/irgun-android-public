@@ -1877,6 +1877,7 @@ html[dir="rtl"] .live-back-row { justify-content:flex-end; }
 .paid-primary:disabled { background:#9aa8b7; }
 .paid-secondary { border:1px solid var(--line);background:#f8fafc;color:var(--navy); }
 .paid-description { margin-top:12px;padding:12px;border-radius:12px;background:#f7f9fc;color:#56677b;font-size:11px;line-height:1.55; }
+body.irgun-android .paid-description[hidden] { display:none !important; }
 .paid-description p { margin:0; }
 .paid-image-strip { display:flex;gap:7px;overflow:auto;margin-top:9px;padding-bottom:2px; }
 .paid-image-strip img { width:95px;aspect-ratio:1.25;object-fit:cover;border-radius:9px;flex:0 0 auto; }

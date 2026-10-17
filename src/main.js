@@ -5,6 +5,8 @@ import { usageAnalytics } from './usageAnalytics.js';
 import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
 import {BELSKY_VOL1_ID,nextPaidTrackInFolder} from './android-paid-collections.js';
 import {paidFolderTreeHtml} from './android-paid-catalog-ui.js';
+import {paidResumePositionSeconds,createPaidPlaybackEvidence,observePaidPlayback,verifiedPaidTrackEnd} from './android-paid-playback-guard.js';
+import {verifiedPurchasedIds,mergeVerifiedPaidCatalog,paidCatalogAccountKey} from './android-paid-entitlements.js';
 import {createAndroidPaidQuestionController} from './android-paid-index-controller.js';
 import {bindAndroidPlayerSheetInteractions,preserveAndroidPlayerSheetScroll} from './android-player-controls.js';
 import {isAndroidVimeoOnlyVideo,createAndroidVimeoPlayer} from './android-vimeo-playback.js';
@@ -235,6 +237,7 @@ const state = {
   paidCatalog: [],
   paidLoaded: false,
   paidLoading: false,
+  paidCatalogOwnerKey: '',
   paidError: '',
   paidExpandedId: '',
   paidCheckoutItemId: '',
@@ -249,6 +252,8 @@ const state = {
   paidOpenFolders: new Set(),
   paidLastFinishedKey: '',
   paidPlaybackGeneration: 0,
+  paidTrackEvidence: null,
+  paidPrematureRetryId: '',
   paidQuestionIndexOpen: false,
   paidQuestionIndexLoaded: false,
   paidQuestionIndexLoading: false,
@@ -2205,6 +2210,7 @@ function resetUserState() {
   state.notificationSettings = { pushEnabled:false, emailEnabled:false, pushConfigured:false, emailConfigured:false };
   state.paidLoaded = false;
   state.paidCatalog = [];
+  state.paidCatalogOwnerKey = '';
   state.paidExpandedId = '';
   state.recurringDonations = [];
   state.recurringLoaded = false;
@@ -4238,9 +4244,9 @@ function paidProductCard(item) {
     ${coverHtml}
     <div class="paid-body"><div class="paid-card-topline"><span class="paid-category">${esc(item.category || 'Audio Collection')}</span><span class="paid-status-chip ${statusClass}">${esc(status)}</span></div><h2>${esc(paidProductTitle(item))}</h2>${item.speaker ? `<strong class="paid-speaker">${esc(item.speaker)}</strong>` : ''}<div class="paid-meta">${esc([item.catalogDetails, item.audience].filter(Boolean).join(' • '))}</div>
       <div class="paid-price-row"><strong>${esc(paidProductPriceLabel(item))}</strong><span>${item.trackCount ? `${Number(item.trackCount)} tracks` : ''}</span></div>
-      <div class="paid-actions">${item.owned ? `<button class="paid-primary" data-paid-expand="${esc(id)}">${svgIcon('play')} ${expanded ? 'Close' : 'Listen'}</button>` : item.available ? `<button class="paid-primary" data-paid-purchase="${esc(id)}">${svgIcon('store')} Buy Securely</button>` : `<button class="paid-primary paid-coming-button" disabled>${tr('Coming Soon')}</button>`}<button class="paid-secondary" data-paid-description="${esc(id)}">Details</button></div>
-      <div class="paid-description paid-description-rich" data-paid-description-panel="${esc(id)}" hidden>${paidRichDescription(item.description)}</div>${androidIndexButton}
-      ${Capacitor.getPlatform()==='android' ? androidPaidFolderHtml(item,expanded) : (item.owned ? `<div class="paid-album" ${expanded ? '' : 'hidden'}><div class="paid-track-head"><strong>Your Audio</strong><span>Protected personal listening</span></div>${(item.tracks || []).length ? `<div class="paid-track-list">${item.tracks.map((track,index)=>`<button class="paid-track" data-paid-track="${esc(track.id)}" data-paid-product="${esc(id)}"><span>${index+1}</span><div><strong>${esc(track.title || `Track ${index+1}`)}</strong><small>${track.size ? `${Math.round(Number(track.size)/1024/1024)} MB` : 'Secure streaming'}</small></div>${svgIcon('play')}</button>`).join('')}</div>` : '<div class="empty">This purchase is connected, but its tracks are not available right now.</div>'}${paidMaterialsHtml(item)}</div>` : '')}
+      <div class="paid-actions">${item.owned ? `<button class="paid-primary" data-paid-expand="${esc(id)}">${svgIcon('play')} ${expanded ? 'Close' : 'Listen'}</button>` : item.available ? `<button class="paid-primary" data-paid-purchase="${esc(id)}">${svgIcon('store')} Buy Securely</button>` : `<button class="paid-primary paid-coming-button" disabled>${tr('Coming Soon')}</button>`}<button class="paid-secondary" data-paid-description="${esc(id)}" aria-expanded="false">${Capacitor.getPlatform()==='android' ? (currentLanguage()==='he'?'תיאור':'Description') : 'Details'}</button></div>
+      <div class="paid-description paid-description-rich" data-paid-description-panel="${esc(id)}" hidden>${paidRichDescription(item.description)}${Capacitor.getPlatform()==='android' && !item.owned ? androidPaidFolderHtml(item,false) : ''}</div>${androidIndexButton}
+      ${Capacitor.getPlatform()==='android' ? (item.owned ? androidPaidFolderHtml(item,expanded) : '') : (item.owned ? `<div class="paid-album" ${expanded ? '' : 'hidden'}><div class="paid-track-head"><strong>Your Audio</strong><span>Protected personal listening</span></div>${(item.tracks || []).length ? `<div class="paid-track-list">${item.tracks.map((track,index)=>`<button class="paid-track" data-paid-track="${esc(track.id)}" data-paid-product="${esc(id)}"><span>${index+1}</span><div><strong>${esc(track.title || `Track ${index+1}`)}</strong><small>${track.size ? `${Math.round(Number(track.size)/1024/1024)} MB` : 'Secure streaming'}</small></div>${svgIcon('play')}</button>`).join('')}</div>` : '<div class="empty">This purchase is connected, but its tracks are not available right now.</div>'}${paidMaterialsHtml(item)}</div>` : '')}
       ${state.isAdmin && state.adminMode ? `<div class="admin-card-tools"><button data-admin-paid-edit="${esc(id)}">Edit Product</button><button class="danger" data-admin-paid-delete="${esc(id)}">Delete</button></div>` : ''}
     </div>
   </article>`;
@@ -4254,7 +4260,7 @@ function paidCheckoutModalHtml() {
 
 function paidShiurimHtml() {
   if(Capacitor.getPlatform()==='android' && state.paidQuestionIndexOpen) return androidPaidQuestionIndex.html();
-  if (!state.paidLoaded && !state.paidError) return `<div class="page-title pro-page-title"><span class="page-kicker">PREMIUM TORAH AUDIO</span><h1>${currentLanguage()==='he'?'רכישה':'Purchase'}</h1><p>${currentLanguage()==='he'?'טוען את האוספים הזמינים ואת הרכישות שלכם…':'Loading available collections and your purchases…'}</p></div><div class="loading">${currentLanguage()==='he'?'טוען אוספים…':'Loading audio collections…'}</div>`;
+  if ((!state.paidLoaded || state.paidCatalogOwnerKey!==currentPaidCatalogOwnerKey()) && !state.paidError) return `<div class="page-title pro-page-title"><span class="page-kicker">PREMIUM TORAH AUDIO</span><h1>${currentLanguage()==='he'?'רכישה':'Purchase'}</h1><p>${currentLanguage()==='he'?'טוען את האוספים הזמינים ואת הרכישות שלכם…':'Loading available collections and your purchases…'}</p></div><div class="loading">${currentLanguage()==='he'?'טוען אוספים…':'Loading audio collections…'}</div>`;
   const owned = state.paidCatalog.filter(item => item.owned).length;
   const ordered = [...state.paidCatalog].sort((a,b)=>Number(Boolean(b.featured))-Number(Boolean(a.featured)) || paidProductTitle(a).localeCompare(paidProductTitle(b)));
   const available = ordered.filter(item => item.available || item.owned);
@@ -4698,7 +4704,7 @@ function libraryHtml() {
   if (!state.user && !localSection) body = signedOutCard();
   else if (state.librarySection === 'downloads') body = downloadsLibraryHtml();
   else if (state.librarySection === 'playlists') body = playlistLibraryHtml();
-  else if (state.librarySection === 'purchased') body = `<div class="purchased-library"><div class="section-head"><div><h2>${he?'שיעורים שנרכשו':'Purchased Shiurim'}</h2><p>${he?'אוספי שמע פרטיים המחוברים לחשבון.':'Private audio collections connected to your account.'}</p></div><button class="section-link" data-nav="paid">${he?'לחנות':'Browse Store'}</button></div><div class="paid-grid">${state.paidCatalog.filter(item => item.owned).length ? state.paidCatalog.filter(item => item.owned).map(paidProductCard).join('') : `<div class="empty">${he?'אין עדיין שיעורים שנרכשו בחשבון הזה.':'You have no paid shiurim in this account yet.'}</div>`}</div></div>`;
+  else if (state.librarySection === 'purchased') body = `<div class="purchased-library"><div class="section-head"><div><h2>${he?'שיעורים שנרכשו':'Purchased Shiurim'}</h2><p>${he?'אוספי שמע פרטיים המחוברים לחשבון.':'Private audio collections connected to your account.'}</p></div><button class="section-link" data-nav="paid">${he?'לחנות':'Browse Store'}</button></div>${Capacitor.getPlatform()==='android' && (!state.paidLoaded || state.paidCatalogOwnerKey!==currentPaidCatalogOwnerKey()) ? '<div class="loading">Checking your purchases and restoring access...</div>' : `<div class="paid-grid">${state.paidCatalog.filter(item => item.owned).length ? state.paidCatalog.filter(item => item.owned).map(paidProductCard).join('') : `<div class="empty">${he?'אין עדיין שיעורים שנרכשו בחשבון הזה.':'You have no paid shiurim in this account yet.'}</div>`}</div>`}</div>`;
   else if (state.librarySection === 'following') body = `<div class="account-card following-library"><h2>${he?'במעקב':'Following'}</h2>${follows.length ? `<div class="follow-chips">${follows.map(item => `<button class="follow-chip active" data-follow-type="${esc(item.type)}" data-follow-key="${esc(item.key)}" data-follow-label="${esc(item.labelEn || item.labelHe || item.key)}">${esc(item.labelEn || item.labelHe || item.key)} <span>${he?'הפסק מעקב':'Unfollow'}</span></button>`).join('')}</div>` : `<div class="empty">You are not following any speakers or topics yet.</div>`}<h2 class="subhead">${he?'חדש ממה שאתם עוקבים אחריו':'New From Speakers & Topics You Follow'}</h2><div class="list">${feed.length ? feed.map(v => compactItem({ ...v, _kind:'video' })).join('') : `<div class="empty">${he?'עקבו אחרי מרצה או נושא כדי לבנות את הפיד.':'Follow a speaker or topic from a shiur to build this feed.'}</div>`}</div></div>`;
   else body = `${state.librarySection === 'history' && state.history.length ? `<div class="history-toolbar"><button class="small-btn danger" data-clear-history="1">${he?'נקה היסטוריה':'Clear History'}</button></div>` : ''}<div class="list section">${items.length ? items.map(item => compactItem(item)).join('') : `<div class="empty">${he?'עדיין אין כאן כלום.':'Nothing here yet.'}</div>`}</div>`;
   return `<div class="page-title"><h1>${he?'הספרייה שלכם':'Your Library'}</h1><p>${esc(headerText)}</p></div><div class="segmented library-tabs library-tabs-scroll">${tabs.map(([key,label])=>`<button data-library-section="${key}" class="${state.librarySection===key?'active':''}">${label}</button>`).join('')}</div>${body}`;
@@ -6442,30 +6448,67 @@ async function updateRecurringDonation(id, action) {
   }
 }
 
+let paidCatalogLoadPromise=null;
+function currentPaidCatalogOwnerKey(){
+  // The purchase/account reconciliation is Android-only. Preserve the iOS
+  // catalog's existing lifetime while Android binds data to its signed-in user.
+  return Capacitor.getPlatform()==='android'
+    ? paidCatalogAccountKey(state.user,Boolean(state.token)) : 'standard';
+}
 async function loadPaidCatalog(force = false, options = {}) {
-  const silent = Boolean(options?.silent);
-  if (state.paidLoading) return;
-  if (state.paidLoaded && !force) return;
-  state.paidLoading = true;
-  state.paidError = '';
-  if (!silent && ['paid','library','account'].includes(state.screen)) render();
-  try {
-    const paidRequest = state.user
-      ? apiJson(`/paid-audio?v=${Date.now()}`)
-      : publicJson(`/paid-audio?v=${Date.now()}`);
-    const data = await promiseWithTimeout(paidRequest, 12000, currentLanguage()==='he' ? 'טעינת החנות ארכה זמן רב מדי. נסו שוב.' : 'The purchase page took too long to load. Please try again.');
-    state.paidCatalog = Array.isArray(data.items) ? data.items : [];
-    state.paidLoaded = true;
-    if (Capacitor.isNativePlatform() && state.user) setTimeout(warmPaidPurchases, 120);
-  } catch (error) {
-    state.paidError = error.message || 'Could not load paid shiurim.';
-  } finally {
-    state.paidLoading = false;
-    const paidSurfaceVisible = state.screen === 'paid'
-      || (state.screen === 'library' && state.librarySection === 'purchased')
-      || (state.screen === 'account' && state.accountSection === 'purchases');
-    if (paidSurfaceVisible) render();
+  const silent=Boolean(options?.silent);
+  // A catalog fetched before restoring /me belongs to the guest identity;
+  // never reuse its locked Buy buttons after restoring the signed-in account.
+  const identity=currentPaidCatalogOwnerKey();
+  if(state.paidLoading&&paidCatalogLoadPromise){
+    await paidCatalogLoadPromise.catch(()=>{});
+    if(identity!==currentPaidCatalogOwnerKey())return;
+    if(!force&&state.paidLoaded&&state.paidCatalogOwnerKey===identity)return;
+    return loadPaidCatalog(force,options);
   }
+  if(state.paidLoaded&&!force&&state.paidCatalogOwnerKey===identity)return;
+  state.paidLoading=true;
+  state.paidError='';
+  if(!silent&&['paid','library','account'].includes(state.screen))render();
+  const request=(async()=>{
+    try{
+      let verifiedIds=new Set();
+      if(Capacitor.getPlatform()==='android'&&identity!=='guest'){
+        // /paid-audio/my repairs pending Stripe orders and alternate same-email
+        // purchases; /paid-audio intentionally skips pending Stripe lookups.
+        // Use the existing authenticated API instead of opening checkout to
+        // discover a purchase. No local or guest permission is ever granted.
+        try{
+          const mine=await promiseWithTimeout(apiJson('/paid-audio/my'),16000,
+            'Checking your purchased collections took too long.');
+          verifiedIds=verifiedPurchasedIds(mine);
+        }catch(error){
+          console.warn('[Paid audio] entitlement refresh unavailable',Number(error?.status)||'network');
+        }
+      }
+      const paidRequest=state.user&&state.token
+        ? apiJson(`/paid-audio?v=${Date.now()}`)
+        : publicJson(`/paid-audio?v=${Date.now()}`);
+      const data=await promiseWithTimeout(paidRequest,14000,
+        currentLanguage()==='he'?'טעינת האוספים ארכה זמן רב מדי. נסו שוב.':'The purchase page took too long to load. Please try again.');
+      if(identity!==currentPaidCatalogOwnerKey())return;
+      state.paidCatalog=mergeVerifiedPaidCatalog(data.items,verifiedIds);
+      state.paidCatalogOwnerKey=identity;
+      state.paidLoaded=true;
+      if(Capacitor.isNativePlatform()&&state.user)setTimeout(warmPaidPurchases,120);
+    }catch(error){
+      if(identity===currentPaidCatalogOwnerKey())
+        state.paidError=error.message||'Could not load paid shiurim.';
+    }finally{
+      state.paidLoading=false;
+      const visible=state.screen==='paid'
+        ||(state.screen==='library'&&state.librarySection==='purchased')
+        ||(state.screen==='account'&&state.accountSection==='purchases');
+      if(visible)render();
+    }
+  })();
+  paidCatalogLoadPromise=request;
+  try{await request;}finally{if(paidCatalogLoadPromise===request)paidCatalogLoadPromise=null;}
 }
 
 function warmNativePaidCatalog() {
@@ -6614,25 +6657,52 @@ async function playPaidTrack(productId, trackId, options = {}) {
     state.screen = 'account';
     state.authMessage = 'Please sign in to listen to your purchased shiurim.';
     render();
-    return;
+    return false;
   }
-  if(options.fromAutoAdvance && String(state.current?.id||'')!==String(options.expectedCurrentId||'')) return false;
+  if((options.fromAutoAdvance || options.retryPrematureEnd) &&
+      String(state.current?.id||'')!==String(options.expectedCurrentId||'')) return false;
   resetWatchPresentationForStandaloneAudio();
   const product = state.paidCatalog.find(item => String(item.id) === String(productId));
   const track = product?.tracks?.find(item => String(item.id) === String(trackId));
   if (!product?.owned || !track) return false;
-  if(Capacitor.getPlatform()==='android' && !options.fromAutoAdvance){state.paidLastFinishedKey='';state.paidPlaybackGeneration++;}
+  if(Capacitor.getPlatform()==='android')clearPendingPaidEndCheck();
+  if(Capacitor.getPlatform()==='android' && !options.fromAutoAdvance && !options.retryPrematureEnd){
+    state.paidLastFinishedKey='';
+    state.paidPrematureRetryId='';
+    state.paidPlaybackGeneration++;
+  }
   const playbackGeneration=state.paidPlaybackGeneration;
+  const lectureId=`${productId}:${trackId}`;
   try {
-    setToast('Preparing secure playback...');
+    setToast(options.retryPrematureEnd ? 'Retrying this track...' : 'Preparing secure playback...');
+    if(options.retryPrematureEnd){
+      // This may be an expired/invalid signed source. Do not reuse its URL.
+      const key=paidPlaySessionKey(productId,trackId);
+      state.paidPlaySessionCache.delete(key);
+      state.paidPlaySessionPrefetch.delete(key);
+    }
     const data = await requestPaidPlaySession(productId, trackId, false);
     state.paidPlaySessionCache.delete(paidPlaySessionKey(productId, trackId));
-    if(options.fromAutoAdvance && (state.paidPlaybackGeneration!==playbackGeneration || String(state.current?.id||'')!==String(options.expectedCurrentId||''))) return false;
+    // Signed playback URLs are asynchronous: an older tap must never override
+    // a newer selected track when its response returns out of order.
+    if(state.paidPlaybackGeneration!==playbackGeneration) return false;
+    if((options.fromAutoAdvance||options.retryPrematureEnd) &&
+        String(state.current?.id||'')!==String(options.expectedCurrentId||'')) return false;
     if(Capacitor.getPlatform()==='android' && !data?.playbackUrl)throw new Error('Protected audio session has no playable URL.');
+    // Match website paid playback: auto-advanced recordings start at 0:00,
+    // never at the NEXT track's previously saved end-of-file position.
+    const resume=Capacitor.getPlatform()==='android'
+      ? ((options.fromAutoAdvance||options.retryPrematureEnd) ? 0
+          : paidResumePositionSeconds(data.progress,track.durationSeconds))
+      : (Number(data.progress?.positionSeconds)||0);
+    // Only real native READY/playing/position callbacks can satisfy this gate.
+    // A stored EOF bookmark or unprepared Media3 player may emit STATE_ENDED
+    // immediately; that is not permission to skip to the next paid recording.
+    if(Capacitor.getPlatform()==='android')state.paidTrackEvidence=createPaidPlaybackEvidence(lectureId);
     audio.crossOrigin = 'use-credentials';
     await startAudio({
       kind:'paid-audio',
-      id:`${productId}:${trackId}`,
+      id:lectureId,
       sourceId:trackId,
       paidAudioId:String(productId),
       trackId:String(trackId),
@@ -6641,35 +6711,113 @@ async function playPaidTrack(productId, trackId, options = {}) {
       thumbnail:product.coverUrl ? apiUrl(product.coverUrl) : '',
       url:String(data.playbackUrl || ''),
       bookmarkSeconds:Number(data.progress?.bookmarkSeconds)||0
-    }, Number(data.progress?.positionSeconds)||0);
-    return true;
+    }, resume);
+    return String(state.current?.id||'')===lectureId;
   } catch (error) {
-    if(options.fromAutoAdvance)setToast('Could not play the next track. Choose it again to retry.');
+    if((options.fromAutoAdvance||options.retryPrematureEnd))setToast('Could not play this track. Choose it again to retry.');
     else alert(error.message || 'Could not start protected playback.');
     return false;
   }
 }
 
+function recordPaidNativePlayback(snapshot) {
+  const current=state.current;
+  if(!current || current.kind!=='paid-audio' || !snapshot ||
+      String(snapshot.lectureId||'')!==String(current.id||''))return;
+  // A process restored from the background may not have an in-memory gate.
+  // Reconstruct it only after Media3 positively reports active playback.
+  if(!state.paidTrackEvidence || state.paidTrackEvidence.lectureId!==String(current.id)){
+    if(snapshot.isPlaying!==true && snapshot.audioIsPlaying!==true)return;
+    state.paidTrackEvidence=createPaidPlaybackEvidence(String(current.id));
+  }
+  observePaidPlayback(state.paidTrackEvidence,snapshot);
+}
+
 // Continue protected Audio only inside the same deepest Google Drive folder.
 // The native Media3 MediaSession is reused; changing the signed MediaItem does
 // not create a second ExoPlayer or a WebView audio decoder.
-async function finishPaidNativeTrack(ended) {
-  if(!ended || ended.kind!=='paid-audio' || String(state.current?.id||'')!==String(ended.id||'')) return;
-  if(state.paidLastFinishedKey===ended.id)return;
-  state.paidLastFinishedKey=ended.id;
-  // Capture the just-ended track before requesting the next protected session.
-  // The network history write must not block consecutive playback.
+// A signed Drive recording can take several seconds to buffer. Some Android
+// devices report an early Media3 END, then start playing that SAME track.
+// Check native state after a grace period rather than instantly showing a
+// false error or skipping the folder.
+let pendingPaidEndCheck=null;
+function clearPendingPaidEndCheck(){
+  if(pendingPaidEndCheck?.timer)clearTimeout(pendingPaidEndCheck.timer);
+  pendingPaidEndCheck=null;
+}
+function schedulePaidPrematureEndRecovery(ended,evidence){
+  if(pendingPaidEndCheck?.evidence===evidence)return;
+  clearPendingPaidEndCheck();
+  const task={id:String(ended.id||''),evidence,generation:state.paidPlaybackGeneration,
+    startedAt:Date.now(),timer:null};
+  pendingPaidEndCheck=task;
+  const check=async()=>{
+    if(pendingPaidEndCheck!==task || String(state.current?.id||'')!==task.id ||
+       state.paidTrackEvidence!==evidence || state.paidPlaybackGeneration!==task.generation){
+      if(pendingPaidEndCheck===task)clearPendingPaidEndCheck();
+      return;
+    }
+    // Query Media3 itself; a stale WebView isPlaying bit is not evidence.
+    const snapshot=await nativeMediaPlugin()?.getState?.().catch(()=>null);
+    if(pendingPaidEndCheck!==task || String(state.current?.id||'')!==task.id ||
+       state.paidTrackEvidence!==evidence || state.paidPlaybackGeneration!==task.generation)return;
+    if(snapshot && String(snapshot.lectureId||'')===task.id){
+      observePaidPlayback(evidence,snapshot);
+      if(snapshot.isPlaying===true||snapshot.audioIsPlaying===true ||
+         evidence.playedForwardMs>=150){
+        clearPendingPaidEndCheck();
+        return; // Playback really started: do not show an error.
+      }
+    }
+    if(Date.now()-task.startedAt<7500){
+      task.timer=setTimeout(check,2600);
+      return; // Still loading; don't report a failure after two seconds.
+    }
+    clearPendingPaidEndCheck();
+    if(state.paidPrematureRetryId!==task.id){
+      state.paidPrematureRetryId=task.id;
+      // Retry the SAME track once with a fresh short-lived signed URL.
+      // A genuinely failed load is not an instruction to skip this folder.
+      const retried=await playPaidTrack(String(ended.paidAudioId),String(ended.trackId),
+        {retryPrematureEnd:true,expectedCurrentId:ended.id});
+      if(!retried && String(state.current?.id||'')===task.id)
+        setToast('Still unable to start this recording. Tap it to retry.');
+    }else if(String(state.current?.id||'')===task.id){
+      setToast('Could not load this recording. Tap it to try again.');
+    }
+  };
+  task.timer=setTimeout(check,2800);
+}
+
+async function finishPaidNativeTrack(ended,event){
+  if(!ended || ended.kind!=='paid-audio' ||
+     String(state.current?.id||'')!==String(ended.id||''))return false;
+  if(state.paidLastFinishedKey===ended.id)return false;
+  const evidence=state.paidTrackEvidence;
+  if(!evidence||evidence.lectureId!==String(ended.id||'')||evidence.endedHandled)return false;
+  if(!verifiedPaidTrackEnd(evidence,event)){
+    // Do not set endedHandled: the native player may resume on this source,
+    // and the eventual genuine completion still needs to auto-advance.
+    schedulePaidPrematureEndRecovery(ended,evidence);
+    return false;
+  }
+  clearPendingPaidEndCheck();
+  evidence.endedHandled=true;
+  state.paidLastFinishedKey=String(ended.id);
+  state.paidPrematureRetryId='';
   void savePaidAudioProgress(false,true).catch(()=>{});
-  if(state.sleepMode==='end'){setToast('Playback stopped at the end of this track.');updatePlayerUi();return;}
+  if(state.sleepMode==='end'){setToast('Playback stopped at the end of this track.');updatePlayerUi();return true;}
   const product=state.paidCatalog.find(item=>String(item.id)===String(ended.paidAudioId));
-  const next=product?.owned ? nextPaidTrackInFolder(product.tracks,ended.trackId) : null;
-  if(!next){setToast('Finished. End of this folder.');updatePlayerUi();return;}
-  const started=await playPaidTrack(String(product.id),String(next.id),{fromAutoAdvance:true,expectedCurrentId:ended.id});
+  const next=product?.owned?nextPaidTrackInFolder(product.tracks,ended.trackId):null;
+  if(!next){setToast('Finished. End of this folder.');updatePlayerUi();return true;}
+  const started=await playPaidTrack(String(product.id),String(next.id),
+    {fromAutoAdvance:true,expectedCurrentId:ended.id});
   if(started){
     setToast('Playing the next track in this folder.');
     const after=nextPaidTrackInFolder(product.tracks,next.id);
     if(after?.id)prefetchPaidTrack(String(product.id),after.id);
   }
+  return true;
 }
 async function savePaidAudioProgress(bookmark = false, force = false) {
   const current = state.current;
@@ -6839,7 +6987,7 @@ function render() {
   if (['home','schedule','live','live-boro','live-flatbush'].includes(state.screen) && !state.scheduleDataLoaded && !state.scheduleDataLoading) setTimeout(loadScheduleData, 0);
   if (['home','live','live-boro','live-flatbush'].includes(state.screen) && !state.liveStatusLoaded) setTimeout(loadLiveStatus, 0);
   if (state.screen === 'schedule' && state.scheduleView === 'flyers') setTimeout(loadSchedule, 0);
-  if ((state.screen === 'paid' || (state.screen === 'library' && state.librarySection === 'purchased') || (state.screen === 'account' && state.accountSection === 'purchases')) && !state.paidLoaded && !state.paidLoading) setTimeout(loadPaidCatalog, 0);
+  if ((state.screen === 'paid' || (state.screen === 'library' && state.librarySection === 'purchased') || (state.screen === 'account' && state.accountSection === 'purchases')) && (!state.paidLoaded || state.paidCatalogOwnerKey!==currentPaidCatalogOwnerKey()) && !state.paidLoading && !state.paidError) setTimeout(loadPaidCatalog, 0);
   if (state.screen === 'account' && state.accountSection === 'purchases' && state.user && !state.recurringLoaded && !state.recurringLoading) setTimeout(loadRecurringDonations, 0);
   if (state.screen === 'account' && state.accountSection === 'admin' && state.isAdmin && !state.adminLoaded && !state.adminLoading) setTimeout(loadAdminData, 0);
   if (state.screen === 'donate' && !state.sponsorPricesLoaded && !state.sponsorPricesLoading) setTimeout(loadSponsorPrices, 0);
@@ -7106,7 +7254,10 @@ function bind() {
   document.querySelectorAll('[data-paid-description]').forEach(el => el.addEventListener('click', () => {
     const id = String(el.dataset.paidDescription || '');
     const panel = document.querySelector(`[data-paid-description-panel="${CSS.escape(id)}"]`);
-    if (panel) panel.hidden = !panel.hidden;
+    if (panel) {
+      panel.hidden = !panel.hidden;
+      el.setAttribute('aria-expanded',String(!panel.hidden));
+    }
   }));
   document.querySelectorAll('[data-paid-image-dot]').forEach(dot=>dot.addEventListener('click',()=>{const carousel=dot.closest('[data-paid-carousel]');const track=carousel?.querySelector('.paid-cover-track');const index=Number(dot.dataset.paidImageDot)||0;if(track)track.scrollTo({left:index*track.clientWidth,behavior:'smooth'});}));
   document.querySelectorAll('[data-paid-image-open]').forEach(el=>el.addEventListener('click',event=>{event.stopPropagation();openPaidImageViewer(el.dataset.paidImageOpen);}));
@@ -8670,6 +8821,7 @@ const PlaybackController = {
       if (!data || nativeSnapshotConflicts(data)) return;
       state.nativePlayback = { ...state.nativePlayback, ...data, connected:true };
       restoreCurrentFromNativeSnapshot(data);
+      recordPaidNativePlayback(data);
       reconcileNativeWatchAudio(data);
       updatePlayerUi();
     };
@@ -8690,6 +8842,7 @@ const PlaybackController = {
           mode:event.mode || state.nativePlayback.mode,
           connected:true
         };
+        recordPaidNativePlayback(event);
         reconcileNativeWatchAudio(state.nativePlayback);
         updatePlayerUi();
         if (state.current) {
@@ -8703,11 +8856,13 @@ const PlaybackController = {
         const endedPaid=Capacitor.getPlatform()==='android' && state.current?.kind==='paid-audio' && String(state.current.id||'')===String(event?.lectureId||'') ? state.current : null;
         applyState(event);
         if(endedPaid){
-          await finishPaidNativeTrack(endedPaid);
-          if(state.sleepTimer)clearTimeout(state.sleepTimer);
-          state.sleepTimer=null;
-          state.sleepEndsAt=null;
-          if(state.sleepMode==='end')state.sleepMode='off';
+          const completed=await finishPaidNativeTrack(endedPaid,event);
+          if(completed){
+            if(state.sleepTimer)clearTimeout(state.sleepTimer);
+            state.sleepTimer=null;
+            state.sleepEndsAt=null;
+            if(state.sleepMode==='end')state.sleepMode='off';
+          }
           return;
         }
         await saveCurrentAudioHistory(true, true);
