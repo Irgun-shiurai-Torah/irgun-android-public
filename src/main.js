@@ -7151,7 +7151,7 @@ let androidNavigationSequence=0;
 async function navigateToScreen(el, {fromSwipe=false}={}) {
     // Remember the real outgoing page before replacing it. Reverse swipes
     // therefore show the exact page that was previously on screen.
-    if(Capacitor.getPlatform()==='android')
+    if(Capacitor.getPlatform()==='android' && typeof androidSwipeMotion !== 'undefined')
       androidSwipeMotion.rememberPage(state.screen);
     const sequence=++androidNavigationSequence;
     if(Capacitor.getPlatform()==='android'&&el.closest('.android-floating-nav')){
