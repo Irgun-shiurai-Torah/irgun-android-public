@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
@@ -67,6 +67,7 @@ try {
   const [left, top, right, bottom] = bounds.slice(1).map(Number);
   report.bounds = { left, top, right, bottom };
   const nativePoint = p => [Math.round(left + p.x * (right - left) / p.width), Math.round(top + p.y * (bottom - top) / p.height)];
+  const witnessed = {left:false,right:false};
   const swipe = async dx => {
     const from = await read();
     const point = JSON.parse(await evaluate(`JSON.stringify((()=>{
@@ -84,7 +85,43 @@ try {
     const start = nativePoint(point), end = nativePoint({ ...point, x: point.endX });
     const index = from.tabs.indexOf(from.tab);
     const expected = from.tabs[index + (dx < 0 ? 1 : -1)] || from.tab;
-    adb('shell', 'input', 'swipe', ...start.map(String), ...end.map(String), '400');
+    // Observe the physical page midway through actual Android input. A test
+    // that only checks the destination would miss the prior jump-only behavior.
+    const direction = dx < 0 ? 'left' : 'right';
+    if(expected !== from.tab && !witnessed[direction]){
+      const child = spawn('adb',['shell','input','swipe',
+        ...start.map(String),...end.map(String),'1000'],{stdio:'ignore'});
+      const finished=new Promise((resolve,reject)=>{
+        child.on('error',reject);
+        child.on('close',code=>code===0?resolve():reject(Error('adb swipe failed: '+code)));
+      });
+      let seen=null;
+      for(let count=0;count<15;count++){
+        await delay(60);
+        try{
+          const sample=JSON.parse(await evaluate(`JSON.stringify((()=>{
+            const old=document.querySelector('#app .app-shell > .content');
+            const peek=document.querySelector('.android-swipe-peek');
+            const readX=el=>Number(el?.style.transform.match(/translate3d\\((-?\\d+)px/)?.[1]||0);
+            return {x:readX(old),nextX:readX(peek),peek:!!peek,
+              inert:peek?.inert===true,previewMedia:peek?.querySelectorAll('video, audio, iframe').length||0,
+              from:document.querySelector('.bottom-nav .active')?.dataset.nav,
+              nav:!!document.querySelector('#androidBottomNavigationMount .bottom-nav')};
+          })())`));
+          if(sample.peek && sample.inert && sample.previewMedia===0 &&
+              sample.nav && sample.from===from.tab && Math.abs(sample.x)>20 &&
+              Math.abs(sample.nextX)<point.width){seen=sample;break;}
+        }catch(_){/* CDP can be temporarily busy during a native touch */ }
+      }
+      await finished;
+      assert.ok(seen,'Page must move with the real Android finger BEFORE touchend: '+direction);
+      witnessed[direction]=true;
+      report.checks.push({label:'Finger-following physical '+direction+' drag, stable native nav and zero duplicate media',sample:seen});
+    }else{
+      adb('shell', 'input', 'swipe', ...start.map(String), ...end.map(String), '400');
+    }
+    assert.ok(adb('shell','pidof','org.irgunshiuraitorah.app'),
+      'A horizontal swipe must NEVER destroy the Android application process');
     const after = await wait(s => s.tab === expected);
     await delay(650); // also observe the no-wrapping boundary and compatibility click
     assert.equal((await read()).tab, expected);
