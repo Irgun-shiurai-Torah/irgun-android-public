@@ -42,12 +42,24 @@ android {
     }
 
     buildTypes {
+        // CI-only: exercise R8 on an installable debug-signed APK without
+        // changing normal local debug builds or releasing an untested AAB.
+        debug {
+            if (project.hasProperty('irgunR8Qa') && project.property('irgunR8Qa').toString() == 'true') {
+                minifyEnabled true
+                proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            }
+        }
         release {
             if (irgunHasReleaseSigning) {
                 signingConfig signingConfigs.release
             }
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // R8 shrinks/obfuscates DEX code to satisfy Play's code optimization
+            // requirement. Keep resource shrinking separate for this first,
+            // safety-tested rollout: runtime resource lookup is unchanged.
+            minifyEnabled true
+            shrinkResources false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 }
