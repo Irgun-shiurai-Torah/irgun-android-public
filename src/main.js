@@ -10128,25 +10128,39 @@ async function loadComments() {
   }
 }
 
+let commentPostPending = false;
 async function postComment() {
-  if (!state.watchVideo) return;
+  if (!state.watchVideo || commentPostPending) return;
   if (!state.user) return requireLogin('Please sign in to leave a comment.');
   const field = document.getElementById('commentText');
-  const text = field ? field.value.trim() : '';
+  const draft = field?.value || '';
+  const text = draft.trim();
   if (!text) return;
-  await preserveWatchTime();
+  const postedVideoId = videoId(state.watchVideo);
+  const submitButton = field.closest('form')?.querySelector('button[type="submit"]');
+  commentPostPending = true;
+  if (submitButton) submitButton.disabled = true;
   try {
+    await preserveWatchTime();
     await apiJson('/comments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videoId: videoId(state.watchVideo), text })
+      body: JSON.stringify({ videoId: postedVideoId, text })
     });
-    await loadComments();
+    // Clear only the submitted draft, not text entered during the request.
+    // Check the active field so switching shiurim cannot clear another form.
+    if (document.getElementById('commentText') === field && field.value === draft) {
+      field.value = '';
+    }
   } catch (error) {
     alert(error.message || 'Could not post comment.');
+    return;
+  } finally {
+    commentPostPending = false;
+    if (submitButton) submitButton.disabled = false;
   }
+  await loadComments();
 }
-
 async function editComment(commentId) {
   const comment = state.watchComments.find(c => String(c.id) === String(commentId));
   if (!comment) return;
