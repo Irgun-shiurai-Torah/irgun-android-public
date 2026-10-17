@@ -52,7 +52,7 @@ export function bindTabSwipes(root, { getActiveTab, getTabs, canNavigate, naviga
     }
     return true;
   };
-  const releaseInteractive = (event, touch) => {
+  const releaseInteractive = (event, touch, { cancelled = false } = {}) => {
     const start = gesture;
     if (!start) return;
     gesture = null;
@@ -61,7 +61,11 @@ export function bindTabSwipes(root, { getActiveTab, getTabs, canNavigate, naviga
     const dy = touch ? touch.clientY - start.y : start.dy;
     const width = Math.max(280, Number(view.innerWidth) || 360);
     const threshold = Math.max(70, Math.min(132, width * .20));
-    const valid = canNavigate() && getActiveTab() === start.tab && start.horizontal
+    // Android's system Back gesture sends touchcancel to the WebView.
+    // Snap the visual preview back and let the native Back dispatcher own
+    // navigation; committing here would race that Back and possibly switch
+    // two tabs or leave the Activity.
+    const valid = !cancelled && canNavigate() && getActiveTab() === start.tab && start.horizontal
       && Math.abs(dx) >= threshold && Math.abs(dx) > Math.abs(dy) * 1.5;
     const next = valid ? nextTab(start.tab, dx) : null;
     const committed = Boolean(next);
@@ -115,7 +119,7 @@ export function bindTabSwipes(root, { getActiveTab, getTabs, canNavigate, naviga
     else { if (touch) commit(event, touch); reset(); }
   }, { passive:false });
   root.addEventListener('touchcancel', event => {
-    if (interactive) releaseInteractive(event, null);
+    if (interactive) releaseInteractive(event, null, { cancelled:true });
     else reset();
   }, { passive:true });
   root.addEventListener('click', event => {
