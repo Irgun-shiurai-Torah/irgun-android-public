@@ -144,7 +144,15 @@ try {
   // the form's inputs were globally excluded and short content left empty
   // space outside .content. Exercise a REAL native touch in the lower area,
   // not just the header/title region.
-  await evaluate(`document.querySelector('#androidBottomNavigationMount .bottom-nav [data-nav="account"]')?.click()`);
+  const tabPoint = tab => `JSON.stringify((()=>{
+    const b=document.querySelector('#androidBottomNavigationMount .bottom-nav [data-nav="${tab}"]');
+    if(!b)return null;
+    const r=b.getBoundingClientRect();
+    return {x:r.left+r.width/2,y:r.top+r.height/2,width:innerWidth,height:innerHeight};
+  })())`;
+  const accountButton=JSON.parse(await evaluate(tabPoint('account')));
+  assert.ok(accountButton,'Native Account tab button must exist');
+  adb('shell','input','tap',...nativePoint(accountButton).map(String));
   await wait(s => s.tab === 'account');
   const lowerAccountPoint = JSON.parse(await evaluate(`JSON.stringify((()=>{
     const account=document.querySelector('#app .app-shell > .content');
@@ -169,7 +177,9 @@ try {
     'Lower Account swipe must not kill the Android app');
   await wait(s => s.tab === 'library');
   report.checks.push({label:'Native swipe starting in the lower Account form goes to Library',at:lowerAccountPoint});
-  await evaluate(`document.querySelector('#androidBottomNavigationMount .bottom-nav [data-nav="home"]')?.click()`);
+  const homeButton=JSON.parse(await evaluate(tabPoint('home')));
+  assert.ok(homeButton,'Native Home tab button must exist');
+  adb('shell','input','tap',...nativePoint(homeButton).map(String));
   await wait(s => s.tab === 'home');
 
   const languagePoint = JSON.parse(await evaluate(`JSON.stringify((()=>{
