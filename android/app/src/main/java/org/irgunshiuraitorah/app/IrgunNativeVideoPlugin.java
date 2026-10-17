@@ -165,7 +165,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
                     ViewConfiguration.get(getContext()).getScaledDoubleTapSlop()) : 0;
                 if (!tap) doubleTap.cancel();
                 if (direction == 0 && tap && fullscreen && !mini && !systemPip
-                        && !isControllerFullyVisible()) {
+                        && (!isControllerFullyVisible() || videoActions == null || !videoActions.isShown())) {
                     // In immersive tablet fullscreen, a single physical tap
                     // sometimes reaches PlayerView without toggling Media3's
                     // controller. Reveal it in response to the user's tap,
@@ -799,11 +799,19 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             if (expand) mini = false;
             layoutSurface();
             if (expand && surface != null) {
-                // Controls can become hidden during tablet sensor window resize.
+                // Android 15 may retain an old controller visibility callback
+                // across the sensor's rotated layout. Reveal the same Media3
+                // controller AND the separate top action row. Media3 still
+                // owns the ordinary eight-second hide timeout.
                 surface.showController();
+                controllerVisible = true;
+                updateVideoActions();
                 main.postDelayed(() -> {
-                    if (surface != null && fullscreen && visible && !systemPip)
+                    if (surface != null && fullscreen && visible && !systemPip) {
                         surface.showController();
+                        controllerVisible = true;
+                        updateVideoActions();
+                    }
                 }, 400);
             }
             call.resolve();

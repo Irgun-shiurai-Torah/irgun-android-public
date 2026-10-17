@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
-import {bindAndroidPlayerSheetInteractions,preserveAndroidPlayerSheetScroll} from '../src/android-player-controls.js';
+import {bindAndroidPlayerSheetInteractions,preserveAndroidPlayerSheetScroll,preserveAndroidSpeedTapScroll} from '../src/android-player-controls.js';
 
 const app=readFileSync('src/main.js','utf8');
 const start=app.indexOf('function refreshAndroidPlayerSpeedChoices()');
@@ -17,6 +17,7 @@ function speedFixture(platform='android',reject=false){
   classList:{toggle(_,active){this.owner.active=active;}},addEventListener(_,fn){this.click=fn;}}));
  for(const b of buttons)b.classList.owner=b;
  const context={state,Capacitor:{getPlatform:()=>platform},document:{querySelectorAll:()=>buttons},
+  preserveAndroidSpeedTapScroll:()=>()=>{},
   PlaybackController:{setSpeed:async rate=>{calls.push(rate);if(reject)throw new Error('Native command failed');state.playbackSpeed=rate;}},
   render:()=>{sheet.scrollTop=0;calls.push('render');}};
  runInNewContext(app.slice(start,end)+'\nbindPlayerSpeedChoices();',context);
@@ -94,4 +95,46 @@ test('Android rerenders restore scroll only for the same lecture sheet',()=>{
  sheet={dataset:{irgunPlayerKey:'video:two'},scrollTop:0,scrollLeft:0};restore();assert.equal(sheet.scrollTop,0);
  const ignore=preserveAndroidPlayerSheetScroll({document:{querySelector:()=>{throw Error('iOS DOM must not be read');}},isAndroid:()=>false,playerKey:'video:one'});
  ignore();
+});
+
+test('Android speed tap restores the same Audio sheet after delayed DOM rerenders',()=>{
+  let sheet={dataset:{irgunPlayerKey:'video-audio:one'},scrollTop:310,scrollLeft:0};
+  const timers=new Map(),listeners=new Map();
+  const doc={querySelector:selector=>selector==='[data-player-sheet]'?sheet:null,
+    addEventListener:(name,fn)=>listeners.set(name,fn),
+    removeEventListener:(name,fn)=>{if(listeners.get(name)===fn)listeners.delete(name);}};
+  const restore=preserveAndroidSpeedTapScroll({document:doc,isAndroid:()=>true,
+    schedule:(fn,ms)=>{timers.set(ms,fn);return ms;},cancel:id=>timers.delete(id)});
+  sheet={dataset:{irgunPlayerKey:'video-audio:one'},scrollTop:0,scrollLeft:0};
+  timers.get(120)();assert.equal(sheet.scrollTop,310,'late render of the same Audio sheet must not reset speed scroll');
+  sheet.scrollTop=0;restore();assert.equal(sheet.scrollTop,310);
+  timers.get(600)();assert.equal(listeners.size,0,'speed scroll watch must not accumulate listeners');
+});
+
+test('Android speed tap never scrolls a different lecture or overrides a new touch',()=>{
+  let sheet={dataset:{irgunPlayerKey:'video-audio:one'},scrollTop:320,scrollLeft:0};
+  const timers=new Map(),listeners=new Map();
+  const doc={querySelector:()=>sheet,
+    addEventListener:(name,fn)=>listeners.set(name,fn),
+    removeEventListener:(name,fn)=>{if(listeners.get(name)===fn)listeners.delete(name);}};
+  preserveAndroidSpeedTapScroll({document:doc,isAndroid:()=>true,
+    schedule:(fn,ms)=>{timers.set(ms,fn);return ms;},cancel:id=>timers.delete(id)});
+  sheet={dataset:{irgunPlayerKey:'video-audio:two'},scrollTop:0,scrollLeft:0};
+  timers.get(120)();assert.equal(sheet.scrollTop,0,'must not scroll another lecture');
+  sheet={dataset:{irgunPlayerKey:'video-audio:one'},scrollTop:180,scrollLeft:0};
+  listeners.get('pointerdown')();timers.get(300)();assert.equal(sheet.scrollTop,180,'new physical gesture owns the sheet');
+  const ignored=preserveAndroidSpeedTapScroll({document:{querySelector:()=>{throw Error('no iOS sheet access');}},
+    isAndroid:()=>false,schedule:()=>{throw Error('must not schedule iOS');}});
+  ignored();
+});
+
+test('Android 15 rotated native Media3 controller restores action row on physical reveal',()=>{
+  const native=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
+  assert.match(native,/!isControllerFullyVisible\(\) \|\| videoActions == null \|\| !videoActions\.isShown\(\)/,
+    'Physical tap must also recover a hidden native toolbar after rotation');
+  const full=native.slice(native.indexOf('public void fullscreen(PluginCall call)'),
+    native.indexOf('// Capacitor Filesystem returns a file:',native.indexOf('public void fullscreen(PluginCall call)'))>0?
+      native.indexOf('// Capacitor Filesystem returns a file:',native.indexOf('public void fullscreen(PluginCall call)')):undefined);
+  assert.match(full,/surface\.showController\(\);\s*controllerVisible = true;\s*updateVideoActions\(\);/,
+    'Sensor fullscreen must restore both native Media3 controls and custom action row');
 });
