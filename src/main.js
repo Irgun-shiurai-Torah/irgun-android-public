@@ -7149,11 +7149,9 @@ function bindPlayerSpeedChoices() {
 }
 let androidNavigationSequence=0;
 async function navigateToScreen(el, {fromSwipe=false}={}) {
-    if(Capacitor.getPlatform()==='android' && !androidSwipeMotion.active)
-      androidSwipeMotion.rememberPage(state.screen);
-    // During finger-following release the preview is still mounted, so
-    // remember the real outgoing page before replacing it as well.
-    else if(Capacitor.getPlatform()==='android')
+    // Remember the real outgoing page before replacing it. Reverse swipes
+    // therefore show the exact page that was previously on screen.
+    if(Capacitor.getPlatform()==='android')
       androidSwipeMotion.rememberPage(state.screen);
     const sequence=++androidNavigationSequence;
     if(Capacitor.getPlatform()==='android'&&el.closest('.android-floating-nav')){
