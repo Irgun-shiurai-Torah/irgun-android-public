@@ -6,6 +6,8 @@ import android.content.res.Configuration;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
+import android.widget.Toast;
 import android.util.Rational;
 import android.util.Log;
 import android.view.View;
@@ -32,6 +34,8 @@ public class MainActivity extends BridgeActivity {
     private int pipEntrySerial = 0;
     private static final String PIP_TAG = "IrgunSystemPiP";
     private OnBackPressedCallback fullscreenBackCallback;
+    private OnBackPressedCallback primaryTabBackCallback;
+    private long lastRootBackPressMs = 0L;
     private IrgunVideoDisplayController videoDisplay;
     // ACTION_CHOOSER triggers onUserLeaveHint even though it is a temporary
     // overlay, not Home. Suppress a Video -> Audio handoff only for this
@@ -60,6 +64,44 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(IrgunAnalyticsPlugin.class);
         super.onCreate(savedInstanceState);
         videoDisplay = new IrgunVideoDisplayController(this);
+        // Android's edge-swipe Back can reach the Activity before the WebView
+        // sees a horizontal touch. Intercept it while browsing bottom tabs,
+        // otherwise Back from Shiurim could finish the Activity instead of
+        // returning to the previous tab. Register BEFORE fullscreen so that
+        // fullscreen's existing enabled callback always has higher priority.
+        primaryTabBackCallback = new OnBackPressedCallback(true) {
+            @Override public void handleOnBackPressed() {
+                WebView web = getBridge() == null ? null : getBridge().getWebView();
+                if (web == null) {
+                    dispatchUnclaimedAndroidBack();
+                    return;
+                }
+                web.evaluateJavascript(
+                    "(function() { try { return window.__irgunHandleAndroidSystemBack " +
+                        "? window.__irgunHandleAndroidSystemBack() : 0; } catch(e) { return 0; } })()",
+                    result -> {
+                        if ("1".equals(result)) {
+                            lastRootBackPressMs = 0L;
+                        } else if ("2".equals(result)) {
+                            // Back on Home alone should never unexpectedly close
+                            // the app from an Android screen-edge swipe.
+                            long now = SystemClock.elapsedRealtime();
+                            if (now - lastRootBackPressMs < 2000L) {
+                                lastRootBackPressMs = 0L;
+                                dispatchUnclaimedAndroidBack();
+                            } else {
+                                lastRootBackPressMs = now;
+                                Toast.makeText(this, "Press Back again to exit", Toast.LENGTH_SHORT).show();
+                            }
+                        } else {
+                            lastRootBackPressMs = 0L;
+                            dispatchUnclaimedAndroidBack();
+                        }
+                    }
+                );
+            }
+        };
+        getOnBackPressedDispatcher().addCallback(this, primaryTabBackCallback);
         fullscreenBackCallback = new OnBackPressedCallback(false) {
             @Override public void handleOnBackPressed() {
                 if (!videoFullscreen) {
@@ -97,6 +139,18 @@ public class MainActivity extends BridgeActivity {
             FirebaseApp.initializeApp(this);
         } catch (Exception ignored) {
             // Push will report a normal error to the web layer instead of closing the app.
+        }
+    }
+
+    private void dispatchUnclaimedAndroidBack() {
+        if (primaryTabBackCallback == null) return;
+        // Preserve the old Capacitor/WebView back behavior for dialogs and
+        // other screens which aren't part of bottom-tab navigation.
+        primaryTabBackCallback.setEnabled(false);
+        try {
+            getOnBackPressedDispatcher().onBackPressed();
+        } finally {
+            primaryTabBackCallback.setEnabled(true);
         }
     }
 
