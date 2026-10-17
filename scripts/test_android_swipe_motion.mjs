@@ -6,7 +6,7 @@ import {createAndroidSwipeMotion} from '../src/android-swipe-motion.js';
 
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 const touch=(x,y,id=1)=>({clientX:x,clientY:y,identifier:id});
-function rig({rtl=false,contentScrollable=false,excluded=false}={}){
+function rig({rtl=false,contentScrollable=false,excluded=false,fieldType=null,fieldFocused=false}={}){
   const calls=new Map(),inserted=[],classes=new Set(),states=[],navigations=[];
   let current='home',allowed=true,peekRead=false,identity='user-A';
   const body={
@@ -25,7 +25,7 @@ function rig({rtl=false,contentScrollable=false,excluded=false}={}){
     getComputedStyle:node=>({overflowX:node.overflow||'visible'})
   };
   const doc={
-    defaultView:view,body,documentElement:{dir:rtl?'rtl':'ltr'},visibilityState:'visible',
+    defaultView:view,body,documentElement:{dir:rtl?'rtl':'ltr'},visibilityState:'visible',activeElement:null,
     createElement:tag=>({tagName:tag,style:{},attributes:{},offsetWidth:360,removed:false,
       setAttribute(k,v){this.attributes[k]=v;},remove(){this.removed=true;}}),
     querySelector:sel=>sel==='#app .app-shell > .content'?content:
@@ -33,8 +33,16 @@ function rig({rtl=false,contentScrollable=false,excluded=false}={}){
   };
   const root={ownerDocument:doc,addEventListener:(name,fn)=>calls.set(name,fn)};
   content.parentElement=root;
+  const editor=fieldType?{type:fieldType,tagName:fieldType==='textarea'?'TEXTAREA':'INPUT'}:null;
+  if(fieldFocused)doc.activeElement=editor;
   const target={parentElement:content,
-    closest:selector=>selector==='.content'?content:excluded?target:null};
+    closest:selector=>{
+      if(selector==='.content')return content;
+      if(excluded)return target;
+      if(fieldType==='select' && selector.includes('select'))return target;
+      if(selector==='input, textarea' && editor)return editor;
+      return null;
+    }};
   const slider=createAndroidSwipeMotion({document:doc,view,
     previewHtml:tab=>{peekRead=true;return '<main>'+tab+'</main>';},
     previewKey:()=>identity,duration:0});
@@ -223,4 +231,56 @@ test('repeated left/right drags reuse snapshots instead of rebuilding heavy list
   assert.deepEqual(a.navigations,['shiurim','home']);
   assert.equal(a.content.style.transform,'translate3d(-130px, 0, 0)');
   a.end(120);await flush();await flush();
+});
+
+test('swiping from lower Account profile form works when an input is not focused',async()=>{
+  const a=rig({fieldType:'text'});
+  const start=a.start(250);
+  assert.equal(start.prevented,false,'an ordinary tap must still focus the Name field');
+  const drag=a.move(125);
+  assert.equal(drag.prevented,true,'horizontal drag should follow the finger from lower Account input');
+  assert.equal(a.content.style.transform,'translate3d(-125px, 0, 0)');
+  a.end(125);await flush();await flush();
+  assert.equal(a.current,'shiurim');
+  assert.equal(a.content.style.transform,'');
+});
+
+test('focused Account text input remains editable without navigating tabs',async()=>{
+  for(const type of ['text','password','textarea']){
+    const a=rig({fieldType:type,fieldFocused:true});
+    a.start(245);const drag=a.move(112);a.end(112);
+    await flush();await flush();
+    assert.equal(drag.prevented,false,'focused '+type+' must retain selection and editing');
+    assert.equal(a.current,'home');
+    assert.deepEqual(a.navigations,[]);
+  }
+});
+
+test('Account notification toggle supports a sideways swipe but still permits normal taps',async()=>{
+  const tap=rig({fieldType:'checkbox',fieldFocused:true});
+  const start=tap.start(243);tap.end(243);await flush();await flush();
+  assert.equal(start.prevented,false);
+  assert.deepEqual(tap.navigations,[],'normal checkbox tap must not switch tabs');
+  const swipe=rig({fieldType:'checkbox',fieldFocused:true});
+  swipe.start(243);const drag=swipe.move(122);swipe.end(122);
+  await flush();await flush();
+  assert.equal(drag.prevented,true);
+  assert.equal(swipe.current,'shiurim');
+});
+
+test('native range/file/date/select controls keep touch ownership',async()=>{
+  for(const fieldType of ['range','file','date','select']){
+    const a=rig({fieldType});
+    a.start(242);const drag=a.move(105);a.end(105);await flush();await flush();
+    assert.equal(drag.prevented,false);
+    assert.deepEqual(a.navigations,[],'native '+fieldType+' must never navigate');
+  }
+});
+
+test('Android Account content remains a swipe surface across the entire viewport',()=>{
+  const main=readFileSync('src/main.js','utf8');
+  const css=readFileSync('src/style.css','utf8');
+  assert.match(main,/state\.screen==='account'\?' android-account-swipe-surface'/);
+  assert.match(css,/\.content\.android-account-swipe-surface\s*\{\s*min-height:\s*calc\(100vh - 68px\);/);
+  assert.match(css,/min-height:\s*calc\(100dvh - 68px\);/);
 });
