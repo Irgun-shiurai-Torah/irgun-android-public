@@ -219,6 +219,10 @@ test('Media3 buffering, instant END and mismatched old event never advance a pai
     currentPositionMs:180000},now+2400),false);
   assert.equal(verifiedPaidTrackEnd(g,{lectureId:id,durationMs:180000,
     currentPositionMs:1100},now+2400),false,'Buffering at 1 second cannot finish the album');
+  observePaidPlayback(g,{lectureId:id,mode:'AUDIO',durationMs:180000,
+    currentPositionMs:2300,isPlaying:true},now+3500);
+  assert.equal(verifiedPaidTrackEnd(g,{lectureId:id,durationMs:180000,currentPositionMs:180000},now+3900),false,
+    'Even when a stale END reports the full duration, playing 2 seconds at the start cannot auto-skip');
   const completed=createPaidPlaybackEvidence(id,now);
   observePaidPlayback(completed,{lectureId:id,mode:'AUDIO',durationMs:180000,
     currentPositionMs:177000,isPlaying:true,audioReady:true},now+1500);
