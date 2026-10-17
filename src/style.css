@@ -2705,9 +2705,9 @@ body.irgun-android .rotation-fullscreen-exit {
   font-size: 24px;
 }
 
-/* Finger-following tab transition: the single real page moves alongside a
-   lightweight, noninteractive teaser. Native Media3, PiP, mini and the fixed
-   bottom navigation are not part of either transformed layer. */
+/* Finger-following Android tabs: visually show the SAME page components
+   and styling as when the destination is actually open. The snapshot is
+   inert, clipped to the viewport and never creates a second media player. */
 body.irgun-android.android-swipe-motion { overflow-x:hidden; }
 body.irgun-android.android-swipe-motion #app .app-shell > .content {
   position:relative;
@@ -2727,35 +2727,13 @@ body.irgun-android .android-swipe-peek {
   backface-visibility:hidden;
   will-change:transform;
 }
-body.irgun-android .android-swipe-peek-body {
+body.irgun-android .android-swipe-peek > .content {
+  /* Inherit the app's regular padding, cards, images and theme exactly. */
   max-width:1000px;
   margin:0 auto;
   padding:16px 12px var(--android-nav-clearance);
+  pointer-events:none;
 }
-body.irgun-android .android-swipe-peek .page-title {margin-bottom:16px;}
-body.irgun-android .android-swipe-peek .toolbar-card {padding:14px;}
-body.irgun-android .android-swipe-peek .segmented {display:flex;gap:10px;}
-body.irgun-android .android-swipe-peek .segmented span,
-body.irgun-android .android-swipe-peek-tabs span {
-  display:inline-block;
-  background:white;
-  border:1px solid #dce5ef;
-  border-radius:12px;
-  padding:9px 14px;
-}
-body.irgun-android .android-swipe-peek-search,
-body.irgun-android .android-swipe-peek-row,
-body.irgun-android .android-swipe-peek-shortcuts span {
-  background:#fff;
-  border:1px solid #dce5ef;
-  border-radius:14px;
-  padding:14px;
-  margin:9px 0;
-  color:#273b56;
-}
-body.irgun-android .android-swipe-peek-shortcuts,
-body.irgun-android .android-swipe-peek-tabs {display:flex;flex-wrap:wrap;gap:8px;}
-body.irgun-android .android-swipe-peek-shortcuts span {margin:12px 0;}
 @media(prefers-reduced-motion:reduce){
   body.irgun-android.android-swipe-motion #app .app-shell > .content,
   body.irgun-android .android-swipe-peek {transition:none !important;}
