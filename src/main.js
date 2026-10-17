@@ -1,10 +1,7 @@
 import './style.css';
 import { clearCommentComposerAfterPost } from './comment-draft.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
-import { createAndroidTabSlider } from './android-tab-slide.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
-const androidTabSlider = createAndroidTabSlider({document,view:window,
-  previewHtml: tab => androidPrimaryTabPreviewHtml(tab)});
 import { usageAnalytics } from './usageAnalytics.js';
 import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
 import {BELSKY_VOL1_ID,nextPaidTrackInFolder} from './android-paid-collections.js';
@@ -3802,18 +3799,6 @@ function bottomNavHtml() {
     </button>`).join('')}</nav>`;
 }
 
-// Static, inert peek at the adjacent Android tab while the user drags it
-// into view. All five tabs reuse their real existing page renderer, but the
-// preview never registers listeners or starts video/audio playback.
-function androidPrimaryTabPreviewHtml(tab) {
-  if (tab === 'home') return homeHtml();
-  if (tab === 'shiurim') return shiurimHtml();
-  if (tab === 'live') return liveHtml();
-  if (tab === 'library') return libraryHtml();
-  if (tab === 'account') return accountHtml();
-  return '';
-}
-
 function shell(content) {
   return `<div class="app-shell ${state.sponsorRibbon?.enabled ? 'has-sponsor-ribbon' : ''}${Capacitor.getPlatform()==='android'&&(state.current||(state.watchVideo&&state.watchMinimized))?' android-has-mini':''}">
     ${sponsorRibbonHtml()}
@@ -7154,7 +7139,7 @@ function bindPlayerSpeedChoices() {
   }));
 }
 let androidNavigationSequence=0;
-async function navigateToScreen(el, {fromSwipe=false}={}) {
+async function navigateToScreen(el) {
     const sequence=++androidNavigationSequence;
     if(Capacitor.getPlatform()==='android'&&el.closest('.android-floating-nav')){
       state.screen=el.dataset.nav;
@@ -7180,7 +7165,7 @@ async function navigateToScreen(el, {fromSwipe=false}={}) {
     state.libraryLimit = 48;
     state.filterDialog = '';
     render();
-    window.scrollTo({ top: 0, behavior: fromSwipe ? 'instant' : 'smooth' });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 function bind() {
   document.querySelectorAll('[data-retry-library]').forEach(el => el.addEventListener('click', () => bootstrap({ manual:true })));
@@ -10336,12 +10321,7 @@ if (Capacitor.isNativePlatform()) {
 
 if (Capacitor.getPlatform() === 'android' && Capacitor.isNativePlatform()) {
   bindTabSwipes(app, {
-    onGestureState: active => {
-      tabSwipeRenderGate.setActive(active);
-      if (!active) queueMicrotask(() => androidTabSlider.cleanup());
-    },
-    onDrag: ({from,to,dx}) => androidTabSlider.drag({from,to,dx}),
-    onRelease: ({committed}) => androidTabSlider.settle({committed}),
+    onGestureState: active => tabSwipeRenderGate.setActive(active),
     getActiveTab: () => state.screen,
     getTabs: () => Array.from(document.querySelectorAll('.bottom-nav [data-nav]'))
       .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
@@ -10350,10 +10330,7 @@ if (Capacitor.getPlatform() === 'android' && Capacitor.isNativePlatform()) {
       && !state.loading && !state.error && !state.playerOpen && !state.filterDialog
       && (!state.watchVideo || state.watchMinimized)
       && !document.querySelector('[aria-modal="true"], .admin-editor-backdrop, .sheet-backdrop, .playlist-picker-backdrop, .download-manager-backdrop'),
-    navigate: (tab, options) => {
-      const button=document.querySelector(`.bottom-nav [data-nav="${tab}"]`);
-      return button ? navigateToScreen(button, options) : undefined;
-    }
+    navigate: tab => document.querySelector(`.bottom-nav [data-nav="${tab}"]`)?.click()
   });
 }
 
