@@ -1543,17 +1543,18 @@ test('late HLS startup recovery retains one decoder and exposes real failure cau
 });
 
 
-test('API34 quick-check runs only the failing layout and skips account/media suites',()=>{
+test('Android account regression runs the complete authenticated and media suite',()=>{
  const source=readFileSync('scripts/android-regression-extensions.mjs','utf8');
  const shell=readFileSync('scripts/android-emulator-account.sh','utf8');
  const workflow=readFileSync('.github/workflows/android-release-regressions.yml','utf8');
- assert.match(source,/IRGUN_SMALL_SCREEN_ONLY==='1'/);
- assert.match(source,/name!=='Small-screen English\/Hebrew layouts retain usable navigation'/);
- assert.match(source,/App must become ready for the isolated small-screen layout check/);
- assert.match(shell,/if \[\[ "\$\{IRGUN_SMALL_SCREEN_ONLY:-0\}" == "1" \]\]; then[\s\S]*?node scripts\/android-regression-extensions\.mjs[\s\S]*?exit \$\?/);
- assert.match(workflow,/IRGUN_SMALL_SCREEN_ONLY: '1'/);
- assert.match(workflow,/Independent authenticated comment CRUD, deletion and rejection checks\n        if: \$\{\{ env\.IRGUN_SMALL_SCREEN_ONLY != '1' \}\}/);
- assert.match(workflow,/Independent Android token and website cookie session sync checks\n        if: \$\{\{ env\.IRGUN_SMALL_SCREEN_ONLY != '1' \}\}/);
+ assert.match(source,/await section\('Repeated audio\/video handoffs preserve playing position and single audio source'/);
+ assert.match(source,/await section\('Small-screen English\/Hebrew layouts retain usable navigation'/);
+ assert.match(shell,/node scripts\/android-emulator-account\.mjs/);
+ assert.match(workflow,/Independent authenticated comment CRUD, deletion and rejection checks/);
+ assert.match(workflow,/Independent Android token and website cookie session sync checks/);
+ assert.doesNotMatch(source,/IRGUN_SMALL_SCREEN_ONLY/);
+ assert.doesNotMatch(shell,/IRGUN_SMALL_SCREEN_ONLY/);
+ assert.doesNotMatch(workflow,/QUICK-CHECK API34|IRGUN_SMALL_SCREEN_ONLY/);
 });
 
 
@@ -1564,9 +1565,8 @@ test('Android account regression waits for the native Capacitor bridge before ta
  assert.match(source,/async function waitForNativeBridgeReady\(timeout=45000\)/);
  assert.match(source,/state\.qa&&state\.nativePromiseType==='function'/);
  assert.match(source,/await connect\(\);await waitForNativeBridgeReady\(\);bounds=await nativeBounds\(\)/);
- assert.match(shell,/IRGUN_SMALL_SCREEN_ONLY:-0/);
- assert.match(shell,/node scripts\/android-regression-extensions\.mjs/);
- assert.match(workflow,/IRGUN_SMALL_SCREEN_ONLY:.*QUICK-CHECK API34/);
+ assert.match(shell,/node scripts\/android-emulator-account\.mjs/);
+ assert.doesNotMatch(workflow,/IRGUN_SMALL_SCREEN_ONLY|QUICK-CHECK API34/);
 });
 
 test('Android floating navigation has narrow-viewport class and viewport-anchored layout',()=>{

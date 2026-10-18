@@ -74,7 +74,6 @@ concurrency:
 
 jobs:
   media-and-device:
-    if: ${{ !contains(github.event.pull_request.title, '[QUICK-CHECK API34]') }}
     name: Native media Android API ${{ matrix.api-level }}
     runs-on: ubuntu-latest
     timeout-minutes: 58
@@ -151,7 +150,6 @@ jobs:
 
 
   fifteen-minute-soak:
-    if: ${{ !contains(github.event.pull_request.title, '[QUICK-CHECK API34]') }}
     name: Real 15-minute Android 11 native Media3 HLS playback reliability
     runs-on: ubuntu-latest
     timeout-minutes: 42
@@ -212,7 +210,6 @@ jobs:
           retention-days: 14
 
   android-offline-source:
-    if: ${{ !contains(github.event.pull_request.title, '[QUICK-CHECK API34]') }}
     name: Real Android downloadable audio response
     runs-on: ubuntu-latest
     timeout-minutes: 8
@@ -233,7 +230,6 @@ jobs:
           retention-days: 14
 
   hls-delivery:
-    if: ${{ !contains(github.event.pull_request.title, '[QUICK-CHECK API34]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 9
     steps:
@@ -254,7 +250,6 @@ jobs:
 
 
   authenticated-account-30:
-    if: ${{ !contains(github.event.pull_request.title, '[QUICK-CHECK API34]') }}
     name: Logged-in account and native media Android API 30
     runs-on: ubuntu-latest
     timeout-minutes: 58
@@ -328,17 +323,16 @@ jobs:
           retention-days: 14
 
   authenticated-account-34:
-    if: ${{ always() && !cancelled() && contains(github.event.pull_request.title, '[QUICK-CHECK API34]') }}
     name: Logged-in account and native media Android API 34
     runs-on: ubuntu-latest
     timeout-minutes: 58
     needs: authenticated-account-30
     # Continue verifying later Android versions even if the previous device
     # fails; do not run obsolete jobs after a workflow cancellation.
+    if: ${{ always() && !cancelled() }}
     env:
       IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
       IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
-      IRGUN_SMALL_SCREEN_ONLY: '1'
     steps:
       - name: Require dedicated non-admin Android QA credentials
         run: |
@@ -389,10 +383,10 @@ jobs:
           arch: x86_64
           script: bash scripts/android-emulator-account.sh
       - name: Independent authenticated comment CRUD, deletion and rejection checks
-        if: ${{ always() && env.IRGUN_SMALL_SCREEN_ONLY != '1' }}
+        if: always()
         run: node scripts/android-comments-qa.mjs
       - name: Independent Android token and website cookie session sync checks
-        if: ${{ always() && env.IRGUN_SMALL_SCREEN_ONLY != '1' }}
+        if: always()
         run: node scripts/android-website-account-sync.mjs
       - name: Upload actual account and comment evidence even if tests fail
         if: always()
@@ -404,17 +398,16 @@ jobs:
           retention-days: 14
 
   authenticated-account-35:
-    if: ${{ !contains(github.event.pull_request.title, '[QUICK-CHECK API34]') }}
     name: Logged-in account and native media Android API 35
     runs-on: ubuntu-latest
     timeout-minutes: 58
     needs: authenticated-account-34
     # Continue verifying later Android versions even if the previous device
     # fails; do not run obsolete jobs after a workflow cancellation.
+    if: ${{ always() && !cancelled() }}
     env:
       IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
       IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
-      IRGUN_SMALL_SCREEN_ONLY: ${{ contains(github.event.pull_request.title, '[QUICK-CHECK API34]') && '1' || '0' }}
     steps:
       - name: Require dedicated non-admin Android QA credentials
         run: |
@@ -480,13 +473,13 @@ jobs:
           retention-days: 14
 
   authenticated-account-36:
-    if: ${{ !contains(github.event.pull_request.title, '[QUICK-CHECK API34]') }}
     name: Logged-in account and native media Android API 36
     runs-on: ubuntu-latest
     timeout-minutes: 58
     needs: authenticated-account-35
     # Continue verifying later Android versions even if the previous device
     # fails; do not run obsolete jobs after a workflow cancellation.
+    if: ${{ always() && !cancelled() }}
     env:
       IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
       IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
@@ -555,7 +548,6 @@ jobs:
           retention-days: 14
 
   hls-app-picture-and-quality:
-    if: ${{ !contains(github.event.pull_request.title, '[QUICK-CHECK API34]') }}
     name: Native Media3 HLS in actual app Android API ${{ matrix.api-level }}
     runs-on: ubuntu-latest
     timeout-minutes: 38
@@ -620,7 +612,6 @@ jobs:
           retention-days: 14
 
   native-media3-beta:
-    if: ${{ !contains(github.event.pull_request.title, '[QUICK-CHECK API34]') }}
     name: Native Media3 additional Audio/Video API ${{ matrix.api-level }}
     runs-on: ubuntu-latest
     timeout-minutes: 52
@@ -685,7 +676,6 @@ jobs:
           retention-days: 14
 
   tablet-video-display:
-    if: ${{ !contains(github.event.pull_request.title, '[QUICK-CHECK API34]') }}
     name: Tablet landscape video with rotation lock Android API ${{ matrix.api-level }}
     runs-on: ubuntu-latest
     timeout-minutes: 38
