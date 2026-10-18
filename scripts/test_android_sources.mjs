@@ -1543,19 +1543,18 @@ test('late HLS startup recovery retains one decoder and exposes real failure cau
 });
 
 
-test('Android floating navigation has compact-width safeguards for Hebrew and English',()=>{
+test('Android floating navigation has narrow-viewport class and viewport-anchored layout',()=>{
  const css=readFileSync(new URL('../src/style.css',import.meta.url),'utf8');
- const start=css.indexOf('/* Android nav fit for narrow Hebrew and English layouts.');
- assert.ok(start>=0,'Small-screen Android nav layout rule must exist');
- const rules=css.slice(start);
- assert.match(rules,/@media\s*\(max-width:\s*400px\)/);
- assert.match(rules,/@media\s*\(max-device-width:\s*320px\)/);
- assert.match(rules,/#androidBottomNavigationMount\s*\{[\s\S]*?position:fixed!important/);
- assert.match(rules,/#androidBottomNavigationMount \.bottom-nav\.android-floating-nav\s*\{[\s\S]*?position:absolute!important/);
- assert.match(rules,/pointer-events:auto!important/);
- assert.match(rules,/grid-template-columns:\s*repeat\(5,minmax\(0,1fr\)\)/);
- assert.match(rules,/\.android-floating-nav \.nav-btn[\s\S]*?min-width:\s*0!important/);
- assert.match(rules,/\.android-floating-nav \.nav-btn > span:last-child[\s\S]*?text-overflow:\s*ellipsis/);
+ const js=readFileSync(new URL('../src/android-bottom-navigation.js',import.meta.url),'utf8');
+ assert.match(js,/innerWidth/);
+ assert.match(js,/android-narrow-viewport/);
+ assert.match(js,/addEventListener\('resize',syncCompactViewport/);
+ assert.match(js,/visualViewport\?\.addEventListener\('resize',syncCompactViewport/);
+ assert.match(css,/body\.irgun-android\.android-narrow-viewport #androidBottomNavigationMount\s*\{[\s\S]*?position:fixed!important/);
+ assert.match(css,/body\.irgun-android\.android-narrow-viewport #androidBottomNavigationMount \.bottom-nav\.android-floating-nav\s*\{[\s\S]*?position:absolute!important/);
+ assert.match(css,/grid-template-columns:\s*repeat\(5,minmax\(0,1fr\)\)/);
+ assert.match(css,/pointer-events:auto!important/);
+ assert.match(css,/text-overflow:ellipsis!important/);
 });
 
 test('Android Library recent searches remain hidden until search focus',()=>{

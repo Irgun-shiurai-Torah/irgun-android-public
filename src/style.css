@@ -3310,69 +3310,65 @@ body.irgun-android .android-search-assist .search-assist-history-icon svg {
 }
 
  
-/* Android nav fit for narrow Hebrew and English layouts.
-   A 240px emulator override can leave a wider CSS viewport and an RTL body
-   with a shifted fixed-position containing block. Anchor the mount itself to
-   the screen and position the nav within that viewport, independent of page
-   direction or any transformed app content. */
-@media (max-width:400px), (max-device-width:320px) {
-  #androidBottomNavigationMount {
-    position:fixed!important;
-    inset:0!important;
-    width:100vw!important;
-    height:100vh!important;
-    transform:none!important;
-    pointer-events:none!important;
-    z-index:118!important;
-  }
-  #androidBottomNavigationMount .bottom-nav.android-floating-nav,
-  html[dir="rtl"] #androidBottomNavigationMount .bottom-nav.android-floating-nav {
-    position:absolute!important;
-    box-sizing:border-box!important;
-    left:6px!important;
-    right:6px!important;
-    inset-inline-start:6px!important;
-    inset-inline-end:6px!important;
-    bottom:var(--android-nav-bottom);
-    width:auto!important;
-    min-width:0!important;
-    max-width:none!important;
-    transform:none!important;
-    pointer-events:auto!important;
-    padding:4px!important;
-    display:grid!important;
-    grid-template-columns:repeat(5,minmax(0,1fr))!important;
-    gap:0!important;
-    overflow:hidden!important;
-  }
-  #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-btn,
-  html[dir="rtl"] #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-btn {
-    box-sizing:border-box!important;
-    display:flex!important;
-    width:auto!important;
-    min-width:0!important;
-    max-width:100%!important;
-    margin:0!important;
-    padding:4px 0!important;
-    gap:2px!important;
-    overflow:hidden!important;
-    font-size:8px!important;
-  }
-  #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-icon {
-    width:22px!important;
-    height:22px!important;
-    flex:0 0 22px!important;
-  }
-  #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-btn > span:last-child {
-    display:block!important;
-    width:100%!important;
-    max-width:100%!important;
-    min-width:0!important;
-    padding:0 1px!important;
-    overflow:hidden!important;
-    text-overflow:ellipsis!important;
-    white-space:nowrap!important;
-    font-size:8px!important;
-    line-height:11px!important;
-  }
+/* Narrow Android viewport navigation is toggled by the actual WebView
+   width, not CSS media queries: Android's wm-size override can report a wider
+   CSS media viewport than innerWidth after an RTL language change. */
+body.irgun-android.android-narrow-viewport #androidBottomNavigationMount {
+  position:fixed!important;
+  inset:0!important;
+  width:100vw!important;
+  height:100vh!important;
+  transform:none!important;
+  pointer-events:none!important;
+  z-index:118!important;
+}
+body.irgun-android.android-narrow-viewport #androidBottomNavigationMount .bottom-nav.android-floating-nav,
+html[dir="rtl"] body.irgun-android.android-narrow-viewport #androidBottomNavigationMount .bottom-nav.android-floating-nav {
+  position:absolute!important;
+  box-sizing:border-box!important;
+  left:6px!important;
+  right:6px!important;
+  inset-inline-start:6px!important;
+  inset-inline-end:6px!important;
+  bottom:var(--android-nav-bottom);
+  width:auto!important;
+  min-width:0!important;
+  max-width:none!important;
+  transform:none!important;
+  pointer-events:auto!important;
+  padding:4px!important;
+  display:grid!important;
+  grid-template-columns:repeat(5,minmax(0,1fr))!important;
+  gap:0!important;
+  overflow:hidden!important;
+}
+body.irgun-android.android-narrow-viewport #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-btn,
+html[dir="rtl"] body.irgun-android.android-narrow-viewport #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-btn {
+  box-sizing:border-box!important;
+  display:flex!important;
+  width:auto!important;
+  min-width:0!important;
+  max-width:100%!important;
+  margin:0!important;
+  padding:4px 0!important;
+  gap:2px!important;
+  overflow:hidden!important;
+  font-size:8px!important;
+}
+body.irgun-android.android-narrow-viewport #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-icon {
+  width:22px!important;
+  height:22px!important;
+  flex:0 0 22px!important;
+}
+body.irgun-android.android-narrow-viewport #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-btn > span:last-child {
+  display:block!important;
+  width:100%!important;
+  max-width:100%!important;
+  min-width:0!important;
+  padding:0 1px!important;
+  overflow:hidden!important;
+  text-overflow:ellipsis!important;
+  white-space:nowrap!important;
+  font-size:8px!important;
+  line-height:11px!important;
 }

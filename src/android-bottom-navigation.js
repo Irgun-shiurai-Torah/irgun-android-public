@@ -12,10 +12,27 @@ export function androidNavigationRoot(screen, previous = 'home') {
 
 // Keep one navigation DOM outside page/player renders. Its indicator can slide
 // between tabs without replacing buttons or accumulating click listeners.
+export function syncAndroidNarrowViewport(isAndroid, document) {
+  const width = Number(document?.defaultView?.innerWidth);
+  const compact = Boolean(isAndroid && Number.isFinite(width) && width <= 320);
+  document?.body?.classList?.toggle('android-narrow-viewport', compact);
+  return compact;
+}
+
+// Keep one navigation DOM outside page/player renders. Its indicator can slide
+// between tabs without replacing buttons or accumulating click listeners.
 export function createAndroidBottomNavigation({isAndroid,document,model,markup,navigate}) {
-  let mount, language;
+  let mount, language, resizeBound=false;
+  const syncCompactViewport=()=>syncAndroidNarrowViewport(isAndroid(),document);
   return () => {
+    syncCompactViewport();
     if (!isAndroid()) return;
+    if (!resizeBound) {
+      const view=document.defaultView;
+      view?.addEventListener('resize',syncCompactViewport,{passive:true});
+      view?.visualViewport?.addEventListener('resize',syncCompactViewport,{passive:true});
+      resizeBound=true;
+    }
     const state = model();
     if (!mount) {
       mount=document.createElement('div');mount.id='androidBottomNavigationMount';
