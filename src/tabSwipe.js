@@ -31,7 +31,14 @@ export function bindTabSwipes(root, {
 
   const nextTab = (tab, dx) => {
     const tabs = getTabs(), i = tabs.indexOf(tab);
-    return i < 0 || !dx ? null : tabs[i + (dx < 0 ? 1 : -1)] || null;
+    if (i < 0 || !dx) return null;
+    // getTabs is in physical left-to-right order. RTL reverses which adjacent
+    // visual tab a finger moving left or right should reveal.
+    const direction = root.ownerDocument?.documentElement?.dir
+      || view.getComputedStyle(root.ownerDocument?.documentElement || root).direction || 'ltr';
+    const rtl = direction.toLowerCase() === 'rtl';
+    const step = dx < 0 ? (rtl ? -1 : 1) : (rtl ? 1 : -1);
+    return tabs[i + step] || null;
   };
   const allowedTarget = target => {
     if (!target?.closest?.('.content') || target.closest(excluded)) return false;
