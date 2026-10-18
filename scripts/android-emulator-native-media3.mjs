@@ -424,7 +424,7 @@ try {
   };
   await verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,delay,report,
     capturePicture:captureVisibleNativePicture,
-    showControls:()=>showNativeControls(),tapExit:()=>tapNativeLabel('Exit video fullscreen')});
+    showControls:()=>showNativeControls(),tapExit:()=>tapNativeLabel('Exit video fullscreen'),tapNativeLabel});
   if(process.env.IRGUN_VIDEO_DISPLAY_ONLY==='1') {
     report.scope='Physical tablet video rotation and screen wake; separate from full media/account suite';
   } else {
