@@ -1556,6 +1556,19 @@ test('API34 quick-check runs only the failing layout and skips account/media sui
  assert.match(workflow,/Independent Android token and website cookie session sync checks\n        if: \$\{\{ env\.IRGUN_SMALL_SCREEN_ONLY != '1' \}\}/);
 });
 
+
+test('Android account regression waits for the native Capacitor bridge before taking window bounds',()=>{
+ const source=readFileSync(new URL('./android-regression-extensions.mjs',import.meta.url),'utf8');
+ const shell=readFileSync(new URL('./android-emulator-account.sh',import.meta.url),'utf8');
+ const workflow=readFileSync(new URL('../.github/workflows/android-release-regressions.yml',import.meta.url),'utf8');
+ assert.match(source,/async function waitForNativeBridgeReady\(timeout=45000\)/);
+ assert.match(source,/state\.qa&&state\.nativePromiseType==='function'/);
+ assert.match(source,/await connect\(\);await waitForNativeBridgeReady\(\);bounds=await nativeBounds\(\)/);
+ assert.match(shell,/IRGUN_SMALL_SCREEN_ONLY:-0/);
+ assert.match(shell,/node scripts\/android-regression-extensions\.mjs/);
+ assert.match(workflow,/IRGUN_SMALL_SCREEN_ONLY:.*QUICK-CHECK API34/);
+});
+
 test('Android floating navigation has narrow-viewport class and viewport-anchored layout',()=>{
  const css=readFileSync(new URL('../src/style.css',import.meta.url),'utf8');
  const js=readFileSync(new URL('../src/android-bottom-navigation.js',import.meta.url),'utf8');

@@ -414,6 +414,7 @@ jobs:
     env:
       IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
       IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
+      IRGUN_SMALL_SCREEN_ONLY: ${{ contains(github.event.pull_request.title, '[QUICK-CHECK API34]') && '1' || '0' }}
     steps:
       - name: Require dedicated non-admin Android QA credentials
         run: |

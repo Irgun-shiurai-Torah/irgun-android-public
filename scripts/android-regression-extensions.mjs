@@ -74,6 +74,41 @@ async function command(method,params={}) {
   });
 }
 async function evaluate(expression) {return command('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true}).then(result=>result.result.value);}
+
+async function waitForNativeBridgeReady(timeout=45000) {
+  const deadline=Date.now()+timeout;
+  let last={};
+  while(Date.now()<deadline) {
+    try {
+      // CDP can attach while the splash WebView exists but before Capacitor's
+      // JS bridge and read-only QA observer have been installed.
+      const state=JSON.parse(await evaluate(
+        'JSON.stringify({url:location.href,readyState:document.readyState,'+
+        'qa:!!window.ISTReleaseQA?.snapshot,'+
+        'nativePromiseType:typeof window.Capacitor?.nativePromise})'));
+      last=state;
+      if(state.qa&&state.nativePromiseType==='function') {
+        const geometry=await evaluate(
+          "window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+        if(geometry&&Number.isFinite(geometry.left)&&Number.isFinite(geometry.top)&&
+           Number.isFinite(geometry.right)&&Number.isFinite(geometry.bottom)&&
+           geometry.right>geometry.left&&geometry.bottom>geometry.top) {
+          report.bridgeReadyAt=new Date().toISOString();
+          report.bridgeReady={...state,focused:geometry.focused};
+          save();
+          return geometry;
+        }
+        last={...state,geometry};
+      }
+    } catch(error) {
+      last={...last,observationError:String(error?.message||error)};
+    }
+    await delay(350);
+  }
+  throw new Error('Capacitor native bridge and QA observer did not become ready after WebView startup; last='+
+    JSON.stringify(last));
+}
+
 async function read() {
   const snap=await evaluate('JSON.stringify(window.ISTReleaseQA?.snapshot?.() || {observerMissing:true})');
   const s=JSON.parse(snap);
@@ -388,7 +423,7 @@ async function sampleMovingVideo(){
 
 ensureReport();
 try{
-  await connect();bounds=await nativeBounds();
+  await connect();await waitForNativeBridgeReady();bounds=await nativeBounds();
   if(process.env.IRGUN_SMALL_SCREEN_ONLY==='1') {
     await wait(s=>s.ready,'App must become ready for the isolated small-screen layout check',45000);
     report.accountMode='layout-only';
@@ -843,7 +878,7 @@ try{
       assert.ok(end.native.audioPositionMs>start.native.audioPositionMs+1400,'Downloaded audio must continue playing without internet');
       checks('Actual downloaded audio played while offline',{bytes:record.bytes,downloadAttempts:record.downloadAttempts});
       ws.close();adb('shell','am','force-stop',pkg);adb('shell','am','start','-W','-n',pkg+'/.SplashActivity');
-      await delay(2500);await connect();bounds=await nativeBounds();
+      await delay(2500);await connect();await waitForNativeBridgeReady();bounds=await nativeBounds();
       const restarted=await wait(s=>s.ready&&s.offline.some(x=>x.key===record.key),'Actual offline app restart must load the cached library and saved download');
       assert.equal(restarted.isLoggedIn,process.env.IRGUN_EXPECT_SIGNED_IN==='1','Offline restart must retain the declared account session');
       await tap('.bottom-nav [data-nav="library"]');
@@ -1181,7 +1216,7 @@ try{
     adb('shell','am','force-stop',pkg);
     adb('shell','am','start','-W','-n',pkg+'/.SplashActivity');
     await delay(3000);
-    await connect();bounds=await nativeBounds();
+    await connect();await waitForNativeBridgeReady();bounds=await nativeBounds();
     const restored=await wait(s=>s.ready,'App did not reload after force-stop',45000);
     assert.ok(Math.abs(restored.speed-1.5)<0.01,'1.5x playback speed preference was lost after relaunch');
   });
