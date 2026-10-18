@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
-import {settledNativeTapPoint,waitForNativeWindowFocus} from './android-native-tap-point.mjs';
+import {settledNativeTapPoint,waitForNativeWindowFocus,waitForRestoredAndroidViewport} from './android-native-tap-point.mjs';
 import {safeNativeBackgroundHandoff} from './android-background-handoff-check.mjs';
 import {startMediaRequest,completeMediaRequest,failedDuringOffline} from './android-network-evidence.mjs';
 import {fullscreenEducationTapPoint,mediaNotificationClock,settledMediaNotificationControlPoint} from './android-system-ui-observation.mjs';
@@ -1182,9 +1182,14 @@ try{
       if (/^he/.test((await read()).lang)) await tap('[data-language-toggle]');
       const english=await wait(s=>s.ready&&s.lang==='en','English app must render before narrow layout');
       assert.ok(english.ready);
+      const readLayout=async()=>JSON.parse(await evaluate('JSON.stringify({w:innerWidth,h:innerHeight,lang:document.documentElement.lang,dir:document.documentElement.dir,nav:[...document.querySelectorAll(".bottom-nav [data-nav]")].map(x=>{let r=x.getBoundingClientRect();return {key:x.dataset.nav,width:r.width,left:r.left,right:r.right,bottom:r.bottom}})})'));
+      // A focused Android Activity can already have 320x640 native coordinates
+      // while WebView still reports 240x320 after wm resize. Snapshot both
+      // before resizing; wait for both to restore before the next real tap.
+      const normalDom=await readLayout();
+      const normalNative=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
       adb('shell','wm','size','240x320');
       await delay(1400);
-      const readLayout=async()=>JSON.parse(await evaluate('JSON.stringify({w:innerWidth,h:innerHeight,lang:document.documentElement.lang,dir:document.documentElement.dir,nav:[...document.querySelectorAll(".bottom-nav [data-nav]")].map(x=>{let r=x.getBoundingClientRect();return {key:x.dataset.nav,width:r.width,left:r.left,right:r.right,bottom:r.bottom}})})'));
       const englishScreen=await readLayout();
       assert.match(adb('shell','wm','size'),/Override size:\s*240x320/,
         'Android must actually use a 240x320 screen');
@@ -1199,10 +1204,46 @@ try{
       // the UI hierarchy cannot expose accurate WebView hit-boxes after wm resize.
       // Both reduced-width layouts below are still rendered by the real emulator.
       adb('shell','wm','size','reset');
-      await delay(1100);
-      bounds=await nativeBounds();
-      await tap('[data-language-toggle]');
-      await wait(s=>s.lang==='he'||s.lang==='he-IL','Real language button did not activate Hebrew');
+      const restored=await waitForRestoredAndroidViewport({
+        expected:{native:normalNative,dom:{width:normalDom.w,height:normalDom.h}},
+        readNative:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),
+        readDom:async()=>JSON.parse(await evaluate('JSON.stringify({width:innerWidth,height:innerHeight})')),
+        delay
+      });
+      assert.ok(!/Override size:/.test(adb('shell','wm','size')),
+        'Android emulator must really restore its physical display size before tapping the language control');
+      bounds=[restored.native.left,restored.native.top,restored.native.right,restored.native.bottom];
+      const languageTaps=[];
+      let hebrew;
+      for(let attempt=0;attempt<2;attempt++) {
+        const current=await read();
+        if(/^he/.test(current.lang)){hebrew=current;break;}
+        assert.equal(current.lang,'en','English/Hebrew QA must not switch from an unrelated language state');
+        const target=await hit('[data-language-toggle]');
+        assert.ok(target,'The real language button must be visible and unobstructed after restoring display size');
+        const position=await tap('[data-language-toggle]');
+        languageTaps.push({position,target,restored:restored.dom,attempt:attempt+1});
+        try {
+          hebrew=await wait(s=>s.lang==='he'||s.lang==='he-IL',
+            'Physical language button tap failed after display resize',6500);
+          break;
+        }catch(error) {
+          if(attempt===1)throw new Error(String(error.message)+
+            '; physicalTaps='+JSON.stringify(languageTaps));
+          // An emulator input event may be dropped while its display is
+          // still settling. Revalidate actual geometry and retry one real
+          // ADB touch. Never set i18n state from the test.
+          await waitForRestoredAndroidViewport({
+            expected:{native:normalNative,dom:{width:normalDom.w,height:normalDom.h}},
+            readNative:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),
+            readDom:async()=>JSON.parse(await evaluate('JSON.stringify({width:innerWidth,height:innerHeight})')),
+            delay
+          });
+        }
+      }
+      assert.ok(hebrew&&/^he/.test(hebrew.lang),'Android Hebrew transition must be observed from a real touch');
+      checks('Android window and WebView restore before physical Hebrew toggle',
+        {normalSize:originalSize,restored,languageTaps});
       adb('shell','wm','size','240x320');
       await delay(1100);
       const hebrewScreen=await readLayout();

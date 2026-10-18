@@ -1,11 +1,55 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {settledNativeTapPoint,waitForNativeWindowFocus} from './android-native-tap-point.mjs';
+import {settledNativeTapPoint,waitForNativeWindowFocus,waitForRestoredAndroidViewport} from './android-native-tap-point.mjs';
 import {accountSwipeDirection, watchPlayerReturnGesture, watchCommentsGesture, watchFollowTargetGesture} from './android-account-native-scroll.mjs';
 import {selectAccountPlaybackFixture,hasWebsiteFollowTarget} from './android-account-playback-fixture.mjs';
 
 const geometry = height => ({left:0,top:24,right:320,bottom:24+height,focused:true});
 const immediate = async () => {};
+
+test('Android 16 wm size reset waits for both native and DOM viewports to return to normal',async()=>{
+  const initial={left:0,top:24,right:320,bottom:616,focused:true};
+  const expected={native:initial,dom:{width:320,height:592}};
+  const samples=[
+    {native:{...initial,right:240,bottom:296},dom:{width:240,height:272}},
+    {native:{...initial},dom:{width:240,height:272}},
+    {native:{...initial},dom:{width:320,height:592}},
+    {native:{...initial},dom:{width:320,height:592}},
+    {native:{...initial},dom:{width:320,height:592}}
+  ];
+  let index=0,delays=0;
+  const current=()=>samples[Math.min(index,samples.length-1)];
+  const result=await waitForRestoredAndroidViewport({
+    expected,readNative:async()=>current().native,readDom:async()=>current().dom,
+    delay:async()=>{delays++;index++;}
+  });
+  assert.equal(result.observations,5);
+  assert.equal(delays,4);
+  assert.equal(result.dom.width,320);
+  assert.equal(result.native.right,320);
+});
+
+test('native focus by itself cannot falsely pass a stale restored WebView viewport',async()=>{
+  const native={left:0,top:24,right:320,bottom:616,focused:true};
+  await assert.rejects(()=>waitForRestoredAndroidViewport({
+    expected:{native,dom:{width:320,height:592}},
+    readNative:async()=>native,
+    readDom:async()=>({width:240,height:272}),
+    delay:async()=>{},attempts:5
+  }),/failed to restore together/);
+});
+
+test('restoration requires consecutive observations; focus loss restarts the stability count',async()=>{
+  const native={left:0,top:24,right:320,bottom:616,focused:true};
+  let i=0;const seq=[true,true,false,true,true,true];
+  const result=await waitForRestoredAndroidViewport({
+    expected:{native,dom:{width:320,height:592}},
+    readNative:async()=>({...native,focused:seq[i]}),
+    readDom:async()=>({width:320,height:592}),
+    delay:async()=>{i++;},attempts:7
+  });
+  assert.equal(result.observations,6);
+});
 
 test('notification activation waits for actual app window focus and refuses a shade that never closes',async()=>{
  const observations=[{...geometry(592),focused:false},{...geometry(592),focused:false},geometry(592)];
