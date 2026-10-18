@@ -485,7 +485,7 @@ test('clicking Login submits once without the form becoming an auth-mode button'
 });
 function hostFixture() {
   class Node {
-    constructor(){this.children=[];this.classList={remove(){},toggle(){}};}
+    constructor(){this.children=[];this.dataset={};this.classList={remove(){},toggle(){}};}
     set textContent(value){assert.equal(value,'');for(const child of this.children)child.parentElement=null;this.children=[];}
     appendChild(child){if(child.parentElement)child.parentElement.children=child.parentElement.children.filter(c=>c!==child);child.parentElement=this;this.children.push(child);}
     querySelector(selector){return selector==='.watch-overlay'?this.children.find(c=>c===overlay)||null:selector==='#watchVimeoFrame'?this.children.includes(overlay)?iframe:null:null;}
@@ -493,7 +493,7 @@ function hostFixture() {
   const mount=new Node(),app=new Node(),overlay=new Node(),iframe={};app.appendChild(overlay);
   const state={watchVideo:{id:'1233236785:585d5d53db'},watchMode:'video'};
   const presentations=[];
-  const context={persistentVideoMount:mount,state,Capacitor:{getPlatform:()=> 'android'},document:{body:new Node(),querySelector:()=>app.children.includes(overlay)?overlay:null},reconcileAndroidNativeWatchOverlay(){},bindPersistentVideoChrome(){},PlaybackController:{setPresentation:async mode=>presentations.push(mode)}};
+  const context={persistentVideoMount:mount,state,videoId:v=>v.id,Capacitor:{getPlatform:()=> 'android'},document:{body:new Node(),querySelector:()=>app.children.includes(overlay)?overlay:null},reconcileAndroidNativeWatchOverlay(){},bindPersistentVideoChrome(){},PlaybackController:{setPresentation:async mode=>presentations.push(mode)}};
   const extract=(name,next)=>mainSource.slice(mainSource.indexOf(`function ${name}(`),mainSource.indexOf(next,mainSource.indexOf(`function ${name}(`)));
   runInNewContext(extract('clearPersistentVideoMount','function refreshPersistentMiniVideoChrome')+extract('hostCurrentWatchOverlay','async function resetWatchVimeoPlayer')+'\nthis.host=hostCurrentWatchOverlay;this.clear=clearPersistentVideoMount;',context);
   return {mount,overlay,state,iframe,presentations,host:context.host,clear:context.clear};
