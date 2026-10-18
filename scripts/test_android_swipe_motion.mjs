@@ -156,9 +156,9 @@ test('vertical drags, editable controls, horizontal scrollbars and multiple touc
 });
 
 test('Hebrew RTL follows physical tab order and reverses without closing',async()=>{
-  const a=rig({rtl:true});a.start(72);a.move(198);a.end(198);
+  const a=rig({rtl:true});a.start(260);a.move(125);a.end(125);
   await flush();await flush();assert.equal(a.current,'shiurim');
-  a.start(260);a.move(125);a.end(125);
+  a.start(72);a.move(198);a.end(198);
   await flush();await flush();assert.equal(a.current,'home');
   assert.deepEqual(a.navigations,['shiurim','home']);
   assert.equal(a.inserted[0].attributes.dir,'rtl');
