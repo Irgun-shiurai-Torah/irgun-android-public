@@ -3312,44 +3312,53 @@ body.irgun-android .android-search-assist .search-assist-history-icon svg {
  
 /* Android nav fit for 240px-wide Hebrew and English layouts */
 @media (max-width:320px) {
-  body.irgun-android .android-floating-nav {
-    box-sizing:border-box;
-    left:6px;
-    right:6px;
-    width:auto;
-    max-width:none;
-    transform:none;
-    padding:4px;
-    grid-template-columns:repeat(5,minmax(0,1fr));
-    gap:0;
-    overflow:hidden;
-  }
-  body.irgun-android .android-floating-nav .nav-btn {
-    box-sizing:border-box;
-    display:flex;
-    width:100%;
+  body.irgun-android .android-floating-nav,
+  html[dir="rtl"] body.irgun-android .android-floating-nav {
+    position:fixed!important;
+    box-sizing:border-box!important;
+    left:6px!important;
+    right:6px!important;
+    inset-inline-start:6px!important;
+    inset-inline-end:6px!important;
+    bottom:var(--android-nav-bottom);
+    width:auto!important;
     min-width:0!important;
-    max-width:100%;
-    padding:4px 0;
-    gap:2px;
-    overflow:hidden;
-    font-size:8px;
+    max-width:none!important;
+    transform:none!important;
+    padding:4px!important;
+    display:grid!important;
+    grid-template-columns:repeat(5,minmax(0,1fr))!important;
+    gap:0!important;
+    overflow:hidden!important;
+  }
+  body.irgun-android .android-floating-nav .nav-btn,
+  html[dir="rtl"] body.irgun-android .android-floating-nav .nav-btn {
+    box-sizing:border-box!important;
+    display:flex!important;
+    width:auto!important;
+    min-width:0!important;
+    max-width:100%!important;
+    margin:0!important;
+    padding:4px 0!important;
+    gap:2px!important;
+    overflow:hidden!important;
+    font-size:8px!important;
   }
   body.irgun-android .android-floating-nav .nav-icon {
-    width:22px;
-    height:22px;
-    flex:0 0 22px;
+    width:22px!important;
+    height:22px!important;
+    flex:0 0 22px!important;
   }
   body.irgun-android .android-floating-nav .nav-btn > span:last-child {
-    display:block;
-    width:100%;
-    max-width:100%;
-    min-width:0;
-    padding:0 1px;
-    overflow:hidden;
-    text-overflow:ellipsis;
-    white-space:nowrap;
-    font-size:8px;
-    line-height:11px;
+    display:block!important;
+    width:100%!important;
+    max-width:100%!important;
+    min-width:0!important;
+    padding:0 1px!important;
+    overflow:hidden!important;
+    text-overflow:ellipsis!important;
+    white-space:nowrap!important;
+    font-size:8px!important;
+    line-height:11px!important;
   }
 }
