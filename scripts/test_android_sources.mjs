@@ -1656,3 +1656,39 @@ test('Android Library autocomplete floats over results and closes on outside int
   assert.match(mainSource,/document\.addEventListener\('pointerdown',event=>\{/);
   assert.match(mainSource,/state\.librarySearchAssistOpen=false;[\s\S]*?runLibrarySearch\(\); refreshSearchAssist\(\);/);
 });
+
+// Android native Video must not duplicate Watch when its bridge identity lags
+// behind the already-hosted same-lecture video, or reuse another lecture's host.
+test('Android Audio to Video keeps exactly one lecture-matched Watch overlay',()=>{
+  const helperStart=mainSource.indexOf('function hasPersistentVideoOverlayForCurrentWatch()');
+  const helperEnd=mainSource.indexOf('\nfunction refreshPersistentMiniVideoChrome()',helperStart);
+  const guardStart=mainSource.indexOf('function reconcileAndroidNativeWatchOverlay()');
+  const guardEnd=mainSource.indexOf('\nfunction hostCurrentWatchOverlay(',guardStart);
+  assert.ok(helperStart>=0&&helperEnd>helperStart&&guardStart>=0&&guardEnd>guardStart);
+  assert.match(mainSource,/!hasPersistentVideoOverlayForCurrentWatch\(\) \? watchHtml\(\) : ''/,
+    'Shell must not create another in-app Watch while a native-hosted Video exists');
+  const host={dataset:{irgunWatchId:'lecture-1'},
+    querySelector:sel=>sel==='.watch-overlay #watchVimeoFrame'?{}:null};
+  const state={watchVideo:{id:'lecture-1'},watchMode:'video',
+    watchHostedExternally:false,watchVimeo:{isIrgunNativeVideoPlayer:false}};
+  let removed=0;
+  const context={state,Capacitor:{getPlatform:()=> 'android'},persistentVideoMount:host,
+    videoId:v=>v.id,document:{querySelectorAll:selector=>{
+      assert.equal(selector,'#app .watch-overlay');
+      return [{remove(){removed++;}}];
+    }}};
+  runInNewContext(mainSource.slice(helperStart,helperEnd)+
+    mainSource.slice(guardStart,guardEnd)+
+    '\nthis.hasHost=hasPersistentVideoOverlayForCurrentWatch;this.clean=reconcileAndroidNativeWatchOverlay;',context);
+  assert.equal(context.hasHost(),true,'The actual video host must not depend on a transient JavaScript player flag');
+  context.clean();
+  assert.equal(removed,1,'Remove only the in-app duplicate, never the native host');
+  assert.equal(state.watchHostedExternally,true);
+  state.watchVideo={id:'lecture-2'};removed=0;state.watchHostedExternally=false;
+  assert.equal(context.hasHost(),false,'A different lecture cannot reuse a stale player host');
+  context.clean();assert.equal(removed,0);assert.equal(state.watchHostedExternally,false);
+  state.watchVideo={id:'lecture-1'};state.watchMode='audio';
+  assert.equal(context.hasHost(),false,'Parked Video must not hide the currently active Audio UI');
+  state.watchMode='video';host.querySelector=()=>null;
+  assert.equal(context.hasHost(),false,'Without the native video anchor, a fresh Watch can be shown');
+});
