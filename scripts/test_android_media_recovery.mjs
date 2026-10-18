@@ -124,7 +124,8 @@ test('Android optional feed outages never flag a working live video catalog as s
   assert.equal(f.state.usingCachedLibrary,false,
     'An optional audio cache must not claim the entire video catalog is offline');
   assert.deepEqual(await f.run('/trending?period=week&limit=2500'),{items:[]});
-  assert.equal(f.state.offlineMode,true,'Initial fixture should remain unchanged by secondary feeds');
+  assert.equal(f.state.offlineMode,false,
+    'The successful live video catalog clears offline mode; optional fallback feeds must not re-enable it');
   assert.equal(f.state.usingCachedLibrary,false);
 });
 
