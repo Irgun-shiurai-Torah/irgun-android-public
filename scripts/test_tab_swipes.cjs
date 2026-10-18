@@ -46,10 +46,13 @@ test('swipe traverses all tabs in both directions without wrapping', async () =>
   for (let i = 0; i < 5; i++) f.swipe(130);
   assert.deepEqual(f.visits, ['shiurim','live','library','account','library','live','shiurim','home']);
 });
-test('Hebrew follows the reversed physical tab order', async () => {
+test('Hebrew follows physical tab adjacency and does not wrap at Home', async () => {
   const f = await fixture({ rtl: true });
-  f.swipe(-130); f.swipe(130); f.swipe(130); f.swipe(-130);
-  assert.deepEqual(f.visits, ['shiurim','live','shiurim']);
+  f.swipe(-130); // Home is at the right edge; dragging left reveals Shiurim.
+  f.swipe(130);  // Dragging back right reveals Home again.
+  f.swipe(130);  // Home edge must not wrap to another tab.
+  f.swipe(-130); // Drag left returns to Shiurim.
+  assert.deepEqual(f.visits, ['shiurim','home','shiurim']);
 });
 for (const [name, options] of [['open modal', { blocked: true }], ['horizontal carousel', { scrollable: true }], ['input or player control', { excluded: true }]]) {
   test(`${name} keeps its gestures`, async () => {
