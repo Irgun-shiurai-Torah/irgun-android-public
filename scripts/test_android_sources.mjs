@@ -1543,6 +1543,19 @@ test('late HLS startup recovery retains one decoder and exposes real failure cau
 });
 
 
+test('Android floating navigation has compact-width safeguards for Hebrew and English',()=>{
+ const css=readFileSync(new URL('../src/style.css',import.meta.url),'utf8');
+ const start=css.indexOf('/* Android nav fit for 240px-wide Hebrew and English layouts */');
+ assert.ok(start>=0,'Small-screen Android nav layout rule must exist');
+ const rules=css.slice(start);
+ assert.match(rules,/@media\s*\(max-width:\s*320px\)/);
+ assert.match(rules,/left:\s*6px/);
+ assert.match(rules,/right:\s*6px/);
+ assert.match(rules,/grid-template-columns:\s*repeat\(5,minmax\(0,1fr\)\)/);
+ assert.match(rules,/\.android-floating-nav \.nav-btn[\s\S]*?min-width:\s*0!important/);
+ assert.match(rules,/\.android-floating-nav \.nav-btn > span:last-child[\s\S]*?text-overflow:\s*ellipsis/);
+});
+
 test('Android Library recent searches remain hidden until search focus',()=>{
   const start=mainSource.indexOf('function searchAssistHtml() {');
   const end=mainSource.indexOf('function refreshSearchAssist() {',start);
