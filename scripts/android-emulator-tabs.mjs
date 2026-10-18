@@ -138,7 +138,10 @@ try {
     assert.ok(homeIndex === 0 || homeIndex === order.length - 1);
     // The Home boundary is the physical OUTSIDE edge: right in LTR,
     // left in RTL. Traverse inward across every visible neighbor, then back.
-    const outward = homeIndex === 0 ? 1 : -1;
+    // The swipe handler already reverses physical direction for RTL.
+    // A rightward finger drag is therefore the outside Home boundary in BOTH
+    // languages; derive the traversal from the gesture mapping, not tab index.
+    const outward = 1;
     await swipe(outward); // Home end must not wrap
     for (let i = 0; i < order.length; i++) await swipe(-outward);
     for (let i = 0; i < order.length; i++) await swipe(outward);
