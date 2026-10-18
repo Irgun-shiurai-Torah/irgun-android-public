@@ -3308,3 +3308,48 @@ body.irgun-android .android-search-assist .search-assist-history-icon svg {
     padding-inline:10px;
   }
 }
+
+ 
+/* Android nav fit for 240px-wide Hebrew and English layouts */
+@media (max-width:320px) {
+  body.irgun-android .android-floating-nav {
+    box-sizing:border-box;
+    left:6px;
+    right:6px;
+    width:auto;
+    max-width:none;
+    transform:none;
+    padding:4px;
+    grid-template-columns:repeat(5,minmax(0,1fr));
+    gap:0;
+    overflow:hidden;
+  }
+  body.irgun-android .android-floating-nav .nav-btn {
+    box-sizing:border-box;
+    display:flex;
+    width:100%;
+    min-width:0!important;
+    max-width:100%;
+    padding:4px 0;
+    gap:2px;
+    overflow:hidden;
+    font-size:8px;
+  }
+  body.irgun-android .android-floating-nav .nav-icon {
+    width:22px;
+    height:22px;
+    flex:0 0 22px;
+  }
+  body.irgun-android .android-floating-nav .nav-btn > span:last-child {
+    display:block;
+    width:100%;
+    max-width:100%;
+    min-width:0;
+    padding:0 1px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    font-size:8px;
+    line-height:11px;
+  }
+}
