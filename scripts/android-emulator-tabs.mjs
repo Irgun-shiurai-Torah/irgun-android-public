@@ -138,7 +138,7 @@ try {
     assert.ok(homeIndex === 0 || homeIndex === order.length - 1);
     // The Home boundary is the physical OUTSIDE edge: right in LTR,
     // left in RTL. Traverse inward across every visible neighbor, then back.
-    const outward = homeIndex === 0 ? -1 : 1;
+    const outward = homeIndex === 0 ? 1 : -1;
     await swipe(outward); // Home end must not wrap
     for (let i = 0; i < order.length; i++) await swipe(-outward);
     for (let i = 0; i < order.length; i++) await swipe(outward);
