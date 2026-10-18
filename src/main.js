@@ -5271,9 +5271,26 @@ function followSpeakerIdsForLecture(video) {
     if (supported.length) { video._speakerIds=supported; return supported; }
   }
 
-  // When no reviewed mapping exists, website watch.js derives the speaker
-  // from the raw lecture title, not the localized display title. Match that
-  // EXACT key before considering a Worker-only auto speaker ID.
+  // If the title names a speaker already in our reviewed speaker directory,
+  // use that canonical ID first. Otherwise the website-style auto-<slug> key
+  // can differ from the account's existing canonical follow (e.g. zev-smith
+  // versus auto-zev-smith), making a button labelled "Follow" actually toggle
+  // off the user's existing follow.
+  for (const title of [video?.title, video?.titleHe, video?.titleEn]) {
+    const rawSpeaker=extractSpeakerFromTitle(title);
+    const wanted=normalizeText(bareSpeakerName(rawSpeaker));
+    if (!wanted) continue;
+    let canonical=state.speakerAliasToId.get(wanted);
+    if (!canonical) {
+      for (const [alias,id] of state.speakerAliasToId.entries()) {
+        if (normalizeText(bareSpeakerName(alias))===wanted) {canonical=id;break;}
+      }
+    }
+    if (canonical) {video._speakerIds=[String(canonical)];return video._speakerIds;}
+  }
+
+  // Unknown speakers retain the exact website watch.js auto-<slug> key so
+  // follows for genuinely unreviewed speakers remain compatible with the site.
   const websiteId=websiteFallbackSpeakerFromTitle(video?.title);
   if (websiteId) {video._speakerIds=[websiteId];return video._speakerIds;}
   const translatedTitle=video?.titleHe || video?.titleEn;
