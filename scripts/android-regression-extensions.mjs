@@ -1245,16 +1245,30 @@ try{
       checks('Android window and WebView restore before physical Hebrew toggle',
         {normalSize:originalSize,restored,languageTaps});
       adb('shell','wm','size','240x320');
-      await delay(1100);
-      const hebrewScreen=await readLayout();
-      assert.ok(/^he/.test(hebrewScreen.lang),'Hebrew interface did not survive narrow-screen resize');
-      assert.ok(hebrewScreen.dir==='rtl',
-        'Hebrew document must be explicitly right-to-left');
-      assert.ok(hebrewScreen.nav.length>=3,'Hebrew narrow layout needs main navigation');
-      assert.ok(hebrewScreen.nav.every(n=>n.width>=25&&n.left>=-4&&n.right<=hebrewScreen.w+4),
-        'Hebrew navigation is clipped on small screens');
+      // WebView relayout after a language change and display override is async.
+      // Require three consecutive valid samples instead of trusting one stale
+      // innerWidth/rect snapshot. Preserve samples and screenshot BEFORE restore.
+      const hebrewSamples=[];
+      let hebrewScreen=null,stableHebrewLayout=0;
+      for(let attempt=0;attempt<36;attempt++){
+        const sample=await readLayout();
+        const fits=sample.nav.length>=3&&sample.nav.every(n=>
+          n.width>=25&&n.left>=-4&&n.right<=sample.w+4);
+        hebrewSamples.push({w:sample.w,h:sample.h,lang:sample.lang,dir:sample.dir,nav:sample.nav,fits});
+        stableHebrewLayout=fits&&sample.lang.startsWith('he')&&sample.dir==='rtl'
+          ?stableHebrewLayout+1:0;
+        hebrewScreen=sample;
+        if(stableHebrewLayout>=3)break;
+        await delay(250);
+      }
       screenshot('small-screen-hebrew');
-      report.smallScreen={english:englishScreen,hebrew:hebrewScreen,actualSize:adb('shell','wm','size')};
+      assert.ok(/^he/.test(hebrewScreen.lang),'Hebrew interface did not survive narrow-screen resize: '+JSON.stringify(hebrewSamples));
+      assert.ok(hebrewScreen.dir==='rtl','Hebrew document must be explicitly right-to-left: '+JSON.stringify(hebrewSamples));
+      assert.ok(hebrewScreen.nav.length>=3,'Hebrew narrow layout needs main navigation: '+JSON.stringify(hebrewSamples));
+      assert.ok(stableHebrewLayout>=3,
+        'Hebrew navigation must fit the 240x320 viewport in three consecutive WebView layouts; samples='+
+        JSON.stringify(hebrewSamples));
+      report.smallScreen={english:englishScreen,hebrew:hebrewScreen,hebrewSamples,actualSize:adb('shell','wm','size')};
     }finally{
       adb('shell','wm','size','reset');await delay(900);
     }
