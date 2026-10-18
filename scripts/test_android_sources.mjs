@@ -1541,3 +1541,61 @@ test('late HLS startup recovery retains one decoder and exposes real failure cau
   assert.match(source,/video\.dataset\.startupFailureReason/,
     'Startup failure must preserve the actual error for emulator diagnostics');
 });
+
+
+test('Android Library recent searches remain hidden until search focus',()=>{
+  const start=mainSource.indexOf('function searchAssistHtml() {');
+  const end=mainSource.indexOf('function refreshSearchAssist() {',start);
+  assert.ok(start>0&&end>start,'Find the actual search-assist HTML function');
+  const platform={current:'android'};
+  const state={libraryQuery:'',librarySearchAssistOpen:false,
+    recentSearches:['Rav Yosef Sayagh','Rav Yaakov Zev Smith','Rav Asher Anshel Eckstein','bald','Rav Ahron Silberstein'],
+    speakerById:new Map([['one',{id:'one'}]]),metadata:{topics:[]}};
+  const esc=x=>String(x).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+  const context={state,Capacitor:{getPlatform:()=>platform.current},
+    currentLanguage:()=> 'en',esc,svgIcon:()=>'<svg></svg>',
+    lectureCodeQuery:()=>null,normalizeText:value=>String(value).toLowerCase(),
+    speakerLabel:()=> 'Rav Yosef Sayagh',topicLabel:()=> ''};
+  runInNewContext(mainSource.slice(start,end)+'\nthis.searchAssist=searchAssistHtml;',context);
+  assert.equal(context.searchAssist(),'','Recent searches must not occupy page space until the user opens Search');
+  state.librarySearchAssistOpen=true;
+  const open=context.searchAssist();
+  assert.match(open,/class="search-assist android-search-assist"/);
+  assert.match(open,/Recent searches/);
+  assert.equal((open.match(/class="search-assist-recent"/g)||[]).length,5);
+  assert.doesNotMatch(open,/<small>Recent<\/small>/,
+    'A compact search row must not repeat the large Recent subtitle');
+  state.libraryQuery='Yosef';
+  const typed=context.searchAssist();
+  assert.match(typed,/data-search-suggestion="Rav Yosef Sayagh"/);
+  assert.doesNotMatch(typed,/search-assist-recent/,
+    'Typing replaces recent history with normal speaker/topic suggestions');
+  state.librarySearchAssistOpen=false;
+  assert.equal(context.searchAssist(),'','Choosing a suggestion or leaving the search should close it');
+  platform.current='ios';
+  state.libraryQuery='';
+  assert.match(context.searchAssist(),/<small>Recent<\/small>/,
+    'iOS retains its existing recent-search display behavior');
+});
+
+test('Android Library autocomplete floats over results and closes on outside interaction',()=>{
+  const css=readFileSync(new URL('../src/style.css',import.meta.url),'utf8');
+  const c=css.slice(css.indexOf('/* Android Shiurim compact on-focus search history */'));
+  assert.ok(c.length>1200);
+  assert.match(c,/body\.irgun-android \.library-search-autocomplete/);
+  assert.match(c,/position:relative/);
+  assert.match(c,/#librarySearchAssist \{[\s\S]*?position:absolute/);
+  assert.match(c,/top:calc\(100% \+ 5px\)/);
+  assert.match(c,/max-height:min\(42vh,320px\)/);
+  assert.match(c,/min-height:44px/);
+  const start=mainSource.indexOf('function shiurimHtml() {');
+  const end=mainSource.indexOf('function searchHtml() {',start);
+  const html=mainSource.slice(start,end);
+  assert.match(html,/class="library-search-autocomplete"/);
+  assert.match(html,/id="librarySearchAssist"/);
+  assert.match(html,/aria-controls="librarySearchAssist"/);
+  assert.match(mainSource,/librarySearch\.addEventListener\('focus',openAssist\)/);
+  assert.match(mainSource,/librarySearch\.addEventListener\('blur'/);
+  assert.match(mainSource,/document\.addEventListener\('pointerdown',event=>\{/);
+  assert.match(mainSource,/state\.librarySearchAssistOpen=false;[\s\S]*?runLibrarySearch\(\); refreshSearchAssist\(\);/);
+});
