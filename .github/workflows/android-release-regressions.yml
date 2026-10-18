@@ -389,12 +389,10 @@ jobs:
           arch: x86_64
           script: bash scripts/android-emulator-account.sh
       - name: Independent authenticated comment CRUD, deletion and rejection checks
-        if: ${{ env.IRGUN_SMALL_SCREEN_ONLY != '1' }}
-        if: always()
+        if: ${{ always() && env.IRGUN_SMALL_SCREEN_ONLY != '1' }}
         run: node scripts/android-comments-qa.mjs
       - name: Independent Android token and website cookie session sync checks
-        if: ${{ env.IRGUN_SMALL_SCREEN_ONLY != '1' }}
-        if: always()
+        if: ${{ always() && env.IRGUN_SMALL_SCREEN_ONLY != '1' }}
         run: node scripts/android-website-account-sync.mjs
       - name: Upload actual account and comment evidence even if tests fail
         if: always()
