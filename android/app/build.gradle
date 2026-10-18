@@ -42,12 +42,24 @@ android {
     }
 
     buildTypes {
+        // QA-only opt-in: exercise R8 on the installable debug APK used by the
+        // authenticated account and media emulator suites. Ordinary debug
+        // builds stay unminified unless -PirgunR8Qa=true is supplied.
+        debug {
+            if (project.hasProperty('irgunR8Qa') && project.property('irgunR8Qa').toString() == 'true') {
+                minifyEnabled true
+                proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            }
+        }
         release {
             if (irgunHasReleaseSigning) {
                 signingConfig signingConfigs.release
             }
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // Optimize/obfuscate DEX code for Google Play. Keep resource
+            // shrinking off until it has been independently verified.
+            minifyEnabled true
+            shrinkResources false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 }
