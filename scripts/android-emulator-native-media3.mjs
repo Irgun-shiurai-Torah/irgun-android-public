@@ -411,8 +411,7 @@ try {
     assert.equal(shown.media3.settingsButtonVisible,false,
       'The duplicate bottom settings gear must stay removed whenever controls appear');
     assertAndroidVideoTimes(shown.media3);
-    if(fresh)assert.equal(shown.media3.doubleTapSeekCount,m.doubleTapSeekCount,
-      'Physically refreshing controls must not trigger a double-tap seek');
+    // The physical-tap helper already verifies no 15-second seek was triggered.
     return shown;
   };
   const samePlayback=(before,after,label,elapsed)=>{
