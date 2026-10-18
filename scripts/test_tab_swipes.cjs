@@ -6,7 +6,7 @@ async function fixture({ rtl = false, blocked = false, scrollable = false, exclu
   const handlers = new Map(), visits = [];
   let active = 'home', allowed = !blocked;
   const root = {
-    ownerDocument: { defaultView: { getComputedStyle: node => ({ overflowX: node.overflow || 'visible' }) } },
+    ownerDocument: { documentElement: {dir:rtl?'rtl':'ltr'}, defaultView: { getComputedStyle: node => ({ overflowX: node.overflow || 'visible', direction:node.dir||'ltr' }) } },
     addEventListener: (name, callback) => handlers.set(name, callback)
   };
   const content = { parentElement: root, scrollWidth: scrollable ? 800 : 400, clientWidth: 400, overflow: scrollable ? 'auto' : 'visible' };
@@ -34,6 +34,12 @@ async function fixture({ rtl = false, blocked = false, scrollable = false, exclu
   return { swipe, emit, touch, visits, setActive: value => { active = value; }, block: () => { allowed = false; } };
 }
 
+test('physical swipe direction chooses the adjacent visual tab in both LTR and RTL',async()=>{
+ const ltr=await fixture();ltr.swipe(-130);assert.deepEqual(ltr.visits,['shiurim']);
+ const rtl=await fixture({rtl:true});rtl.setActive('home');rtl.swipe(-130);
+ assert.deepEqual(rtl.visits,['shiurim']);
+ rtl.swipe(130);assert.deepEqual(rtl.visits,['shiurim','home']);
+});
 test('swipe traverses all tabs in both directions without wrapping', async () => {
   const f = await fixture();
   for (let i = 0; i < 5; i++) f.swipe(-130);
