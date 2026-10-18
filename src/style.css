@@ -3222,3 +3222,89 @@ body.irgun-android .topbar .top-account {max-width:110px;}
   body.irgun-android .topbar .app-language-button,
   body.irgun-android .topbar .top-account {min-height:38px;padding:7px 8px;font-size:10px!important;}
 }
+
+/* Android Shiurim compact on-focus search history */
+/* A floating suggestion panel below Search saves the height of five history rows. */
+body.irgun-android .library-search-autocomplete {
+  position:relative;
+  min-width:0;
+}
+body.irgun-android .library-search-autocomplete #librarySearchAssist {
+  position:absolute;
+  z-index:46;
+  inset-inline-start:0;
+  top:calc(100% + 5px);
+  width:min(100%,640px);
+  max-width:100%;
+}
+body.irgun-android .library-search-autocomplete #librarySearchAssist:empty {
+  display:none;
+}
+body.irgun-android .library-search-autocomplete .android-search-assist {
+  margin:0;
+  max-height:min(42vh,320px);
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  border:1px solid #dbe3ee;
+  border-radius:14px;
+  background:#fff;
+  box-shadow:0 14px 32px rgba(15,31,53,.16);
+}
+body.irgun-android .android-search-assist .search-assist-heading {
+  padding:10px 14px 6px;
+  color:#617084;
+  font-size:12px;
+  font-weight:800;
+}
+body.irgun-android .android-search-assist button {
+  width:100%;
+  min-height:44px;
+  padding:9px 13px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  border:0;
+  border-bottom:1px solid #eef1f5;
+  background:#fff;
+  color:var(--navy);
+  text-align:start;
+  font-size:13px;
+}
+body.irgun-android .android-search-assist button:last-child {border-bottom:0;}
+body.irgun-android .android-search-assist button:active,
+body.irgun-android .android-search-assist button:focus-visible {
+  outline:2px solid #b99457;
+  outline-offset:-2px;
+  background:#f2f6fa;
+}
+body.irgun-android .android-search-assist strong {
+  flex:1 1 0;
+  min-width:0;
+  font-size:13px;
+  font-weight:700;
+  overflow:hidden;
+  white-space:nowrap;
+  text-overflow:ellipsis;
+}
+body.irgun-android .android-search-assist small {
+  flex:0 0 auto;
+  font-size:11px;
+  color:#66788c;
+}
+body.irgun-android .android-search-assist .search-assist-history-icon {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  flex:0 0 19px;
+  color:#64758a;
+}
+body.irgun-android .android-search-assist .search-assist-history-icon svg {
+  width:17px;
+  height:17px;
+}
+@media (max-width:390px) {
+  body.irgun-android .android-search-assist button {
+    min-height:44px;
+    padding-inline:10px;
+  }
+}
