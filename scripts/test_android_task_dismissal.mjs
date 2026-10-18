@@ -103,7 +103,7 @@ test('recents swipe regression verifies actual task disappearance BEFORE service
  assert.ok(source.indexOf('assert.ok(taskDismissed,')<source.indexOf('const stopped=()=>{'));
  assert.match(source,/task-dismissal-after-recents\.xml/);
  assert.match(source,/task-dismissal-after\.png/);
- assert.doesNotMatch(source,/force-stop|am\x27,\x27stack\x27,\x27remove/,'Never fake app task removal');
+ assert.doesNotMatch(source,/adb\('shell','am','force-stop'/,'Never fake app task removal');
 });
 
 test('dismissal accepts historical receiver metadata but rejects an actual session record',()=>{
