@@ -296,6 +296,27 @@ test('controller visibility guard reads current state immediately before the eig
  assert.equal(taps,0);
 });
 
+
+test('fresh native controller check accepts already-visible controls after a real physical tap',async()=>{
+ const media={surfaceX:0,surfaceY:121,surfaceVisibleWidth:320,surfaceVisibleHeight:180,
+   controllerFullyVisible:true,pipButtonVisible:true,qualityButtonVisible:true,
+   elapsedTimeRect:{x:10,y:275,width:44,height:19},
+   durationTimeRect:{x:248,y:275,width:56,height:19},
+   seekBarRect:{x:0,y:221,width:320,height:48},doubleTapSeekCount:0};
+ const touches=[],delays=[];
+ const shown=await revealNativeControlsWithPhysicalTaps({
+   sample:async()=>({media3:{...media}}),fresh:true,
+   adb:(...args)=>touches.push(args),delay:async ms=>delays.push(ms)
+ });
+ assert.ok(nativeControlsReady(shown.media3));
+ assert.equal(touches.length,1,'A controller that stays fully visible must not exhaust three unnecessary tap retries');
+ assert.equal(touches[0][0],'shell');
+ assert.equal(touches[0][1],'input');
+ assert.equal(touches[0][2],'tap');
+ assert.equal(shown.media3.doubleTapSeekCount,0,'Controller refresh may not accidentally seek');
+ assert.ok(delays.includes(550),'Tap attempts should be separated beyond the double-tap seek window');
+});
+
 test('partial controller visibility performs separate native hide and reveal taps',async()=>{
  const media={surfaceX:0,surfaceY:0,surfaceVisibleWidth:320,surfaceVisibleHeight:640,
    controllerFullyVisible:true,pipButtonVisible:false,qualityButtonVisible:false,

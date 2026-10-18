@@ -216,7 +216,14 @@ export async function revealNativeControlsWithPhysicalTaps({sample,adb,delay,fre
       for(let i=0;i<7;i++){await delay(200);last=await sample();guard(last);
         if(!last.media3.controllerFullyVisible){hidden=true;break;}}
       await delay(550); // safely outside Android's double-tap seek window
-      if(!hidden)continue;
+      // Some Media3 surfaces keep the toolbar visible despite a physical tap.
+      // A fully visible toolbar AFTER the actual tap is success, not a failed
+      // toggle: the old 'continue' exhausted retries even while ALL native
+      // controls, timestamps and the seek bar were visibly present.
+      if(!hidden) {
+        if(nativeControlsReady(last.media3))return last;
+        continue;
+      }
     }
     adb('shell','input','tap',...point);
     for(let i=0;i<9;i++){await delay(240);last=await sample();guard(last);
