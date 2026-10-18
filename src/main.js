@@ -217,6 +217,7 @@ const state = {
   libraryMode: 'all',
   librarySort: 'newest',
   libraryQuery: '',
+  librarySearchAssistOpen: false,
   librarySearchMode: 'catalog',
   transcriptMatchedVideoIds: new Set(),
   transcriptMatchTimes: new Map(),
@@ -1046,6 +1047,8 @@ function activeFilterChipsHtml() {
 }
 
 function searchAssistHtml() {
+  const android = Capacitor.getPlatform()==='android';
+  if (android && !state.librarySearchAssistOpen) return '';
   const he = currentLanguage() === 'he';
   const q = String(state.libraryQuery || '').trim();
   const suggestions = [];
@@ -1069,12 +1072,20 @@ function searchAssistHtml() {
   }
   const recent = !q && state.recentSearches.length ? state.recentSearches.slice(0,5) : [];
   if (!suggestions.length && !recent.length) return '';
+  if (android) {
+    const title = he ? 'חיפושים אחרונים' : 'Recent searches';
+    return `<div class="search-assist android-search-assist" role="region" aria-label="${title}">${recent.length ? `<div class="search-assist-heading">${title}</div>` : ''}${suggestions.map(row=>`<button type="button" data-search-suggestion="${esc(row.query)}"><strong dir="auto">${esc(row.label)}</strong><small>${esc(row.sub)}</small></button>`).join('')}${recent.map(query=>`<button type="button" class="search-assist-recent" data-search-suggestion="${esc(query)}"><span class="search-assist-history-icon" aria-hidden="true">${svgIcon('history')}</span><strong dir="auto">${esc(query)}</strong></button>`).join('')}</div>`;
+  }
   return `<div class="search-assist">${suggestions.map(row=>`<button data-search-suggestion="${esc(row.query)}"><strong>${esc(row.label)}</strong><small>${esc(row.sub)}</small></button>`).join('')}${recent.map(query=>`<button data-search-suggestion="${esc(query)}"><span>${svgIcon('history')}</span><strong>${esc(query)}</strong><small>${he?'חיפוש אחרון':'Recent'}</small></button>`).join('')}</div>`;
 }
 
 function refreshSearchAssist() {
   const node = document.getElementById('librarySearchAssist');
   if (node) node.innerHTML = searchAssistHtml();
+  if (Capacitor.getPlatform()==='android') {
+    const input = document.getElementById('librarySearch');
+    if (input) input.setAttribute('aria-expanded',String(Boolean(node?.firstElementChild)));
+  }
   bindSearchAssist(node || document);
 }
 
@@ -1083,6 +1094,7 @@ function bindSearchAssist(root=document) {
     state.libraryQuery = el.dataset.searchSuggestion || '';
     rememberLibrarySearch(state.libraryQuery);
     const input = document.getElementById('librarySearch'); if (input) input.value = state.libraryQuery;
+    if (Capacitor.getPlatform()==='android') { state.librarySearchAssistOpen=false; input?.blur(); }
     runLibrarySearch(); refreshSearchAssist();
   }));
 }
@@ -4698,7 +4710,7 @@ function shiurimHtml() {
       <div class="segmented large">
         ${['all', 'video', 'audio'].map(mode => `<button data-library-mode="${mode}" class="${state.libraryMode === mode ? 'active' : ''}">${mode === 'all' ? 'All' : mode[0].toUpperCase() + mode.slice(1)}</button>`).join('')}
       </div>
-      <div class="library-search"><input id="librarySearch" type="search" value="${esc(state.libraryQuery)}" placeholder="${currentLanguage()==='he'?'חיפוש כותרת, מרצה או קוד שיעור…':'Search title, speaker or lecture code…'}" autocomplete="off" autocapitalize="off" spellcheck="false"><select id="librarySearchMode" aria-label="Search mode"><option value="catalog" ${state.librarySearchMode === 'catalog' ? 'selected' : ''}>${currentLanguage()==='he'?'כותרת':'Title'}</option><option value="content" ${state.librarySearchMode === 'content' ? 'selected' : ''}>${currentLanguage()==='he'?'תוכן השיעור':'Shiur Content'}</option></select></div><div id="librarySearchAssist">${searchAssistHtml()}</div>${activeFilterChipsHtml()}
+      ${Capacitor.getPlatform()==='android'?'<div class="library-search-autocomplete">':''}<div class="library-search"><input id="librarySearch" type="search"${Capacitor.getPlatform()==='android'? ' aria-controls="librarySearchAssist" aria-expanded="'+(state.librarySearchAssistOpen?'true':'false')+'"':''} value="${esc(state.libraryQuery)}" placeholder="${currentLanguage()==='he'?'חיפוש כותרת, מרצה או קוד שיעור…':'Search title, speaker or lecture code…'}" autocomplete="off" autocapitalize="off" spellcheck="false"><select id="librarySearchMode" aria-label="Search mode"><option value="catalog" ${state.librarySearchMode === 'catalog' ? 'selected' : ''}>${currentLanguage()==='he'?'כותרת':'Title'}</option><option value="content" ${state.librarySearchMode === 'content' ? 'selected' : ''}>${currentLanguage()==='he'?'תוכן השיעור':'Shiur Content'}</option></select></div><div id="librarySearchAssist">${searchAssistHtml()}</div>${Capacitor.getPlatform()==='android'?'</div>':''}${activeFilterChipsHtml()}
       <button class="library-filter-toggle ${state.filterPanelOpen ? 'open' : ''}" data-toggle-library-filters="1" aria-expanded="${state.filterPanelOpen ? 'true' : 'false'}"><span class="library-filter-toggle-label"><i class="fa-solid fa-sliders" aria-hidden="true"></i><span>Filters</span></span></button>
       <div class="library-filter-panel ${state.filterPanelOpen ? 'open' : ''}">
         ${sortChoiceHtml()}
@@ -7411,20 +7423,46 @@ function bind() {
   document.querySelectorAll('[data-delete-confirm]').forEach(el => el.addEventListener('click', deleteCurrentAccount));
 
   const librarySearch = document.getElementById('librarySearch');
-  if (librarySearch) librarySearch.addEventListener('input', () => {
-    state.libraryQuery = librarySearch.value;
-    state.libraryLimit = 48;
-    refreshSearchAssist();
-    clearTimeout(librarySearch._timer);
-    librarySearch._timer = setTimeout(runLibrarySearch, 110);
-  });
-
-
-  if (librarySearch) librarySearch.addEventListener('keydown', event => { if(event.key==='Enter'){ if(String(librarySearch.value||'').trim()) usageAnalytics.event('search',{dedupeKey:'app-search',cooldownMs:2000}); rememberLibrarySearch(librarySearch.value); refreshSearchAssist(); librarySearch.blur(); } });
+  if (librarySearch) {
+    const androidAssist=Capacitor.getPlatform()==='android';
+    if (androidAssist) {
+      const openAssist=()=>{if(!state.librarySearchAssistOpen){state.librarySearchAssistOpen=true;refreshSearchAssist();}};
+      librarySearch.addEventListener('focus',openAssist);
+      librarySearch.addEventListener('click',openAssist);
+      librarySearch.addEventListener('blur',()=>{
+        // Touch selection happens after blur; allow the suggestion click first.
+        setTimeout(()=>{
+          const focused=document.activeElement,assist=document.getElementById('librarySearchAssist');
+          if(focused!==librarySearch&&!assist?.contains(focused)&&state.librarySearchAssistOpen){
+            state.librarySearchAssistOpen=false;refreshSearchAssist();
+          }
+        },160);
+      });
+    }
+    librarySearch.addEventListener('input',()=>{
+      state.libraryQuery=librarySearch.value;state.libraryLimit=48;
+      if(androidAssist)state.librarySearchAssistOpen=true;
+      refreshSearchAssist();
+      clearTimeout(librarySearch._timer);
+      librarySearch._timer=setTimeout(runLibrarySearch,110);
+    });
+    librarySearch.addEventListener('keydown',event=>{
+      if(androidAssist&&event.key==='Escape'){
+        state.librarySearchAssistOpen=false;refreshSearchAssist();librarySearch.blur();return;
+      }
+      if(event.key==='Enter'){
+        if(androidAssist){event.preventDefault();state.librarySearchAssistOpen=false;}
+        if(String(librarySearch.value||'').trim())usageAnalytics.event('search',{dedupeKey:'app-search',cooldownMs:2000});
+        rememberLibrarySearch(librarySearch.value);
+        refreshSearchAssist();librarySearch.blur();
+      }
+    });
+  }
   bindSearchAssist(document);
 
   const librarySearchMode = document.getElementById('librarySearchMode');
   if (librarySearchMode) librarySearchMode.addEventListener('change', () => {
+    if(Capacitor.getPlatform()==='android'){state.librarySearchAssistOpen=false;refreshSearchAssist();}
     state.librarySearchMode = librarySearchMode.value === 'content' ? 'content' : 'catalog';
     state.libraryLimit = 48;
     runLibrarySearch();
@@ -10367,6 +10405,15 @@ if (Capacitor.getPlatform() === 'android' && Capacitor.isNativePlatform()) {
     }
   });
 }
+
+// One document listener for all renders; taps outside the search dismiss it.
+document.addEventListener('pointerdown',event=>{
+  if(Capacitor.getPlatform()!=='android'||!state.librarySearchAssistOpen)return;
+  const area=document.querySelector('.library-search-autocomplete');
+  if(area?.contains(event.target))return;
+  state.librarySearchAssistOpen=false;
+  refreshSearchAssist();
+},true);
 
 render();
 PlaybackController.init().catch(()=>{});
