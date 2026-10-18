@@ -809,12 +809,17 @@ test('restart restores the exact Drive-inclusive catalog cache and retains legac
     const state={counter:1,trends:{}};
     const cache=new Map([['bootstrap:'+path,{data:[video],savedAt:123}]]);
     const context={state,Math,Map,console:{warn(){}},loadMetadata:async()=>{},
+      // Warm-start cache is usable while online without falsely announcing
+      // an offline fallback. Its platform/network context must be explicit.
+      Capacitor:{getPlatform:()=> 'android'},navigator:{onLine:true},
       offlineCacheGet:async key=>cache.get(key)||null,enrichVideo:v=>v,enrichAudio:v=>v,
       itemDate:()=>0,videoId:v=>v.id,rawAudioId:v=>v.id,render(){}};
     const start=mainSource.indexOf('async function hydrateInitialCatalogCache(');
     runInNewContext(mainSource.slice(start,mainSource.indexOf('async function bootstrap(',start))+'\nthis.hydrate=hydrateInitialCatalogCache;',context);
     assert.equal(await context.hydrate(),true,'The saved '+path+' catalog must be usable after process restart');
     assert.equal(state.loading,false);assert.equal(state.videoById.get(video.id),video);
+    assert.equal(state.usingCachedLibrary,false,
+      'Cached videos load immediately, but Android must wait for the live check before showing the offline notice');
   }
 });
 test('Android session restores only verified offline identity for real /me transport failures, never revoked tokens',async()=>{
