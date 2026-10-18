@@ -62,6 +62,10 @@ public class MainActivity extends BridgeActivity {
         videoDisplay = new IrgunVideoDisplayController(this);
         fullscreenBackCallback = new OnBackPressedCallback(false) {
             @Override public void handleOnBackPressed() {
+                // A rotated video choice popup lives inside PlayerView, not
+                // in its own OS Dialog window. Back closes it first rather than
+                // destroying fullscreen or the continuing native Media3 video.
+                if (IrgunNativeVideoPlugin.dismissRotatedChoiceMenu()) return;
                 if (!videoFullscreen) {
                     setEnabled(false);
                     getOnBackPressedDispatcher().onBackPressed();

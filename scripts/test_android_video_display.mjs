@@ -364,3 +364,36 @@ test('Android Library section and top navigation controls are bigger and centere
  assert.match(section,/body\.irgun-android \.toolbar-card \.segmented button/);
  assert.match(section,/@media \(max-width:390px\)/);
 });
+
+test('portrait-locked fullscreen quality and speed menus follow the same rotated Media3 PlayerView',()=>{
+  const java=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
+  const activity=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/MainActivity.java','utf8');
+  assert.match(java,/Math\.abs\(surface\.getRotation\(\)\) != 90f/);
+  assert.match(java,/private boolean showRotatedChoiceMenu\(/);
+  assert.match(java,/surface\.addView\(overlay,new FrameLayout\.LayoutParams\(/,
+    'The popup must inherit PlayerView rotation rather than be a portrait Activity dialog');
+  assert.match(java,/rotatedChoicePanel = panel/);
+  assert.match(java,/rotatedChoiceOverlay = overlay/);
+  assert.match(java,/setOnClickListener\(view -> dismissRotatedChoiceMenuInternal\(\)\)/);
+  assert.match(java,/rotatedChoiceOverlay != null && !remainsSideways/);
+  assert.match(java,/rotatedChoiceOverlay != null[\s\S]*?return super\.dispatchTouchEvent\(event\)/,
+    'A modal touch cannot also double-tap seek or minimize the same video');
+  assert.match(java,/scrollHeight = Math\.min\(dp\(44\*labels\.length\)/,
+    'Speed choices must remain scrollable on a short landscape screen');
+  assert.match(java,/showRotatedChoiceMenu\("quality","Video quality"/);
+  assert.match(java,/showRotatedChoiceMenu\("speed","Playback speed"/);
+  assert.match(java,/response\.put\("qualityMenuVisible",[\s\S]*?"quality"\.equals\(rotatedChoiceKind\)/);
+  assert.match(java,/response\.put\("speedMenuVisible",[\s\S]*?"speed"\.equals\(rotatedChoiceKind\)/);
+  assert.match(java,/response\.put\("rotatedMenuParentRotationDegrees"/);
+  assert.match(activity,/if \(IrgunNativeVideoPlugin\.dismissRotatedChoiceMenu\(\)\) return;/);
+  assert.match(java,/new AlertDialog\.Builder\(getActivity\(\)\)\.setTitle\("Video quality"\)/,
+    'Ordinary unlocked fullscreen retains native Android quality dialog');
+  assert.match(java,/new AlertDialog\.Builder\(getActivity\(\)\)\.setTitle\("Playback speed"\)/,
+    'Ordinary unlocked fullscreen retains native Android speed dialog');
+  assert.match(java,/applyQualityChoice\(player,choices,which\)/,
+    'Both rotated and regular menus must select the same Media3 track');
+  assert.doesNotMatch(java.slice(java.indexOf('private boolean showRotatedChoiceMenu('),
+    java.indexOf('private void updateVideoActions()')),/setRequestedOrientation|new ExoPlayer|seekTo\(/,
+    'Choosing quality or speed must not force device rotation, rebuild a player or seek');
+});
+

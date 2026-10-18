@@ -2,6 +2,12 @@ package org.irgunshiuraitorah.app;
 
 import android.content.Intent;
 import android.app.AlertDialog;
+import android.content.res.ColorStateList;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.view.KeyEvent;
+import android.widget.RadioButton;
+import android.widget.ScrollView;
 import android.os.Build;
 import android.view.MotionEvent;
 import android.view.ViewConfiguration;
@@ -62,6 +68,13 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     private Button qualityButton;
     private ImageButton pipButton, sizeButton, minimizeButton, speedButton;
     private AlertDialog qualityDialog, speedDialog;
+    // A system AlertDialog belongs to the PORTRAIT Activity window even if a
+    // rotation-locked tablet has physically rotated its Media3 PlayerView.
+    // Put menus inside that SAME rotated PlayerView instead, never rotate the
+    // whole Activity or alter the current ExoPlayer/MediaItem.
+    private FrameLayout rotatedChoiceOverlay;
+    private LinearLayout rotatedChoicePanel;
+    private String rotatedChoiceKind = "";
     private boolean systemPip;
     private int requestedQualityHeight;
     private int tabletTilt;
@@ -127,6 +140,12 @@ public final class IrgunNativeVideoPlugin extends Plugin {
                 // Covered header/content remains owned by the WebView below.
                 return false;
             }
+            if (rotatedChoiceOverlay != null) {
+                // A native modal owns ALL touches: neither swipe-to-mini nor
+                // double-tap seek may run behind its selectable rows.
+                canSwipe=false; canDoubleTap=false; doubleTap.cancel();
+                return super.dispatchTouchEvent(event);
+            }
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 downX = event.getX(); downY = event.getY(); downTime=event.getEventTime();
                 holdingActionBar = videoActions != null && videoActions.isShown()
@@ -155,7 +174,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
                     || event.getActionMasked() == MotionEvent.ACTION_CANCEL)) {
                 holdingActionBar=false;
                 if ((qualityDialog == null || !qualityDialog.isShowing())
-                        && (speedDialog == null || !speedDialog.isShowing())) setControllerShowTimeoutMs(8000);
+                        && (speedDialog == null || !speedDialog.isShowing())
+                        && rotatedChoiceOverlay == null) setControllerShowTimeoutMs(8000);
             }
             if (event.getActionMasked() == MotionEvent.ACTION_UP) {
                 float slop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
@@ -231,6 +251,137 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         return button;
     }
 
+
+    // Called by the fullscreen Activity Back handler BEFORE it exits video.
+    // Returning true consumes Back and closes just the active rotated menu.
+    public static boolean dismissRotatedChoiceMenu() {
+        IrgunNativeVideoPlugin plugin = current.get();
+        if (plugin == null || plugin.rotatedChoiceOverlay == null) return false;
+        plugin.dismissRotatedChoiceMenuInternal();
+        return true;
+    }
+
+    private void dismissRotatedChoiceMenuInternal() {
+        FrameLayout overlay = rotatedChoiceOverlay;
+        if (overlay == null) return;
+        rotatedChoiceOverlay = null;
+        rotatedChoicePanel = null;
+        rotatedChoiceKind = "";
+        if (overlay.getParent() instanceof ViewGroup)
+            ((ViewGroup) overlay.getParent()).removeView(overlay);
+        if (surface != null) {
+            surface.setControllerShowTimeoutMs(8000);
+            if (visible && !mini && !systemPip) surface.showController();
+        }
+        updateVideoActions();
+    }
+
+    private boolean showRotatedChoiceMenu(String kind, String title, String[] labels,
+                                           int checked, java.util.function.IntConsumer selected) {
+        // If Android rotates its actual Activity we keep the existing native
+        // AlertDialog. Only a PlayerView visually rotated inside a LOCKED
+        // portrait display needs this surface-owned landscape menu.
+        if (surface == null || !visible || mini || systemPip || !fullscreen
+                || Math.abs(surface.getRotation()) != 90f) return false;
+        dismissRotatedChoiceMenuInternal();
+
+        // This FULL-SIZE overlay is a direct CHILD of the same rotated
+        // PlayerView; inherited +/-90 degree rotation makes text, radio
+        // choices, Cancel and physical hit targets align with the VIDEO.
+        final FrameLayout overlay = new FrameLayout(getActivity());
+        overlay.setBackgroundColor(0xAD000000);
+        overlay.setClickable(true);
+        overlay.setContentDescription(title + " menu");
+        overlay.setOnClickListener(view -> dismissRotatedChoiceMenuInternal());
+        overlay.setFocusableInTouchMode(true);
+        overlay.setOnKeyListener((v,key,event) -> {
+            if (key != KeyEvent.KEYCODE_BACK) return false;
+            if (event.getAction() == KeyEvent.ACTION_UP)
+                dismissRotatedChoiceMenuInternal();
+            return true;
+        });
+        final LinearLayout panel = new LinearLayout(getActivity());
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setClickable(true);
+        panel.setElevation(dp(10));
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(0xFF3E3E3E);
+        background.setCornerRadius(dp(8));
+        panel.setBackground(background);
+        panel.setPadding(dp(8),dp(6),dp(8),dp(6));
+        final int panelWidth = Math.min(dp(540),Math.max(dp(200),Math.round(surface.getWidth()*.82f)));
+        final int panelHeight = Math.max(dp(148),Math.round(surface.getHeight()*.90f));
+
+        TextView heading = new TextView(getActivity());
+        heading.setText(title);
+        heading.setTextSize(18f);
+        heading.setTypeface(Typeface.DEFAULT,Typeface.BOLD);
+        heading.setTextColor(Color.WHITE);
+        heading.setGravity(Gravity.CENTER_VERTICAL);
+        heading.setPadding(dp(16),0,dp(8),0);
+        panel.addView(heading,new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,dp(48)));
+
+        ScrollView scroll = new ScrollView(getActivity());
+        scroll.setFillViewport(false);
+        scroll.setVerticalScrollBarEnabled(labels.length > 5);
+        LinearLayout options = new LinearLayout(getActivity());
+        options.setOrientation(LinearLayout.VERTICAL);
+        for (int index=0;index<labels.length;index++) {
+            final int value=index;
+            RadioButton row = new RadioButton(getActivity());
+            row.setText(labels[index]);
+            row.setContentDescription(labels[index]);
+            row.setTextSize(15f);
+            row.setTextColor(Color.WHITE);
+            row.setButtonTintList(ColorStateList.valueOf(0xFF80CBC4));
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setMinHeight(dp(44));
+            row.setPadding(dp(12),0,dp(14),0);
+            row.setChecked(index == checked);
+            row.setOnClickListener(view -> {
+                try { selected.accept(value); }
+                finally { dismissRotatedChoiceMenuInternal(); }
+            });
+            options.addView(row,new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,dp(44)));
+        }
+        scroll.addView(options);
+        // A phone-sized short landscape edge must not clip the last speed.
+        // Scroll the original rows instead of overflowing the physical screen.
+        int scrollHeight = Math.min(dp(44*labels.length),
+            Math.max(dp(88),panelHeight-dp(110)));
+        panel.addView(scroll,new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,scrollHeight));
+
+        Button cancel = new Button(getActivity());
+        cancel.setText("CANCEL");
+        cancel.setAllCaps(false);
+        cancel.setTextColor(0xFF80CBC4);
+        cancel.setTextSize(13f);
+        cancel.setBackgroundColor(Color.TRANSPARENT);
+        cancel.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        cancel.setPadding(dp(8),0,dp(16),0);
+        cancel.setContentDescription("Cancel");
+        cancel.setOnClickListener(view -> dismissRotatedChoiceMenuInternal());
+        panel.addView(cancel,new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,dp(46)));
+
+        FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(
+            panelWidth,ViewGroup.LayoutParams.WRAP_CONTENT,Gravity.CENTER);
+        overlay.addView(panel,panelParams);
+        rotatedChoiceOverlay = overlay;
+        rotatedChoicePanel = panel;
+        rotatedChoiceKind = kind;
+        surface.addView(overlay,new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT));
+        overlay.bringToFront();
+        surface.setControllerShowTimeoutMs(0);
+        updateVideoActions();
+        overlay.requestFocus();
+        return true;
+    }
+
     private void showSpeedMenu() {
         ExoPlayer player=IrgunPlaybackService.nativeVideoPlayer();
         if (player == null || systemPip || mini) return;
@@ -240,6 +391,10 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         for(int i=0;i<speeds.length;i++)
             if(Math.abs(player.getPlaybackParameters().speed-speeds[i])<.01f)checked=i;
         surface.setControllerShowTimeoutMs(0);
+        if (showRotatedChoiceMenu("speed","Playback speed",labels,checked,which -> {
+            if (player == IrgunPlaybackService.nativeVideoPlayer())
+                IrgunPlaybackService.setSpeed(speeds[which]);
+        })) return;
         speedDialog=new AlertDialog.Builder(getActivity()).setTitle("Playback speed")
             .setSingleChoiceItems(labels,checked,(dialog,which)->{
                 if(player == IrgunPlaybackService.nativeVideoPlayer())
@@ -272,6 +427,24 @@ public final class IrgunNativeVideoPlugin extends Plugin {
         return new ArrayList<>(choices.values());
     }
 
+    private void applyQualityChoice(ExoPlayer player,List<Resolution> choices,int which) {
+        // One track-selection path for normal and rotation-locked UI; do not
+        // recreate ExoPlayer, reprepare, seek, or change MediaItem identity.
+        if (player != IrgunPlaybackService.nativeVideoPlayer()) return;
+        TrackSelectionParameters.Builder selection=player.getTrackSelectionParameters()
+            .buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO);
+        if (which > 0) {
+            Resolution choice=choices.get(which-1);
+            if (!player.getCurrentTracks().getGroups().contains(choice.group)) return;
+            selection.setOverrideForType(new TrackSelectionOverride(
+                choice.group.getMediaTrackGroup(),choice.track));
+            requestedQualityHeight=choice.height;
+        } else requestedQualityHeight=0;
+        player.setTrackSelectionParameters(selection.build());
+        if (qualityButton != null)
+            qualityButton.setText(requestedQualityHeight==0 ? "Auto" : requestedQualityHeight+"p");
+    }
+
     private void showQualityMenu() {
         ExoPlayer player=IrgunPlaybackService.nativeVideoPlayer();
         if (player == null || systemPip || mini) return;
@@ -283,23 +456,13 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             if (requestedQualityHeight==choices.get(i).height) checked=i+1;
         }
         surface.setControllerShowTimeoutMs(0);
+        if (showRotatedChoiceMenu("quality","Video quality",labels,checked,
+                which -> applyQualityChoice(player,choices,which))) return;
         qualityDialog=new AlertDialog.Builder(getActivity()).setTitle("Video quality")
-            .setSingleChoiceItems(labels, checked, (dialog, which) -> {
-                // Dialog may outlive a source switch. Never apply a stale TrackGroup.
-                if (player != IrgunPlaybackService.nativeVideoPlayer()) { dialog.dismiss(); return; }
-                TrackSelectionParameters.Builder selection=player.getTrackSelectionParameters()
-                    .buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO);
-                if (which > 0) {
-                    Resolution choice=choices.get(which-1);
-                    if (!player.getCurrentTracks().getGroups().contains(choice.group)) { dialog.dismiss(); return; }
-                    selection.setOverrideForType(new TrackSelectionOverride(choice.group.getMediaTrackGroup(),choice.track));
-                    requestedQualityHeight=choice.height;
-                } else requestedQualityHeight=0;
-                // Track selection only: no seek, prepare, source replacement or player.
-                player.setTrackSelectionParameters(selection.build());
-                qualityButton.setText(requestedQualityHeight==0 ? "Auto" : requestedQualityHeight+"p");
+            .setSingleChoiceItems(labels,checked,(dialog,which)->{
+                applyQualityChoice(player,choices,which);
                 dialog.dismiss();
-            }).setNegativeButton("Cancel", null).create();
+            }).setNegativeButton("Cancel",null).create();
         qualityDialog.setOnDismissListener(dialog -> {
             if (surface != null) {
                 surface.setControllerShowTimeoutMs(8000);
@@ -311,7 +474,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
 
     private void updateVideoActions() {
         if (videoActions == null) return;
-        videoActions.setVisibility(visible && !mini && !systemPip && controllerVisible
+        videoActions.setVisibility(visible && !mini && !systemPip && controllerVisible && rotatedChoiceOverlay == null
             ? View.VISIBLE : View.GONE);
         sizeButton.setImageResource(fullscreen ? R.drawable.irgun_shrink : R.drawable.irgun_fullscreen);
         sizeButton.setContentDescription(fullscreen ? "Exit video fullscreen" : "Enter video fullscreen");
@@ -582,6 +745,13 @@ public final class IrgunNativeVideoPlugin extends Plugin {
 
     private void layoutSurface() {
         if (surface == null || root == null || clipHost == null || getBridge() == null) return;
+        // If the user turns upright, enters PiP, or closes fullscreen with a
+        // popup open, remove the surface-owned popup BEFORE resetting rotation.
+        boolean remainsSideways = fullscreen && visible && !mini && !systemPip
+            && tabletTilt != VideoRotationPolicy.PORTRAIT && root.getHeight()>root.getWidth()
+            && getContext().getResources().getConfiguration().smallestScreenWidthDp>=600;
+        if (rotatedChoiceOverlay != null && !remainsSideways)
+            dismissRotatedChoiceMenuInternal();
         WebView web = getBridge().getWebView();
         updateVideoActions();
         if ((fullscreen || systemPip) && visible) {
@@ -923,8 +1093,15 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("elapsedTimeText", position == null ? "" : position.getText().toString());
             response.put("durationTimeText", duration == null ? "" : duration.getText().toString());
             response.put("qualityHeight", requestedQualityHeight);
-            response.put("qualityMenuVisible", qualityDialog != null && qualityDialog.isShowing());
-            response.put("speedMenuVisible", speedDialog != null && speedDialog.isShowing());
+            boolean rotatedMenuOpen = rotatedChoiceOverlay != null && rotatedChoiceOverlay.isShown();
+            response.put("qualityMenuVisible", (qualityDialog != null && qualityDialog.isShowing())
+                || (rotatedMenuOpen && "quality".equals(rotatedChoiceKind)));
+            response.put("speedMenuVisible", (speedDialog != null && speedDialog.isShowing())
+                || (rotatedMenuOpen && "speed".equals(rotatedChoiceKind)));
+            response.put("rotatedMenuVisible", rotatedMenuOpen);
+            response.put("rotatedMenuKind", rotatedMenuOpen ? rotatedChoiceKind : "");
+            response.put("rotatedMenuParentRotationDegrees", rotatedMenuOpen && surface != null ? surface.getRotation() : 0f);
+            response.put("rotatedMenuPanelRect", controlRect(rotatedChoicePanel));
             response.put("playbackSpeed", state.active && IrgunPlaybackService.nativeVideoPlayer()!=null
                 ? IrgunPlaybackService.nativeVideoPlayer().getPlaybackParameters().speed : 1f);
             response.put("speedButtonRect", controlRect(speedButton));
@@ -986,6 +1163,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     }
 
     private void removeSurface() {
+        dismissRotatedChoiceMenuInternal();
         if (observedMiniPlayer != null) observedMiniPlayer.removeListener(miniPlaybackListener);
         observedMiniPlayer = null;
         if (miniPlayPauseTarget != null) {
