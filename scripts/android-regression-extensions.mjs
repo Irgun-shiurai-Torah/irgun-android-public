@@ -389,15 +389,21 @@ async function sampleMovingVideo(){
 ensureReport();
 try{
   await connect();bounds=await nativeBounds();
-  const initial=await wait(s=>s.ready&&s.watchId&&s.watchMode==='audio'&&s.native.audioIsPlaying,'Existing real-MP4 audio/video handoff test must leave audio playing');
-  assert.equal(initial.isLoggedIn,process.env.IRGUN_EXPECT_SIGNED_IN==='1','Media suite must execute in its declared logged-in or logged-out state');
-  report.accountMode=initial.isLoggedIn?'logged-in':'logged-out';
-  // This is the true fresh session BEFORE earlier suites change speed to 2x.
-  // Never mislabel a later intentionally-changed speed as a broken default.
-  assert.ok(Math.abs(initial.speed-1)<.01&&Math.abs(initial.native.playbackSpeed-1)<.05,
-    'A new Android playback session must default to 1x, never 0.75x');
-  audibleAudio(initial);report.initial={watchId:initial.watchId,positionMs:initial.native.audioPositionMs,defaultSpeed:initial.speed};
-  checks('Started from successful real-media 10-minute audio/video handoff');
+  if(process.env.IRGUN_SMALL_SCREEN_ONLY==='1') {
+    await wait(s=>s.ready,'App must become ready for the isolated small-screen layout check',45000);
+    report.accountMode='layout-only';
+    checks('Started isolated small-screen layout check without unrelated playback setup');
+  } else {
+    const initial=await wait(s=>s.ready&&s.watchId&&s.watchMode==='audio'&&s.native.audioIsPlaying,'Existing real-MP4 audio/video handoff test must leave audio playing');
+    assert.equal(initial.isLoggedIn,process.env.IRGUN_EXPECT_SIGNED_IN==='1','Media suite must execute in its declared logged-in or logged-out state');
+    report.accountMode=initial.isLoggedIn?'logged-in':'logged-out';
+    // This is the true fresh session BEFORE earlier suites change speed to 2x.
+    // Never mislabel a later intentionally-changed speed as a broken default.
+    assert.ok(Math.abs(initial.speed-1)<.01&&Math.abs(initial.native.playbackSpeed-1)<.05,
+      'A new Android playback session must default to 1x, never 0.75x');
+    audibleAudio(initial);report.initial={watchId:initial.watchId,positionMs:initial.native.audioPositionMs,defaultSpeed:initial.speed};
+    checks('Started from successful real-media 10-minute audio/video handoff');
+  }
 
   await section('Repeated audio/video handoffs preserve playing position and single audio source',async()=>{
     for(let i=0;i<2;i++){

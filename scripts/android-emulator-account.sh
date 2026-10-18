@@ -26,6 +26,15 @@ adb shell am force-stop org.irgunshiuraitorah.app || true
 adb shell am start -n org.irgunshiuraitorah.app/.SplashActivity
 sleep 4
 adb exec-out screencap -p > emulator-report/after-splash.png || true
+
+# The failed API 34 check is a WebView layout regression, not an account or
+# playback regression. In quick-check mode, test that exact layout against the
+# fresh real app instead of spending time on unrelated account/playback suites.
+if [[ "${IRGUN_SMALL_SCREEN_ONLY:-0}" == "1" ]]; then
+  node scripts/android-regression-extensions.mjs
+  exit $?
+fi
+
 export IRGUN_KEEP_QA_SESSION=1
 node scripts/android-emulator-account.mjs
 # Exercise the already-entitled Belsky purchased lectures on the real native

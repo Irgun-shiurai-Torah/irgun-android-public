@@ -1543,12 +1543,17 @@ test('late HLS startup recovery retains one decoder and exposes real failure cau
 });
 
 
-test('API34 quick-check mode skips unrelated expensive regression sections only',()=>{
+test('API34 quick-check runs only the failing layout and skips account/media suites',()=>{
  const source=readFileSync('scripts/android-regression-extensions.mjs','utf8');
+ const shell=readFileSync('scripts/android-emulator-account.sh','utf8');
+ const workflow=readFileSync('.github/workflows/android-release-regressions.yml','utf8');
  assert.match(source,/IRGUN_SMALL_SCREEN_ONLY==='1'/);
  assert.match(source,/name!=='Small-screen English\/Hebrew layouts retain usable navigation'/);
- assert.match(source,/report\.skippedScenarios\.push\(name\)/);
- assert.match(source,/await section\('Small-screen English\/Hebrew layouts retain usable navigation'/);
+ assert.match(source,/App must become ready for the isolated small-screen layout check/);
+ assert.match(shell,/if \[\[ "\$\{IRGUN_SMALL_SCREEN_ONLY:-0\}" == "1" \]\]; then[\s\S]*?node scripts\/android-regression-extensions\.mjs[\s\S]*?exit \$\?/);
+ assert.match(workflow,/IRGUN_SMALL_SCREEN_ONLY: '1'/);
+ assert.match(workflow,/Independent authenticated comment CRUD, deletion and rejection checks\n        if: \$\{\{ env\.IRGUN_SMALL_SCREEN_ONLY != '1' \}\}/);
+ assert.match(workflow,/Independent Android token and website cookie session sync checks\n        if: \$\{\{ env\.IRGUN_SMALL_SCREEN_ONLY != '1' \}\}/);
 });
 
 test('Android floating navigation has narrow-viewport class and viewport-anchored layout',()=>{
