@@ -3310,10 +3310,12 @@ body.irgun-android .android-search-assist .search-assist-history-icon svg {
 }
 
  
-/* Android nav fit for 240px-wide Hebrew and English layouts */
-@media (max-width:320px) {
-  body.irgun-android .android-floating-nav,
-  html[dir="rtl"] body.irgun-android .android-floating-nav {
+/* Android nav fit for narrow Hebrew and English layouts.
+   Android 14 reports innerWidth 271 for a 240px wm-size override; keep the
+   breakpoint above the physical-to-WebView viewport conversion. */
+@media (max-width:400px) {
+  #androidBottomNavigationMount .bottom-nav.android-floating-nav,
+  html[dir="rtl"] #androidBottomNavigationMount .bottom-nav.android-floating-nav {
     position:fixed!important;
     box-sizing:border-box!important;
     left:6px!important;
@@ -3331,8 +3333,8 @@ body.irgun-android .android-search-assist .search-assist-history-icon svg {
     gap:0!important;
     overflow:hidden!important;
   }
-  body.irgun-android .android-floating-nav .nav-btn,
-  html[dir="rtl"] body.irgun-android .android-floating-nav .nav-btn {
+  #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-btn,
+  html[dir="rtl"] #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-btn {
     box-sizing:border-box!important;
     display:flex!important;
     width:auto!important;
@@ -3344,12 +3346,12 @@ body.irgun-android .android-search-assist .search-assist-history-icon svg {
     overflow:hidden!important;
     font-size:8px!important;
   }
-  body.irgun-android .android-floating-nav .nav-icon {
+  #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-icon {
     width:22px!important;
     height:22px!important;
     flex:0 0 22px!important;
   }
-  body.irgun-android .android-floating-nav .nav-btn > span:last-child {
+  #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-btn > span:last-child {
     display:block!important;
     width:100%!important;
     max-width:100%!important;

@@ -1548,7 +1548,8 @@ test('Android floating navigation has compact-width safeguards for Hebrew and En
  const start=css.indexOf('/* Android nav fit for 240px-wide Hebrew and English layouts */');
  assert.ok(start>=0,'Small-screen Android nav layout rule must exist');
  const rules=css.slice(start);
- assert.match(rules,/@media\s*\(max-width:\s*320px\)/);
+ assert.match(rules,/@media\s*\(max-width:\s*400px\)/);
+ assert.match(rules,/#androidBottomNavigationMount \.bottom-nav\.android-floating-nav/);
  assert.match(rules,/left:\s*6px/);
  assert.match(rules,/right:\s*6px/);
  assert.match(rules,/grid-template-columns:\s*repeat\(5,minmax\(0,1fr\)\)/);

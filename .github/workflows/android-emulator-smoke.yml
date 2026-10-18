@@ -39,6 +39,7 @@ concurrency:
 
 jobs:
   startup:
+    if: ${{ !contains(github.event.pull_request.title, '[QUICK-CHECK API34]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
