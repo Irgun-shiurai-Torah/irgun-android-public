@@ -93,14 +93,15 @@ try {
     const direction = dx < 0 ? 'left' : 'right';
     if(expected !== from.tab && !witnessed[direction]){
       const child = spawn('adb',['shell','input','swipe',
-        ...start.map(String),...end.map(String),'1000'],{stdio:'ignore'});
+        ...start.map(String),...end.map(String),'1800'],{stdio:'ignore'});
       const finished=new Promise((resolve,reject)=>{
         child.on('error',reject);
         child.on('close',code=>code===0?resolve():reject(Error('adb swipe failed: '+code)));
       });
       let seen=null;
-      for(let count=0;count<15;count++){
-        await delay(60);
+      const observations=[];
+      for(let count=0;count<42;count++){
+        await delay(35);
         try{
           const sample=JSON.parse(await evaluate(`JSON.stringify((()=>{
             const old=document.querySelector('#app .app-shell > .content');
@@ -111,13 +112,14 @@ try {
               from:document.querySelector('.bottom-nav .active')?.dataset.nav,
               nav:!!document.querySelector('#androidBottomNavigationMount .bottom-nav')};
           })())`));
+          observations.push(sample);
           if(sample.peek && sample.inert && sample.previewMedia===0 &&
               sample.nav && sample.from===from.tab && Math.abs(sample.x)>20 &&
               Math.abs(sample.nextX)<point.width){seen=sample;break;}
         }catch(_){/* CDP can be temporarily busy during a native touch */ }
       }
       await finished;
-      assert.ok(seen,'Page must move with the real Android finger BEFORE touchend: '+direction);
+      assert.ok(seen,'Page must move with the real Android finger BEFORE touchend: '+direction+'; samples='+JSON.stringify(observations));
       witnessed[direction]=true;
       report.checks.push({label:'Finger-following physical '+direction+' drag, stable native nav and zero duplicate media',sample:seen});
     }else{
