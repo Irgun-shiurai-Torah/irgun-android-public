@@ -1,21 +1,20 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
+# Keep only native Capacitor bridge entry points that JavaScript calls by
+# their declared plugin and method names. R8 can still optimize Media3,
+# Firebase, Google Identity, application implementation, and unused code.
+# These rules intentionally avoid keeping the entire app package.
 #
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# MainActivity registers native plugins explicitly. Capacitor discovers
+# @PluginMethod and callback methods reflectively; preserve their annotations.
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+-keep @com.getcapacitor.annotation.CapacitorPlugin class org.irgunshiuraitorah.app.*Plugin
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+-keepclassmembers class org.irgunshiuraitorah.app.*Plugin {
+    @com.getcapacitor.PluginMethod <methods>;
+    @com.getcapacitor.annotation.PermissionCallback <methods>;
+    @com.getcapacitor.annotation.ActivityCallback <methods>;
+}
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Android components named in AndroidManifest.xml (including the playback
+# service and Firebase messaging service) are kept by the Android Gradle
+# plugin. Dependencies provide their own consumer ProGuard rules.
