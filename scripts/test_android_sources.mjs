@@ -1543,6 +1543,14 @@ test('late HLS startup recovery retains one decoder and exposes real failure cau
 });
 
 
+test('API34 quick-check mode skips unrelated expensive regression sections only',()=>{
+ const source=readFileSync('scripts/android-regression-extensions.mjs','utf8');
+ assert.match(source,/IRGUN_SMALL_SCREEN_ONLY==='1'/);
+ assert.match(source,/name!=='Small-screen English\/Hebrew layouts retain usable navigation'/);
+ assert.match(source,/report\.skippedScenarios\.push\(name\)/);
+ assert.match(source,/await section\('Small-screen English\/Hebrew layouts retain usable navigation'/);
+});
+
 test('Android floating navigation has narrow-viewport class and viewport-anchored layout',()=>{
  const css=readFileSync(new URL('../src/style.css',import.meta.url),'utf8');
  const js=readFileSync(new URL('../src/android-bottom-navigation.js',import.meta.url),'utf8');

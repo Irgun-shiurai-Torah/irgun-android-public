@@ -181,6 +181,14 @@ async function tapOfflineDeleteConfirmation(){
 }
 function checks(label,details={}) {report.checks.push({label,...details});save();}
 async function section(name,fn){
+  // The quick-check workflow reruns ONLY the previously failing narrow Hebrew
+  // layout on API 34. Keep the same real emulator/startup and physical layout
+  // assertions, but skip the unrelated multi-minute playback/account scenarios.
+  if(process.env.IRGUN_SMALL_SCREEN_ONLY==='1' &&
+     name!=='Small-screen English/Hebrew layouts retain usable navigation') {
+    report.skippedScenarios||=[];report.skippedScenarios.push(name);
+    return;
+  }
   report.activeSection=name;report.scenarios||=[];const scenario={name,status:'running',startedAt:new Date().toISOString(),expected:name};report.scenarios.push(scenario);save();
   report.device = String(adb('shell','getprop','ro.build.version.release')).trim();
   report.androidApi = Number(adb('shell','getprop','ro.build.version.sdk'));

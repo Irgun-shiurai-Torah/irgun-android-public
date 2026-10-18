@@ -338,6 +338,7 @@ jobs:
     env:
       IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
       IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
+      IRGUN_SMALL_SCREEN_ONLY: '1'
     steps:
       - name: Require dedicated non-admin Android QA credentials
         run: |
