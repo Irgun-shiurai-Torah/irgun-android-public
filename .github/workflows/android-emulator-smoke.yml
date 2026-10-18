@@ -73,8 +73,13 @@ jobs:
       - name: Add emulator-only native volume observation
         run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+      - name: Build release and R8-minified QA APK
+        run: ./gradlew --no-daemon -PirgunR8Qa=true :app:assembleRelease :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
+      - name: Verify R8 produced real obfuscation maps
+        run: |
+          test -s android/app/build/outputs/mapping/release/mapping.txt
+          test -s android/app/build/outputs/mapping/debug/mapping.txt
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
