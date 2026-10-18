@@ -519,10 +519,16 @@ test('Android Follow uses website-reviewed keys and EXACT title-derived website 
   };
   const state={
     metadata:{lectures:{'reviewed-lecture':{speakerIds:['shmuel-yehuda-brisk']}}},
-    speakerAliasToId:new Map([['שמואל יהודה בריסק','shmuel-yehuda-brisk']]),
-    speakerById:new Map([['shmuel-yehuda-brisk',{
-      id:'shmuel-yehuda-brisk',displayHe:'הרב שמואל יהודה בריסק',displayEn:'Rav Shmuel Yehuda Brisk'
-    }]]),
+    speakerAliasToId:new Map([
+      ['שמואל יהודה בריסק','shmuel-yehuda-brisk'],
+      ['zev smith','zev-smith']
+    ]),
+    speakerById:new Map([
+      ['shmuel-yehuda-brisk',{
+        id:'shmuel-yehuda-brisk',displayHe:'הרב שמואל יהודה בריסק',displayEn:'Rav Shmuel Yehuda Brisk'
+      }],
+      ['zev-smith',{id:'zev-smith',displayHe:'הרב זאב סמיט',displayEn:'Rav Zev Smith'}]
+    ]),
     topicById:new Map(),follows:new Map()
   };
   let language='he';
@@ -550,8 +556,18 @@ test('Android Follow uses website-reviewed keys and EXACT title-derived website 
   state.follows.set('speaker:shmuel-yehuda-brisk',{type:'speaker',key:'shmuel-yehuda-brisk'});
   assert.match(context.renderFollow(reviewed),/עוקבים אחרי הרב שמואל יהודה בריסק/);
   language='en';assert.match(context.renderFollow(reviewed),/Following Rav Shmuel Yehuda Brisk/);
-  // No reviewed speaker: website watch.js uses auto-<slug> from the raw
-  // title, not the unrelated app-only auto-speaker:<normalized name>.
+  // A known speaker in the directory must use its canonical follow key,
+  // even if the lecture has no per-lecture reviewed mapping.
+  const canonicalEnglish={id:'canonical-zev',title:'Rav Zev Smith - The Beginning of Shemone Esrei',
+    _speakerIds:[],_speakerLabel:'Rav Zev Smith'};
+  html=context.renderFollow(canonicalEnglish);
+  assert.match(html,/data-follow-key="zev-smith"/);
+  assert.doesNotMatch(html,/data-follow-key="auto-zev-smith"/);
+  assert.deepEqual(Array.from(canonicalEnglish._speakerIds),['zev-smith']);
+
+  // Genuinely unknown speakers retain the website auto-<slug> key, not the
+  // unrelated app-only auto-speaker:<name> key.
+  state.speakerAliasToId.delete('שמואל יהודה בריסק');
   language='he';
   const unreviewed={id:'unreviewed',title:'הרב שמואל יהודה בריסק - שאלות חדשות',
     _speakerIds:['auto-speaker:שמואל יהודה בריסק'],_speakerLabel:'הרב שמואל יהודה בריסק'};
@@ -563,6 +579,7 @@ test('Android Follow uses website-reviewed keys and EXACT title-derived website 
   state.follows.set('speaker:auto-שמואל-יהודה-בריסק',{type:'speaker',key:'auto-שמואל-יהודה-בריסק'});
   assert.match(context.renderFollow(unreviewed),/עוקבים אחרי/);
   // Fallback is still allowed for a canonical speaker field without a tagged title.
+  state.speakerAliasToId.set('שמואל יהודה בריסק','shmuel-yehuda-brisk');
   const bySpeaker={id:'other',title:'שאלות חדשות',speakerHe:'הרב שמואל יהודה בריסק',_speakerIds:[]};
   assert.match(context.renderFollow(bySpeaker),/data-follow-key="shmuel-yehuda-brisk"/);
   assert.equal(context.renderFollow({id:'unknown',title:'Untitled recording',_speakerIds:[]}), '',
