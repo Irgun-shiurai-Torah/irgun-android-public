@@ -3311,12 +3311,23 @@ body.irgun-android .android-search-assist .search-assist-history-icon svg {
 
  
 /* Android nav fit for narrow Hebrew and English layouts.
-   Android 14 reports innerWidth 271 for a 240px wm-size override; keep the
-   breakpoint above the physical-to-WebView viewport conversion. */
-@media (max-width:400px) {
+   A 240px emulator override can leave a wider CSS viewport and an RTL body
+   with a shifted fixed-position containing block. Anchor the mount itself to
+   the screen and position the nav within that viewport, independent of page
+   direction or any transformed app content. */
+@media (max-width:400px), (max-device-width:320px) {
+  #androidBottomNavigationMount {
+    position:fixed!important;
+    inset:0!important;
+    width:100vw!important;
+    height:100vh!important;
+    transform:none!important;
+    pointer-events:none!important;
+    z-index:118!important;
+  }
   #androidBottomNavigationMount .bottom-nav.android-floating-nav,
   html[dir="rtl"] #androidBottomNavigationMount .bottom-nav.android-floating-nav {
-    position:fixed!important;
+    position:absolute!important;
     box-sizing:border-box!important;
     left:6px!important;
     right:6px!important;
@@ -3327,6 +3338,7 @@ body.irgun-android .android-search-assist .search-assist-history-icon svg {
     min-width:0!important;
     max-width:none!important;
     transform:none!important;
+    pointer-events:auto!important;
     padding:4px!important;
     display:grid!important;
     grid-template-columns:repeat(5,minmax(0,1fr))!important;
