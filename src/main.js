@@ -3861,10 +3861,7 @@ function shell(content) {
     ${Capacitor.getPlatform()==='android'?'':bottomNavHtml()}
     ${state.playerOpen && state.current ? fullPlayerHtml() : ''}
     ${state.watchVideo && !state.watchHostedExternally && !state.playerOpen &&
-        !(Capacitor.getPlatform()==='android' && state.watchMode==='video' &&
-          state.watchVimeo?.isIrgunNativeVideoPlayer &&
-          typeof persistentVideoMount !== 'undefined' &&
-          persistentVideoMount?.querySelector('.watch-overlay')) ? watchHtml() : ''}
+        !hasPersistentVideoOverlayForCurrentWatch() ? watchHtml() : ''}
     <div id="downloadManagerMount">${downloadManagerHtml()}</div>
     <div id="offlineDeleteMount">${offlineDeleteDialogHtml()}</div>
     ${filterSheetHtml()}
@@ -3878,8 +3875,20 @@ function clearPersistentVideoMount() {
   if (!persistentVideoMount) return;
   persistentVideoMount.textContent = '';
   persistentVideoMount.className = '';
+  delete persistentVideoMount.dataset.irgunWatchId;
   state.watchHostedExternally = false;
   document.body.classList.remove('irgun-watch-mini-hosted');
+}
+
+// Native Audio keeps the original video Watch parked outside #app. The
+// JavaScript player flag can briefly lag behind the already-mounted host
+// during native Audio -> Video. Verify the actual mounted lecture instead of
+// the temporary bridge flag to avoid a second full-screen Watch overlay.
+function hasPersistentVideoOverlayForCurrentWatch() {
+  return Capacitor.getPlatform()==='android' &&
+    state.watchMode==='video' && Boolean(state.watchVideo) &&
+    persistentVideoMount?.dataset.irgunWatchId===String(videoId(state.watchVideo)) &&
+    Boolean(persistentVideoMount.querySelector('.watch-overlay #watchVimeoFrame'));
 }
 
 function refreshPersistentMiniVideoChrome() {
@@ -4026,7 +4035,7 @@ function bindWatchClick(el, handler) {
 // the single permanent Media3 PlayerView/MediaItem and its clock stay intact.
 const nativeWatchOverlayGuard = Capacitor.getPlatform() === 'android' && typeof MutationObserver === 'function'
   ? new MutationObserver(() => {
-      if (state.watchMode === 'video' && state.watchVimeo?.isIrgunNativeVideoPlayer)
+      if (hasPersistentVideoOverlayForCurrentWatch())
         reconcileAndroidNativeWatchOverlay();
     }) : null;
 nativeWatchOverlayGuard?.observe(app, { childList:true, subtree:true });
@@ -4035,10 +4044,7 @@ nativeWatchOverlayGuard?.observe(app, { childList:true, subtree:true });
 // When Media3 returns to VIDEO, only #persistentVideoMount is authoritative:
 // no second in-app Watch, no hidden competing controls, and no player reset.
 function reconcileAndroidNativeWatchOverlay() {
-  if (Capacitor.getPlatform() !== 'android' || state.watchMode !== 'video' ||
-      !state.watchVimeo?.isIrgunNativeVideoPlayer ||
-      !persistentVideoMount?.querySelector('#watchVimeoFrame') ||
-      !persistentVideoMount.querySelector('.watch-overlay')) return;
+  if (!hasPersistentVideoOverlayForCurrentWatch()) return;
   state.watchHostedExternally = true;
   document.querySelectorAll('#app .watch-overlay').forEach(overlay => overlay.remove());
 }
@@ -4054,6 +4060,7 @@ function hostCurrentWatchOverlay(mode = 'full') {
     // its permanent host before playback starts. After that it is never moved.
     persistentVideoMount.appendChild(overlay);
   }
+  persistentVideoMount.dataset.irgunWatchId=String(videoId(state.watchVideo));
   state.watchHostedExternally = true;
   // Audio mode can render a temporary Watch UI inside #app while its real
   // Media3 video host remains parked outside #app. When VIDEO becomes active
