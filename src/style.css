@@ -2705,9 +2705,9 @@ body.irgun-android .rotation-fullscreen-exit {
   font-size: 24px;
 }
 
-/* Finger-following tab transition: the single real page moves alongside a
-   lightweight, noninteractive teaser. Native Media3, PiP, mini and the fixed
-   bottom navigation are not part of either transformed layer. */
+/* Finger-following Android tabs: visually show the SAME page components
+   and styling as when the destination is actually open. The snapshot is
+   inert, clipped to the viewport and never creates a second media player. */
 body.irgun-android.android-swipe-motion { overflow-x:hidden; }
 body.irgun-android.android-swipe-motion #app .app-shell > .content {
   position:relative;
@@ -2727,35 +2727,20 @@ body.irgun-android .android-swipe-peek {
   backface-visibility:hidden;
   will-change:transform;
 }
-body.irgun-android .android-swipe-peek-body {
+/* Account forms end well above the bottom navigation on tall phones.
+   Keep the harmless empty area INSIDE .content so it receives tab gestures
+   instead of leaving half the screen outside the swipe handler. */
+body.irgun-android .app-shell > .content.android-account-swipe-surface {
+  min-height: calc(100vh - 68px);
+  min-height: calc(100dvh - 68px);
+}
+body.irgun-android .android-swipe-peek > .content {
+  /* Inherit the app's regular padding, cards, images and theme exactly. */
   max-width:1000px;
   margin:0 auto;
   padding:16px 12px var(--android-nav-clearance);
+  pointer-events:none;
 }
-body.irgun-android .android-swipe-peek .page-title {margin-bottom:16px;}
-body.irgun-android .android-swipe-peek .toolbar-card {padding:14px;}
-body.irgun-android .android-swipe-peek .segmented {display:flex;gap:10px;}
-body.irgun-android .android-swipe-peek .segmented span,
-body.irgun-android .android-swipe-peek-tabs span {
-  display:inline-block;
-  background:white;
-  border:1px solid #dce5ef;
-  border-radius:12px;
-  padding:9px 14px;
-}
-body.irgun-android .android-swipe-peek-search,
-body.irgun-android .android-swipe-peek-row,
-body.irgun-android .android-swipe-peek-shortcuts span {
-  background:#fff;
-  border:1px solid #dce5ef;
-  border-radius:14px;
-  padding:14px;
-  margin:9px 0;
-  color:#273b56;
-}
-body.irgun-android .android-swipe-peek-shortcuts,
-body.irgun-android .android-swipe-peek-tabs {display:flex;flex-wrap:wrap;gap:8px;}
-body.irgun-android .android-swipe-peek-shortcuts span {margin:12px 0;}
 @media(prefers-reduced-motion:reduce){
   body.irgun-android.android-swipe-motion #app .app-shell > .content,
   body.irgun-android .android-swipe-peek {transition:none !important;}
@@ -3178,4 +3163,212 @@ body.irgun-android .paid-card { scroll-margin-top:calc(84px + env(safe-area-inse
   body.irgun-android .paid-folder-node > summary { padding:12px 8px; gap:7px; }
   body.irgun-android .paid-folder-children { margin-inline-start:6px; padding:8px 5px 10px 9px; }
   body.irgun-android .paid-folder-count { max-width:72px; font-size:9px; }
+}
+
+
+/* Android-only centered and larger page controls */
+/* Library categories use centered WRAPPED rows, not a clipped scroll strip. */
+body.irgun-android .library-tabs.library-tabs-scroll {
+  justify-content:center!important;
+  display:flex!important;
+  flex-wrap:wrap!important;
+  align-items:center;
+  overflow:visible;
+  gap:8px!important;
+  padding:9px;
+  margin-inline:auto;
+  max-width:100%;
+  border-radius:16px;
+}
+body.irgun-android .library-tabs.library-tabs-scroll button {
+  flex:0 1 auto!important;
+  min-height:44px;
+  padding:11px 14px;
+  font-size:13.5px;
+  line-height:1.2;
+  text-align:center;
+}
+body.irgun-android .toolbar-card .segmented button,
+body.irgun-android .content > .segmented:not(.library-tabs) button {
+  min-height:44px;
+  padding:10px 13px;
+  font-size:13px;
+}
+body.irgun-android .topbar .top-store,
+body.irgun-android .topbar .top-contact {
+  width:40px;
+  height:40px;
+  flex-basis:40px;
+  border-radius:12px;
+}
+body.irgun-android .topbar .top-store svg,
+body.irgun-android .topbar .top-contact svg {
+  width:20px;
+  height:20px;
+}
+body.irgun-android .topbar .app-language-button,
+body.irgun-android .topbar .top-account {
+  min-height:40px;
+  padding:8px 10px;
+  font-size:10.5px;
+  line-height:1.15;
+}
+body.irgun-android .topbar .top-account {max-width:110px;}
+@media (max-width:390px) {
+  body.irgun-android .library-tabs.library-tabs-scroll {gap:7px!important;padding:8px 6px;}
+  body.irgun-android .library-tabs.library-tabs-scroll button {font-size:12.5px;padding:10px 11px;}
+  body.irgun-android .topbar .top-store,
+  body.irgun-android .topbar .top-contact {width:38px;height:38px;flex-basis:38px;}
+  body.irgun-android .topbar .app-language-button,
+  body.irgun-android .topbar .top-account {min-height:38px;padding:7px 8px;font-size:10px!important;}
+}
+
+/* Android Shiurim compact on-focus search history */
+/* A floating suggestion panel below Search saves the height of five history rows. */
+body.irgun-android .library-search-autocomplete {
+  position:relative;
+  min-width:0;
+}
+body.irgun-android .library-search-autocomplete #librarySearchAssist {
+  position:absolute;
+  z-index:46;
+  inset-inline-start:0;
+  top:calc(100% + 5px);
+  width:min(100%,640px);
+  max-width:100%;
+}
+body.irgun-android .library-search-autocomplete #librarySearchAssist:empty {
+  display:none;
+}
+body.irgun-android .library-search-autocomplete .android-search-assist {
+  margin:0;
+  max-height:min(42vh,320px);
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  border:1px solid #dbe3ee;
+  border-radius:14px;
+  background:#fff;
+  box-shadow:0 14px 32px rgba(15,31,53,.16);
+}
+body.irgun-android .android-search-assist .search-assist-heading {
+  padding:10px 14px 6px;
+  color:#617084;
+  font-size:12px;
+  font-weight:800;
+}
+body.irgun-android .android-search-assist button {
+  width:100%;
+  min-height:44px;
+  padding:9px 13px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  border:0;
+  border-bottom:1px solid #eef1f5;
+  background:#fff;
+  color:var(--navy);
+  text-align:start;
+  font-size:13px;
+}
+body.irgun-android .android-search-assist button:last-child {border-bottom:0;}
+body.irgun-android .android-search-assist button:active,
+body.irgun-android .android-search-assist button:focus-visible {
+  outline:2px solid #b99457;
+  outline-offset:-2px;
+  background:#f2f6fa;
+}
+body.irgun-android .android-search-assist strong {
+  flex:1 1 0;
+  min-width:0;
+  font-size:13px;
+  font-weight:700;
+  overflow:hidden;
+  white-space:nowrap;
+  text-overflow:ellipsis;
+}
+body.irgun-android .android-search-assist small {
+  flex:0 0 auto;
+  font-size:11px;
+  color:#66788c;
+}
+body.irgun-android .android-search-assist .search-assist-history-icon {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  flex:0 0 19px;
+  color:#64758a;
+}
+body.irgun-android .android-search-assist .search-assist-history-icon svg {
+  width:17px;
+  height:17px;
+}
+@media (max-width:390px) {
+  body.irgun-android .android-search-assist button {
+    min-height:44px;
+    padding-inline:10px;
+  }
+}
+
+ 
+/* Narrow Android viewport navigation is toggled by the actual WebView
+   width, not CSS media queries: Android's wm-size override can report a wider
+   CSS media viewport than innerWidth after an RTL language change. */
+body.irgun-android.android-narrow-viewport #androidBottomNavigationMount {
+  position:fixed!important;
+  inset:0!important;
+  width:100vw!important;
+  height:100vh!important;
+  transform:none!important;
+  pointer-events:none!important;
+  z-index:118!important;
+}
+body.irgun-android.android-narrow-viewport #androidBottomNavigationMount .bottom-nav.android-floating-nav,
+html[dir="rtl"] body.irgun-android.android-narrow-viewport #androidBottomNavigationMount .bottom-nav.android-floating-nav {
+  position:absolute!important;
+  box-sizing:border-box!important;
+  left:6px!important;
+  right:6px!important;
+  inset-inline-start:6px!important;
+  inset-inline-end:6px!important;
+  bottom:var(--android-nav-bottom);
+  width:auto!important;
+  min-width:0!important;
+  max-width:none!important;
+  transform:none!important;
+  pointer-events:auto!important;
+  padding:4px!important;
+  display:grid!important;
+  grid-template-columns:repeat(5,minmax(0,1fr))!important;
+  gap:0!important;
+  overflow:hidden!important;
+}
+body.irgun-android.android-narrow-viewport #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-btn,
+html[dir="rtl"] body.irgun-android.android-narrow-viewport #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-btn {
+  box-sizing:border-box!important;
+  display:flex!important;
+  width:auto!important;
+  min-width:0!important;
+  max-width:100%!important;
+  margin:0!important;
+  padding:4px 0!important;
+  gap:2px!important;
+  overflow:hidden!important;
+  font-size:8px!important;
+}
+body.irgun-android.android-narrow-viewport #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-icon {
+  width:22px!important;
+  height:22px!important;
+  flex:0 0 22px!important;
+}
+body.irgun-android.android-narrow-viewport #androidBottomNavigationMount .bottom-nav.android-floating-nav .nav-btn > span:last-child {
+  display:block!important;
+  width:100%!important;
+  max-width:100%!important;
+  min-width:0!important;
+  padding:0 1px!important;
+  overflow:hidden!important;
+  text-overflow:ellipsis!important;
+  white-space:nowrap!important;
+  font-size:8px!important;
+  line-height:11px!important;
 }

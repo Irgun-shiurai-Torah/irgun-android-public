@@ -2,8 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
-import {androidNavigationRoot,prepareAndroidTabNavigation} from '../src/android-bottom-navigation.js';
+import {androidNavigationRoot,prepareAndroidTabNavigation,syncAndroidNarrowViewport} from '../src/android-bottom-navigation.js';
 const main=readFileSync('src/main.js','utf8');
+
+test('narrow Android WebView width toggles compact navigation independently of CSS media-query width',()=>{
+ const classes=new Set();
+ const document={defaultView:{innerWidth:271},body:{classList:{toggle:(name,on)=>on?classes.add(name):classes.delete(name)}}};
+ assert.equal(syncAndroidNarrowViewport(true,document),true);
+ assert.ok(classes.has('android-narrow-viewport'));
+ document.defaultView.innerWidth=320;
+ assert.equal(syncAndroidNarrowViewport(true,document),true,'320px is still the compact breakpoint');
+ document.defaultView.innerWidth=321;
+ assert.equal(syncAndroidNarrowViewport(true,document),false);
+ assert.ok(!classes.has('android-narrow-viewport'));
+ document.defaultView.innerWidth=271;
+ assert.equal(syncAndroidNarrowViewport(false,document),false,'iOS must not receive Android compact styling');
+ assert.ok(!classes.has('android-narrow-viewport'));
+});
 
 test('primary tabs and nested pages retain one meaningful active navigation root',()=>{
  for(const root of ['home','shiurim','live','library','account'])assert.equal(androidNavigationRoot(root),root);

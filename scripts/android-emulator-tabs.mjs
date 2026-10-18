@@ -84,20 +84,24 @@ try {
     assert.ok(point, `Hit-tested swipe area required for ${from.tab}`);
     const start = nativePoint(point), end = nativePoint({ ...point, x: point.endX });
     const index = from.tabs.indexOf(from.tab);
-    const expected = from.tabs[index + (dx < 0 ? 1 : -1)] || from.tab;
+    // Tabs are measured in visual left-to-right order. Physical finger
+    // direction follows the reading direction: RTL reverses the adjacent index.
+    const step = from.lang.startsWith('he') ? (dx < 0 ? -1 : 1) : (dx < 0 ? 1 : -1);
+    const expected = from.tabs[index + step] || from.tab;
     // Observe the physical page midway through actual Android input. A test
     // that only checks the destination would miss the prior jump-only behavior.
     const direction = dx < 0 ? 'left' : 'right';
     if(expected !== from.tab && !witnessed[direction]){
       const child = spawn('adb',['shell','input','swipe',
-        ...start.map(String),...end.map(String),'1000'],{stdio:'ignore'});
+        ...start.map(String),...end.map(String),'1800'],{stdio:'ignore'});
       const finished=new Promise((resolve,reject)=>{
         child.on('error',reject);
         child.on('close',code=>code===0?resolve():reject(Error('adb swipe failed: '+code)));
       });
       let seen=null;
-      for(let count=0;count<15;count++){
-        await delay(60);
+      const observations=[];
+      for(let count=0;count<42;count++){
+        await delay(35);
         try{
           const sample=JSON.parse(await evaluate(`JSON.stringify((()=>{
             const old=document.querySelector('#app .app-shell > .content');
@@ -108,13 +112,14 @@ try {
               from:document.querySelector('.bottom-nav .active')?.dataset.nav,
               nav:!!document.querySelector('#androidBottomNavigationMount .bottom-nav')};
           })())`));
+          observations.push(sample);
           if(sample.peek && sample.inert && sample.previewMedia===0 &&
               sample.nav && sample.from===from.tab && Math.abs(sample.x)>20 &&
               Math.abs(sample.nextX)<point.width){seen=sample;break;}
         }catch(_){/* CDP can be temporarily busy during a native touch */ }
       }
       await finished;
-      assert.ok(seen,'Page must move with the real Android finger BEFORE touchend: '+direction);
+      assert.ok(seen,'Page must move with the real Android finger BEFORE touchend: '+direction+'; samples='+JSON.stringify(observations));
       witnessed[direction]=true;
       report.checks.push({label:'Finger-following physical '+direction+' drag, stable native nav and zero duplicate media',sample:seen});
     }else{
@@ -131,14 +136,62 @@ try {
     const order = (await read()).tabs;
     const homeIndex = order.indexOf('home');
     assert.ok(homeIndex === 0 || homeIndex === order.length - 1);
-    const forward = homeIndex === 0 ? -1 : 1;
-    await swipe(-forward); // Home end must not wrap
-    for (let i = 0; i < order.length; i++) await swipe(forward);
-    for (let i = 0; i < order.length; i++) await swipe(-forward);
+    // The Home boundary is the physical OUTSIDE edge: right in LTR,
+    // left in RTL. Traverse inward across every visible neighbor, then back.
+    // The swipe handler already reverses physical direction for RTL.
+    // A rightward finger drag is therefore the outside Home boundary in BOTH
+    // languages; derive the traversal from the gesture mapping, not tab index.
+    const outward = 1;
+    await swipe(outward); // Home end must not wrap
+    for (let i = 0; i < order.length; i++) await swipe(-outward);
+    for (let i = 0; i < order.length; i++) await swipe(outward);
     assert.equal((await read()).tab, 'home');
   };
   await traverse();
   report.checks.push('English physical tab order, both directions, no wrapping');
+
+  // The Account page previously failed to change tabs from its lower half:
+  // the form's inputs were globally excluded and short content left empty
+  // space outside .content. Exercise a REAL native touch in the lower area,
+  // not just the header/title region.
+  const tabPoint = tab => `JSON.stringify((()=>{
+    const b=document.querySelector('#androidBottomNavigationMount .bottom-nav [data-nav="${tab}"]');
+    if(!b)return null;
+    const r=b.getBoundingClientRect();
+    return {x:r.left+r.width/2,y:r.top+r.height/2,width:innerWidth,height:innerHeight};
+  })())`;
+  const accountButton=JSON.parse(await evaluate(tabPoint('account')));
+  assert.ok(accountButton,'Native Account tab button must exist');
+  adb('shell','input','tap',...nativePoint(accountButton).map(String));
+  await wait(s => s.tab === 'account');
+  const lowerAccountPoint = JSON.parse(await evaluate(`JSON.stringify((()=>{
+    const account=document.querySelector('#app .app-shell > .content');
+    const x=innerWidth*.30,endX=innerWidth*.70;
+    const nav=document.querySelector('#androidBottomNavigationMount .bottom-nav');
+    const navTop=nav?.getBoundingClientRect().top||innerHeight-92;
+    const lo=Math.round(innerHeight*.57);
+    const hi=Math.min(Math.round(innerHeight*.79),Math.round(navTop-18));
+    for(let y=lo;y<=hi;y+=12){
+      const target=document.elementFromPoint(x,y);
+      if(target?.closest('.content')===account && !target.closest('select,video,iframe,[role="dialog"]'))
+        return {x,endX,y,width:innerWidth,height:innerHeight,tag:target.tagName,
+          accountSurface:account.classList.contains('android-account-swipe-surface')};
+    }
+    return null;
+  })())`));
+  assert.ok(lowerAccountPoint?.accountSurface,'Account lower viewport must be inside swipeable content');
+  const startAccount=nativePoint(lowerAccountPoint);
+  const endAccount=nativePoint({...lowerAccountPoint,x:lowerAccountPoint.endX});
+  adb('shell','input','swipe',...startAccount.map(String),...endAccount.map(String),'600');
+  assert.ok(adb('shell','pidof','org.irgunshiuraitorah.app'),
+    'Lower Account swipe must not kill the Android app');
+  await wait(s => s.tab === 'library');
+  report.checks.push({label:'Native swipe starting in the lower Account form goes to Library',at:lowerAccountPoint});
+  const homeButton=JSON.parse(await evaluate(tabPoint('home')));
+  assert.ok(homeButton,'Native Home tab button must exist');
+  adb('shell','input','tap',...nativePoint(homeButton).map(String));
+  await wait(s => s.tab === 'home');
+
   const languagePoint = JSON.parse(await evaluate(`JSON.stringify((()=>{
     const b=document.querySelector('[data-language-toggle]'),r=b.getBoundingClientRect();
     return {x:r.left+r.width/2,y:r.top+r.height/2,width:innerWidth,height:innerHeight};

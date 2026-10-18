@@ -23,17 +23,41 @@ export function bindTabSwipes(root, {
   let suppressClickUntil = 0;
   const view = root.ownerDocument.defaultView;
   const interactive = typeof onDrag === 'function' && typeof onRelease === 'function';
-  const excluded = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), video, iframe, .direct-media-player, .watch-overlay, .mini-player, .sheet-backdrop, .bottom-nav, [role="dialog"]';
+  // A horizontal tab swipe should also start over an unfocused Account
+  // input or notification checkbox. The earlier blanket input/textarea
+  // exclusion left much of the lower Account form unresponsive. Taps remain
+  // normal because we preventDefault only after clear horizontal movement.
+  const excluded = 'select, [contenteditable]:not([contenteditable="false"]), video, iframe, .direct-media-player, .watch-overlay, .mini-player, .sheet-backdrop, .bottom-nav, [role="dialog"]';
 
   const nextTab = (tab, dx) => {
     const tabs = getTabs(), i = tabs.indexOf(tab);
-    return i < 0 || !dx ? null : tabs[i + (dx < 0 ? 1 : -1)] || null;
+    if (i < 0 || !dx) return null;
+    // getTabs is in physical left-to-right order. RTL reverses which adjacent
+    // visual tab a finger moving left or right should reveal.
+    const direction = root.ownerDocument?.documentElement?.dir
+      || view.getComputedStyle(root.ownerDocument?.documentElement || root).direction || 'ltr';
+    const rtl = direction.toLowerCase() === 'rtl';
+    const step = dx < 0 ? (rtl ? -1 : 1) : (rtl ? 1 : -1);
+    return tabs[i + step] || null;
   };
   const allowedTarget = target => {
     if (!target?.closest?.('.content') || target.closest(excluded)) return false;
+    // Avoid stealing cursor, selection or typed text from a focused field,
+    // but allow normal horizontal swipes beginning on UNFOCUSED inputs.
+    // Keep range/file/color controls native; a tap/toggle on a checkbox
+    // continues working because horizontal intent has not been established.
+    const editor=target.closest?.('input, textarea');
+    const type=String(editor?.type||'').toLowerCase();
+    if (editor && ['range','file','color','date','time','datetime-local'].includes(type)) return false;
+    const active=root.ownerDocument?.activeElement;
+    const focusedText=active && ['input','textarea'].includes(String(active.tagName||'').toLowerCase()) &&
+      !['checkbox','radio'].includes(String(active.type||'').toLowerCase());
+    if (focusedText && (editor===active || target.closest?.('label')?.contains?.(active))) return false;
     for (let node = target; node && node !== root; node = node.parentElement) {
       const css = view.getComputedStyle(node);
-      if (/(auto|scroll)/.test(css.overflowX) && node.scrollWidth > node.clientWidth + 2) return false;
+      // True horizontally scrollable strips keep their own gesture. Ignore
+      // incidental 2-10px form/card overflow from font and border rounding.
+      if (/(auto|scroll)/.test(css.overflowX) && node.scrollWidth > node.clientWidth + 12) return false;
     }
     return true;
   };

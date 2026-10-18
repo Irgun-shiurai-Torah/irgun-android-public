@@ -6,9 +6,9 @@ import {createAndroidSwipeMotion} from '../src/android-swipe-motion.js';
 
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 const touch=(x,y,id=1)=>({clientX:x,clientY:y,identifier:id});
-function rig({rtl=false,contentScrollable=false,excluded=false}={}){
+function rig({rtl=false,contentScrollable=false,excluded=false,fieldType=null,fieldFocused=false}={}){
   const calls=new Map(),inserted=[],classes=new Set(),states=[],navigations=[];
-  let current='home',allowed=true,peekRead=false;
+  let current='home',allowed=true,peekRead=false,identity='user-A';
   const body={
     appendChild(el){inserted.push(el);},
     classList:{add:s=>classes.add(s),remove:s=>classes.delete(s)}
@@ -17,7 +17,7 @@ function rig({rtl=false,contentScrollable=false,excluded=false}={}){
   const content={
     style:{transform:'',transition:'',willChange:''},
     parentElement:null,scrollWidth:contentScrollable?920:360,clientWidth:360,
-    overflow:contentScrollable?'auto':'visible'
+    overflow:contentScrollable?'auto':'visible',innerHTML:''
   };
   const view={
     innerWidth:360,
@@ -25,7 +25,7 @@ function rig({rtl=false,contentScrollable=false,excluded=false}={}){
     getComputedStyle:node=>({overflowX:node.overflow||'visible'})
   };
   const doc={
-    defaultView:view,body,documentElement:{dir:rtl?'rtl':'ltr'},visibilityState:'visible',
+    defaultView:view,body,documentElement:{dir:rtl?'rtl':'ltr'},visibilityState:'visible',activeElement:null,
     createElement:tag=>({tagName:tag,style:{},attributes:{},offsetWidth:360,removed:false,
       setAttribute(k,v){this.attributes[k]=v;},remove(){this.removed=true;}}),
     querySelector:sel=>sel==='#app .app-shell > .content'?content:
@@ -33,10 +33,19 @@ function rig({rtl=false,contentScrollable=false,excluded=false}={}){
   };
   const root={ownerDocument:doc,addEventListener:(name,fn)=>calls.set(name,fn)};
   content.parentElement=root;
+  const editor=fieldType?{type:fieldType,tagName:fieldType==='textarea'?'TEXTAREA':'INPUT'}:null;
+  if(fieldFocused)doc.activeElement=editor;
   const target={parentElement:content,
-    closest:selector=>selector==='.content'?content:excluded?target:null};
+    closest:selector=>{
+      if(selector==='.content')return content;
+      if(excluded)return target;
+      if(fieldType==='select' && selector.includes('select'))return target;
+      if(selector==='input, textarea' && editor)return editor;
+      return null;
+    }};
   const slider=createAndroidSwipeMotion({document:doc,view,
-    previewHtml:tab=>{peekRead=true;return '<main>'+tab+'</main>';},duration:0});
+    previewHtml:tab=>{peekRead=true;return '<main>'+tab+'</main>';},
+    previewKey:()=>identity,duration:0});
   const getTabs=()=>rtl?['account','library','live','shiurim','home']:
     ['home','shiurim','live','library','account'];
   bindTabSwipes(root,{getActiveTab:()=>current,getTabs,canNavigate:()=>allowed,
@@ -59,6 +68,7 @@ function rig({rtl=false,contentScrollable=false,excluded=false}={}){
     get current(){return current;},
     setCurrent:s=>{current=s;},
     allow:val=>{allowed=val;},
+    setIdentity:value=>{identity=value;},
     get peekRead(){return peekRead;}
   };
 }
@@ -69,7 +79,7 @@ test('during a left drag the REAL page follows finger and lightweight right neig
   assert.equal(a.content.style.transform,'translate3d(-58px, 0, 0)');
   assert.equal(a.inserted.length,1);
   assert.equal(a.inserted[0].style.transform,'translate3d(302px, 0, 0)');
-  assert.equal(a.inserted[0].innerHTML,'<main>shiurim</main>');
+  assert.equal(a.inserted[0].innerHTML,'<main class="content android-swipe-snapshot"><main>shiurim</main></main>');
   assert.equal(a.inserted[0].attributes['aria-hidden'],'true');
   assert.equal(a.inserted[0].inert,true);
   assert.deepEqual(a.navigations,[],'never swap the page while the finger is down');
@@ -146,9 +156,9 @@ test('vertical drags, editable controls, horizontal scrollbars and multiple touc
 });
 
 test('Hebrew RTL follows physical tab order and reverses without closing',async()=>{
-  const a=rig({rtl:true});a.start(72);a.move(198);a.end(198);
+  const a=rig({rtl:true});a.start(260);a.move(125);a.end(125);
   await flush();await flush();assert.equal(a.current,'shiurim');
-  a.start(260);a.move(125);a.end(125);
+  a.start(72);a.move(198);a.end(198);
   await flush();await flush();assert.equal(a.current,'home');
   assert.deepEqual(a.navigations,['shiurim','home']);
   assert.equal(a.inserted[0].attributes.dir,'rtl');
@@ -166,12 +176,111 @@ test('gesture buffering defers reactive render until completion, without keeping
   assert.equal(a.content.style.transform,'');
 });
 
-test('feature is Android only, lightweight and does not change native player/Back callbacks',()=>{
+test('new peek uses the actual five tab renderers, never a second live player or native Back handler',()=>{
   const js=readFileSync('src/main.js','utf8');
+  const motion=readFileSync('src/android-swipe-motion.js','utf8');
   const native=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/MainActivity.java','utf8');
   assert.match(js,/Capacitor\.getPlatform\(\) === 'android' && Capacitor\.isNativePlatform\(\)\) \{\s*bindTabSwipes/);
   const preview=js.slice(js.indexOf('function androidSwipePeekHtml('),js.indexOf('function shell(content)'));
-  assert.doesNotMatch(preview,/watchHtml\(|liveHtml\(|homeHtml\(|shiurimHtml\(|libraryHtml\(|accountHtml\(|iframe|<video|<audio|new Audio/);
+  for(const renderer of ['homeHtml','shiurimHtml','liveHtml','libraryHtml','accountHtml'])
+    assert.ok(preview.includes(renderer+'()'),renderer+' must supply real visual content');
+  assert.doesNotMatch(preview,/watchHtml\(|liveStreamHtml\(|new Audio\(|new MediaPlayer/);
+  assert.match(motion,/script, iframe, video, audio, source, object, embed, canvas/);
+  assert.match(motion,/slice\(4\)/);
+  assert.match(motion,/imageCount > 10/);
+  assert.match(motion,/recent\.set\(tab/);
   assert.match(native,/fullscreenBackCallback = new OnBackPressedCallback\(false\)/);
   assert.doesNotMatch(native,/primaryTabBackCallback|__irgunHandleAndroidSystemBack/);
+});
+
+test('returning to a visited tab reveals its real cached page rather than a simplified placeholder',async()=>{
+  const a=rig();
+  a.content.innerHTML='<section class="hero pro-hero"><h1>The real Home page</h1></section><section class="home-shortcuts">Real cards</section>';
+  a.slider.rememberPage('home');
+  a.setCurrent('shiurim');
+  a.start(85);a.move(202);
+  assert.equal(a.inserted.length,1);
+  assert.match(a.inserted[0].innerHTML,/The real Home page/);
+  assert.match(a.inserted[0].innerHTML,/home-shortcuts/);
+  assert.equal(a.peekRead,false,'do not render the same page again for immediate reverse gestures');
+  a.end(202);await flush();await flush();
+  assert.equal(a.current,'home');
+  assert.deepEqual(a.navigations,['home']);
+});
+
+test('cached page markup is invalidated when language or signed-in account changes',async()=>{
+  const a=rig();
+  a.content.innerHTML='<section class="hero">Old logged-in English content</section>';
+  a.slider.rememberPage('home');
+  a.setIdentity('user-B:he');
+  a.setCurrent('shiurim');
+  a.start(82);a.move(200);
+  assert.doesNotMatch(a.inserted[0].innerHTML,/Old logged-in English content/);
+  assert.equal(a.peekRead,true,'new account/language uses fresh tab renderer');
+  a.end(200);await flush();await flush();
+});
+
+test('repeated left/right drags reuse snapshots instead of rebuilding heavy lists',async()=>{
+  const a=rig();
+  a.start(250);a.move(120);a.end(120);await flush();await flush();
+  assert.equal(a.current,'shiurim');
+  a.start(85);a.move(205);a.end(205);await flush();await flush();
+  assert.equal(a.current,'home');
+  a.start(250);a.move(120);
+  assert.equal(a.inserted.length,3);
+  assert.deepEqual(a.navigations,['shiurim','home']);
+  assert.equal(a.content.style.transform,'translate3d(-130px, 0, 0)');
+  a.end(120);await flush();await flush();
+});
+
+test('swiping from lower Account profile form works when an input is not focused',async()=>{
+  const a=rig({fieldType:'text'});
+  const start=a.start(250);
+  assert.equal(start.prevented,false,'an ordinary tap must still focus the Name field');
+  const drag=a.move(125);
+  assert.equal(drag.prevented,true,'horizontal drag should follow the finger from lower Account input');
+  assert.equal(a.content.style.transform,'translate3d(-125px, 0, 0)');
+  a.end(125);await flush();await flush();
+  assert.equal(a.current,'shiurim');
+  assert.equal(a.content.style.transform,'');
+});
+
+test('focused Account text input remains editable without navigating tabs',async()=>{
+  for(const type of ['text','password','textarea']){
+    const a=rig({fieldType:type,fieldFocused:true});
+    a.start(245);const drag=a.move(112);a.end(112);
+    await flush();await flush();
+    assert.equal(drag.prevented,false,'focused '+type+' must retain selection and editing');
+    assert.equal(a.current,'home');
+    assert.deepEqual(a.navigations,[]);
+  }
+});
+
+test('Account notification toggle supports a sideways swipe but still permits normal taps',async()=>{
+  const tap=rig({fieldType:'checkbox',fieldFocused:true});
+  const start=tap.start(243);tap.end(243);await flush();await flush();
+  assert.equal(start.prevented,false);
+  assert.deepEqual(tap.navigations,[],'normal checkbox tap must not switch tabs');
+  const swipe=rig({fieldType:'checkbox',fieldFocused:true});
+  swipe.start(243);const drag=swipe.move(122);swipe.end(122);
+  await flush();await flush();
+  assert.equal(drag.prevented,true);
+  assert.equal(swipe.current,'shiurim');
+});
+
+test('native range/file/date/select controls keep touch ownership',async()=>{
+  for(const fieldType of ['range','file','date','select']){
+    const a=rig({fieldType});
+    a.start(242);const drag=a.move(105);a.end(105);await flush();await flush();
+    assert.equal(drag.prevented,false);
+    assert.deepEqual(a.navigations,[],'native '+fieldType+' must never navigate');
+  }
+});
+
+test('Android Account content remains a swipe surface across the entire viewport',()=>{
+  const main=readFileSync('src/main.js','utf8');
+  const css=readFileSync('src/style.css','utf8');
+  assert.match(main,/state\.screen==='account'\?' android-account-swipe-surface'/);
+  assert.match(css,/\.content\.android-account-swipe-surface\s*\{\s*min-height:\s*calc\(100vh - 68px\);/);
+  assert.match(css,/min-height:\s*calc\(100dvh - 68px\);/);
 });

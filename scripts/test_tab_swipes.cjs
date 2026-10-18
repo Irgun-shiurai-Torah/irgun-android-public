@@ -6,7 +6,7 @@ async function fixture({ rtl = false, blocked = false, scrollable = false, exclu
   const handlers = new Map(), visits = [];
   let active = 'home', allowed = !blocked;
   const root = {
-    ownerDocument: { defaultView: { getComputedStyle: node => ({ overflowX: node.overflow || 'visible' }) } },
+    ownerDocument: { documentElement: {dir:rtl?'rtl':'ltr'}, defaultView: { getComputedStyle: node => ({ overflowX: node.overflow || 'visible', direction:node.dir||'ltr' }) } },
     addEventListener: (name, callback) => handlers.set(name, callback)
   };
   const content = { parentElement: root, scrollWidth: scrollable ? 800 : 400, clientWidth: 400, overflow: scrollable ? 'auto' : 'visible' };
@@ -34,16 +34,25 @@ async function fixture({ rtl = false, blocked = false, scrollable = false, exclu
   return { swipe, emit, touch, visits, setActive: value => { active = value; }, block: () => { allowed = false; } };
 }
 
+test('physical swipe direction chooses the adjacent visual tab in both LTR and RTL',async()=>{
+ const ltr=await fixture();ltr.swipe(-130);assert.deepEqual(ltr.visits,['shiurim']);
+ const rtl=await fixture({rtl:true});rtl.setActive('home');rtl.swipe(-130);
+ assert.deepEqual(rtl.visits,['shiurim']);
+ rtl.swipe(130);assert.deepEqual(rtl.visits,['shiurim','home']);
+});
 test('swipe traverses all tabs in both directions without wrapping', async () => {
   const f = await fixture();
   for (let i = 0; i < 5; i++) f.swipe(-130);
   for (let i = 0; i < 5; i++) f.swipe(130);
   assert.deepEqual(f.visits, ['shiurim','live','library','account','library','live','shiurim','home']);
 });
-test('Hebrew follows the reversed physical tab order', async () => {
+test('Hebrew follows physical tab adjacency and does not wrap at Home', async () => {
   const f = await fixture({ rtl: true });
-  f.swipe(-130); f.swipe(130); f.swipe(130); f.swipe(-130);
-  assert.deepEqual(f.visits, ['shiurim','live','shiurim']);
+  f.swipe(-130); // Home is at the right edge; dragging left reveals Shiurim.
+  f.swipe(130);  // Dragging back right reveals Home again.
+  f.swipe(130);  // Home edge must not wrap to another tab.
+  f.swipe(-130); // Drag left returns to Shiurim.
+  assert.deepEqual(f.visits, ['shiurim','home','shiurim']);
 });
 for (const [name, options] of [['open modal', { blocked: true }], ['horizontal carousel', { scrollable: true }], ['input or player control', { excluded: true }]]) {
   test(`${name} keeps its gestures`, async () => {

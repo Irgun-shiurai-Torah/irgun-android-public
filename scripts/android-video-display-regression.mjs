@@ -82,7 +82,7 @@ export function nativeDoubleTapPoint(media,direction) {
 }
 
 // Real emulator accelerometer and Android input; CDP is observation only.
-export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,delay,report,showControls,tapExit,capturePicture,
+export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,delay,report,showControls,tapExit,tapNativeLabel,capturePicture,
  naturalLandscape=process.env.IRGUN_TABLET_NATURAL_LANDSCAPE==='1'}) {
  const setting=(scope,key)=>adb('shell','settings','get',scope,key).trim();
  const saved=[['system','accelerometer_rotation'],['system','user_rotation'],
@@ -166,6 +166,42 @@ export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,
      JSON.stringify({screen,bounds,landscape,visible}));
    const shown=await showControls();
    assertAndroidVideoTimes(shown.media3);
+   // Physically exercise both native menus on a portrait-locked display where
+   // only PlayerView rotates. Observe orientation, make real selections, and
+   // prove the same player and MediaItem keep playing without rewind.
+   if (screen.height>screen.width && Math.abs(shown.media3.surfaceRotationDegrees||0)===90) {
+    const beforeMenu=shown.media3;
+    await tapNativeLabel('Choose video quality');
+    const qualityMenu=await waitNative(s=>s.media3.rotatedMenuVisible&&s.media3.qualityMenuVisible&&
+      Math.abs(s.media3.rotatedMenuParentRotationDegrees)===90,
+      'Quality menu must follow locked-landscape PlayerView, not remain portrait');
+    assert.ok(qualityMenu.media3.rotatedMenuPanelRect?.width>0,
+      'Rotated quality panel must have visible native geometry');
+    const targetHeight=qualityMenu.media3.availableResolutions?.[0];
+    assert.ok(targetHeight,'Quality menu needs a real supported HLS resolution');
+    await tapNativeLabel('',targetHeight+'p');
+    const selectedQuality=await waitNative(s=>s.media3.qualityHeight===targetHeight&&
+      s.media3.playing&&s.media3.frames>qualityMenu.media3.frames+2,
+      'Rotated quality option must select a real Media3 track',45000);
+    assert.equal(selectedQuality.media3.playerIdentity,beforeMenu.playerIdentity);
+    assert.equal(selectedQuality.media3.mediaItemIdentity,beforeMenu.mediaItemIdentity);
+    await tapNativeLabel('Choose playback speed');
+    const speedMenu=await waitNative(s=>s.media3.rotatedMenuVisible&&s.media3.speedMenuVisible&&
+      Math.abs(s.media3.rotatedMenuParentRotationDegrees)===90,
+      'Speed menu must follow locked-landscape PlayerView, not remain portrait');
+    assert.ok(speedMenu.media3.rotatedMenuPanelRect?.width>0,
+      'Rotated speed panel must have visible native geometry');
+    await tapNativeLabel('','1.25×');
+    const faster=await waitNative(s=>Math.abs(s.media3.playbackSpeed-1.25)<.01&&s.media3.playing,
+      'Rotated speed choice must change real Media3 playback speed');
+    assert.equal(faster.media3.playerIdentity,beforeMenu.playerIdentity);
+    assert.equal(faster.media3.mediaItemIdentity,beforeMenu.mediaItemIdentity);
+    await tapNativeLabel('Choose playback speed');
+    await tapNativeLabel('','1×');
+    await waitNative(s=>Math.abs(s.media3.playbackSpeed-1)<.01,
+      'Playback speed must return to 1x after rotated-menu regression check');
+    report.checks.push({label:'Rotation-locked tablet quality and speed menus open landscape and preserve the same player',rotation:shown.media3.surfaceRotationDegrees,quality:targetHeight,speed:1.25});
+   }
    assert.equal(setting('system','accelerometer_rotation'),'0',
      'The app must never silently change the tablet rotation-lock preference');
    // The actual recorded screenshot, not ExoPlayer counters, must show pixels.
@@ -192,4 +228,43 @@ export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,
    else adb('shell','settings','delete',scope,key);
   await delay(700);
  }
+}
+
+
+/* Real Android input-only controller recovery: no UI state injection, playback
+ * setters, or Media3/player rebuild. The toolbar and the time row BOTH count. */
+export const nativeControlsReady=m=>Boolean(m?.controllerFullyVisible&&m?.pipButtonVisible&&
+  m?.qualityButtonVisible&&m?.elapsedTimeRect&&m?.durationTimeRect&&m?.seekBarRect);
+export async function revealNativeControlsWithPhysicalTaps({sample,adb,delay,fresh=false}) {
+  let last=await sample(),seekCount=last.media3.doubleTapSeekCount;
+  const guard=s=>assert.equal(s.media3.doubleTapSeekCount,seekCount,
+    'Physical controller reveal must never seek the lecture');
+  if(!fresh&&nativeControlsReady(last.media3))return last; // no 10-second stale visibility wait
+  for(let attempt=0;attempt<3;attempt++){
+    last=await sample();guard(last);
+    if(!fresh&&nativeControlsReady(last.media3))return last;
+    const point=nativeControllerRevealPoint(last.media3);
+    if(last.media3.controllerFullyVisible) {
+      // Custom toolbar may be hidden while Media3's controller says "visible":
+      // physically hide then show to force the native listener to refresh.
+      adb('shell','input','tap',...point);
+      let hidden=false;
+      for(let i=0;i<7;i++){await delay(200);last=await sample();guard(last);
+        if(!last.media3.controllerFullyVisible){hidden=true;break;}}
+      await delay(550); // safely outside Android's double-tap seek window
+      // Some Media3 surfaces keep the toolbar visible despite a physical tap.
+      // A fully visible toolbar AFTER the actual tap is success, not a failed
+      // toggle: the old 'continue' exhausted retries even while ALL native
+      // controls, timestamps and the seek bar were visibly present.
+      if(!hidden) {
+        if(nativeControlsReady(last.media3))return last;
+        continue;
+      }
+    }
+    adb('shell','input','tap',...point);
+    for(let i=0;i<9;i++){await delay(240);last=await sample();guard(last);
+      if(nativeControlsReady(last.media3))return last;}
+    await delay(550);
+  }
+  throw Error('Native controls did not respond to three physical reveal attempts; last='+JSON.stringify(last));
 }

@@ -44,7 +44,8 @@ const SKIP_SECONDS_KEY = 'istSkipSecondsV1';
 const audio = document.getElementById('audioEngine');
 const app = document.getElementById('app');
 const androidSwipeMotion=createAndroidSwipeMotion({document,view:window,
-  previewHtml:tab=>androidSwipePeekHtml(tab)});
+  previewHtml:tab=>androidSwipePeekHtml(tab),
+  previewKey:()=>`${currentLanguage()}:${state.user?.id||state.user?.email||'signed-out'}`});
 if (Capacitor.getPlatform() === 'android') document.body.classList.add('irgun-android');
 const persistentVideoMount = document.getElementById('persistentVideoMount');
 const IrgunDownloader = registerPlugin('IrgunDownloader');
@@ -216,6 +217,7 @@ const state = {
   libraryMode: 'all',
   librarySort: 'newest',
   libraryQuery: '',
+  librarySearchAssistOpen: false,
   librarySearchMode: 'catalog',
   transcriptMatchedVideoIds: new Set(),
   transcriptMatchTimes: new Map(),
@@ -1045,6 +1047,8 @@ function activeFilterChipsHtml() {
 }
 
 function searchAssistHtml() {
+  const android = Capacitor.getPlatform()==='android';
+  if (android && !state.librarySearchAssistOpen) return '';
   const he = currentLanguage() === 'he';
   const q = String(state.libraryQuery || '').trim();
   const suggestions = [];
@@ -1068,12 +1072,20 @@ function searchAssistHtml() {
   }
   const recent = !q && state.recentSearches.length ? state.recentSearches.slice(0,5) : [];
   if (!suggestions.length && !recent.length) return '';
+  if (android) {
+    const title = he ? 'חיפושים אחרונים' : 'Recent searches';
+    return `<div class="search-assist android-search-assist" role="region" aria-label="${title}">${recent.length ? `<div class="search-assist-heading">${title}</div>` : ''}${suggestions.map(row=>`<button type="button" data-search-suggestion="${esc(row.query)}"><strong dir="auto">${esc(row.label)}</strong><small>${esc(row.sub)}</small></button>`).join('')}${recent.map(query=>`<button type="button" class="search-assist-recent" data-search-suggestion="${esc(query)}"><span class="search-assist-history-icon" aria-hidden="true">${svgIcon('history')}</span><strong dir="auto">${esc(query)}</strong></button>`).join('')}</div>`;
+  }
   return `<div class="search-assist">${suggestions.map(row=>`<button data-search-suggestion="${esc(row.query)}"><strong>${esc(row.label)}</strong><small>${esc(row.sub)}</small></button>`).join('')}${recent.map(query=>`<button data-search-suggestion="${esc(query)}"><span>${svgIcon('history')}</span><strong>${esc(query)}</strong><small>${he?'חיפוש אחרון':'Recent'}</small></button>`).join('')}</div>`;
 }
 
 function refreshSearchAssist() {
   const node = document.getElementById('librarySearchAssist');
   if (node) node.innerHTML = searchAssistHtml();
+  if (Capacitor.getPlatform()==='android') {
+    const input = document.getElementById('librarySearch');
+    if (input) input.setAttribute('aria-expanded',String(Boolean(node?.firstElementChild)));
+  }
   bindSearchAssist(node || document);
 }
 
@@ -1082,6 +1094,7 @@ function bindSearchAssist(root=document) {
     state.libraryQuery = el.dataset.searchSuggestion || '';
     rememberLibrarySearch(state.libraryQuery);
     const input = document.getElementById('librarySearch'); if (input) input.value = state.libraryQuery;
+    if (Capacitor.getPlatform()==='android') { state.librarySearchAssistOpen=false; input?.blur(); }
     runLibrarySearch(); refreshSearchAssist();
   }));
 }
@@ -2086,6 +2099,11 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 7000) {
 async function bootstrapJson(path) {
   const rawPath = String(path || '');
   const key = `bootstrap:${rawPath}`;
+  // Only the main video catalog determines whether the Android app is using
+  // a saved *library*. Secondary feeds (likes, trends or optional audio) must
+  // not flash an offline banner or clear a genuine video-catalog outage when
+  // concurrent requests finish in a different order.
+  const tracksSavedLibrary = Capacitor.getPlatform() !== 'android' || rawPath.startsWith('/video-map');
   let networkError = null;
   if (navigator.onLine !== false) {
     try {
@@ -2122,7 +2140,7 @@ async function bootstrapJson(path) {
         }
       }
       offlineCachePut(key, data).catch(() => {});
-      if (isCatalog) {
+      if (isCatalog && tracksSavedLibrary) {
         state.offlineMode = false;
         state.usingCachedLibrary = false;
         state.offlineCacheSavedAt = 0;
@@ -2135,9 +2153,11 @@ async function bootstrapJson(path) {
 
   const cached = await offlineCacheGet(key);
   if (cached && Object.prototype.hasOwnProperty.call(cached, 'data')) {
-    state.offlineMode = true;
-    state.usingCachedLibrary = true;
-    state.offlineCacheSavedAt = Math.max(Number(state.offlineCacheSavedAt) || 0, Number(cached.savedAt) || 0);
+    if (tracksSavedLibrary) {
+      state.offlineMode = true;
+      state.usingCachedLibrary = true;
+      state.offlineCacheSavedAt = Math.max(Number(state.offlineCacheSavedAt) || 0, Number(cached.savedAt) || 0);
+    }
     return cached.data;
   }
   throw networkError || new Error('No internet connection and no saved library is available yet.');
@@ -2547,7 +2567,12 @@ async function hydrateInitialCatalogCache() {
     state.likeCounts = likeCounts || {};
     state.libraryReady = true;
     state.loading = false;
-    state.usingCachedLibrary = true;
+    // Showing recently saved lectures right away is only a warm startup.
+    // Android should not claim the LIVE library failed before checking it.
+    // A confirmed disconnected device may still show the offline notice;
+    // bootstrapJson turns it on if a real live catalog request fails.
+    state.usingCachedLibrary = Capacitor.getPlatform()==='android'
+      ? navigator.onLine === false : true;
     state.offlineCacheSavedAt = Math.max(...cached.map(entry => Number(entry?.savedAt)||0), 0);
     render();
     return true;
@@ -3802,27 +3827,16 @@ function bottomNavHtml() {
     </button>`).join('')}</nav>`;
 }
 
-// Intentionally bounded to a few static, text-only elements. A drag must NOT
-// instantiate a second live stream, audio player, interactive account form,
-// 48-card Shiurim grid or network requests on a low-memory Android device.
+// Render the same existing Android tab content for an accurate first-screen
+// swipe preview. android-swipe-motion.js makes it inert and removes extra
+// below-fold cards, input values and media BEFORE mounting it.
 function androidSwipePeekHtml(tab) {
-  const he=currentLanguage()==='he';
-  const name={home:he?'בית':'Home',shiurim:he?'שיעורים':'Shiurim',
-    live:he?'שידור חי':'Live',library:he?'הספרייה שלכם':'Your Library',
-    account:he?'החשבון שלי':'My Account'}[tab]||'';
-  const title=label=>`<div class="page-title"><h1>${label}</h1></div>`;
-  const rows=state.videos.slice(0,3).map(v=>
-    `<div class="android-swipe-peek-row">${esc(String(v.titleEn||v.title||v.name||'Shiur'))}</div>`).join('');
-  let body='';
-  if(tab==='home')body=`<section class="hero pro-hero"><div class="hero-content"><h1>Torah, wherever you are.</h1><p>Live shiurim, recordings and your Torah library — in one app.</p></div></section>
-    <div class="android-swipe-peek-shortcuts"><span>Schedule</span><span>Purchase</span><span>Your Library</span></div>`;
-  else if(tab==='shiurim')body=title('Torah Shiurim Library')+
-    `<div class="toolbar-card"><div class="segmented large"><span>All</span><span>Video</span><span>Audio</span></div><div class="android-swipe-peek-search">Search title, speaker or lecture code…</div></div>
-    <div class="android-swipe-peek-list">${rows}</div>`;
-  else if(tab==='live')body=`${title('Listen &amp; Watch Live')}<div class="live-grid pro-live-grid"><div class="live-location-card"><div class="location-icon">BP</div><div><h2>Boro Park</h2><p>Open Live Stream</p></div></div><div class="live-location-card"><div class="location-icon">FB</div><div><h2>Flatbush</h2><p>Open Live Stream</p></div></div></div>`;
-  else if(tab==='library')body=`${title(name)}<div class="android-swipe-peek-tabs"><span>My Likes</span><span>Downloads</span><span>History</span></div><div class="account-card"><h2>${he?'השיעורים שלכם':'Your saved shiurim'}</h2><p>${he?'שיעורים והורדות':'Likes, history and offline downloads'}</p></div>`;
-  else if(tab==='account')body=`${title(name)}<div class="account-card"><h2>${state.user?esc(String(state.user.name||'Account')):he?'התחברות':'Sign In'}</h2><p>${he?'ניהול החשבון':'Your profile and settings'}</p></div>`;
-  return `<main class="android-swipe-peek-body">${body}</main>`;
+  if(tab==='home') return homeHtml();
+  if(tab==='shiurim') return shiurimHtml();
+  if(tab==='live') return liveHtml();
+  if(tab==='library') return libraryHtml();
+  if(tab==='account') return accountHtml();
+  return '';
 }
 
 function shell(content) {
@@ -3841,7 +3855,7 @@ function shell(content) {
       </div>
     </header>
     ${offlineBannerHtml()}
-    <main class="content">${content}</main>
+    <main class="content${Capacitor.getPlatform()==='android'&&state.screen==='account'?' android-account-swipe-surface':''}">${content}</main>
     ${state.current && !(state.watchVideo && state.watchMinimized && state.watchMode === 'video') ? miniPlayerHtml() : ''}
     ${donateFabHtml()}
     ${Capacitor.getPlatform()==='android'?'':bottomNavHtml()}
@@ -4696,7 +4710,7 @@ function shiurimHtml() {
       <div class="segmented large">
         ${['all', 'video', 'audio'].map(mode => `<button data-library-mode="${mode}" class="${state.libraryMode === mode ? 'active' : ''}">${mode === 'all' ? 'All' : mode[0].toUpperCase() + mode.slice(1)}</button>`).join('')}
       </div>
-      <div class="library-search"><input id="librarySearch" type="search" value="${esc(state.libraryQuery)}" placeholder="${currentLanguage()==='he'?'חיפוש כותרת, מרצה או קוד שיעור…':'Search title, speaker or lecture code…'}" autocomplete="off" autocapitalize="off" spellcheck="false"><select id="librarySearchMode" aria-label="Search mode"><option value="catalog" ${state.librarySearchMode === 'catalog' ? 'selected' : ''}>${currentLanguage()==='he'?'כותרת':'Title'}</option><option value="content" ${state.librarySearchMode === 'content' ? 'selected' : ''}>${currentLanguage()==='he'?'תוכן השיעור':'Shiur Content'}</option></select></div><div id="librarySearchAssist">${searchAssistHtml()}</div>${activeFilterChipsHtml()}
+      ${Capacitor.getPlatform()==='android'?'<div class="library-search-autocomplete">':''}<div class="library-search"><input id="librarySearch" type="search"${Capacitor.getPlatform()==='android'? ' aria-controls="librarySearchAssist" aria-expanded="'+(state.librarySearchAssistOpen?'true':'false')+'"':''} value="${esc(state.libraryQuery)}" placeholder="${currentLanguage()==='he'?'חיפוש כותרת, מרצה או קוד שיעור…':'Search title, speaker or lecture code…'}" autocomplete="off" autocapitalize="off" spellcheck="false"><select id="librarySearchMode" aria-label="Search mode"><option value="catalog" ${state.librarySearchMode === 'catalog' ? 'selected' : ''}>${currentLanguage()==='he'?'כותרת':'Title'}</option><option value="content" ${state.librarySearchMode === 'content' ? 'selected' : ''}>${currentLanguage()==='he'?'תוכן השיעור':'Shiur Content'}</option></select></div><div id="librarySearchAssist">${searchAssistHtml()}</div>${Capacitor.getPlatform()==='android'?'</div>':''}${activeFilterChipsHtml()}
       <button class="library-filter-toggle ${state.filterPanelOpen ? 'open' : ''}" data-toggle-library-filters="1" aria-expanded="${state.filterPanelOpen ? 'true' : 'false'}"><span class="library-filter-toggle-label"><i class="fa-solid fa-sliders" aria-hidden="true"></i><span>Filters</span></span></button>
       <div class="library-filter-panel ${state.filterPanelOpen ? 'open' : ''}">
         ${sortChoiceHtml()}
@@ -7158,7 +7172,11 @@ function bindPlayerSpeedChoices() {
   }));
 }
 let androidNavigationSequence=0;
-async function navigateToScreen(el) {
+async function navigateToScreen(el, {fromSwipe=false}={}) {
+    // Remember the real outgoing page before replacing it. Reverse swipes
+    // therefore show the exact page that was previously on screen.
+    if(Capacitor.getPlatform()==='android' && typeof androidSwipeMotion !== 'undefined')
+      androidSwipeMotion.rememberPage(state.screen);
     const sequence=++androidNavigationSequence;
     if(Capacitor.getPlatform()==='android'&&el.closest('.android-floating-nav')){
       state.screen=el.dataset.nav;
@@ -7184,7 +7202,7 @@ async function navigateToScreen(el) {
     state.libraryLimit = 48;
     state.filterDialog = '';
     render();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: fromSwipe ? 'instant' : 'smooth' });
 }
 function bind() {
   document.querySelectorAll('[data-retry-library]').forEach(el => el.addEventListener('click', () => bootstrap({ manual:true })));
@@ -7405,20 +7423,46 @@ function bind() {
   document.querySelectorAll('[data-delete-confirm]').forEach(el => el.addEventListener('click', deleteCurrentAccount));
 
   const librarySearch = document.getElementById('librarySearch');
-  if (librarySearch) librarySearch.addEventListener('input', () => {
-    state.libraryQuery = librarySearch.value;
-    state.libraryLimit = 48;
-    refreshSearchAssist();
-    clearTimeout(librarySearch._timer);
-    librarySearch._timer = setTimeout(runLibrarySearch, 110);
-  });
-
-
-  if (librarySearch) librarySearch.addEventListener('keydown', event => { if(event.key==='Enter'){ if(String(librarySearch.value||'').trim()) usageAnalytics.event('search',{dedupeKey:'app-search',cooldownMs:2000}); rememberLibrarySearch(librarySearch.value); refreshSearchAssist(); librarySearch.blur(); } });
+  if (librarySearch) {
+    const androidAssist=Capacitor.getPlatform()==='android';
+    if (androidAssist) {
+      const openAssist=()=>{if(!state.librarySearchAssistOpen){state.librarySearchAssistOpen=true;refreshSearchAssist();}};
+      librarySearch.addEventListener('focus',openAssist);
+      librarySearch.addEventListener('click',openAssist);
+      librarySearch.addEventListener('blur',()=>{
+        // Touch selection happens after blur; allow the suggestion click first.
+        setTimeout(()=>{
+          const focused=document.activeElement,assist=document.getElementById('librarySearchAssist');
+          if(focused!==librarySearch&&!assist?.contains(focused)&&state.librarySearchAssistOpen){
+            state.librarySearchAssistOpen=false;refreshSearchAssist();
+          }
+        },160);
+      });
+    }
+    librarySearch.addEventListener('input',()=>{
+      state.libraryQuery=librarySearch.value;state.libraryLimit=48;
+      if(androidAssist)state.librarySearchAssistOpen=true;
+      refreshSearchAssist();
+      clearTimeout(librarySearch._timer);
+      librarySearch._timer=setTimeout(runLibrarySearch,110);
+    });
+    librarySearch.addEventListener('keydown',event=>{
+      if(androidAssist&&event.key==='Escape'){
+        state.librarySearchAssistOpen=false;refreshSearchAssist();librarySearch.blur();return;
+      }
+      if(event.key==='Enter'){
+        if(androidAssist){event.preventDefault();state.librarySearchAssistOpen=false;}
+        if(String(librarySearch.value||'').trim())usageAnalytics.event('search',{dedupeKey:'app-search',cooldownMs:2000});
+        rememberLibrarySearch(librarySearch.value);
+        refreshSearchAssist();librarySearch.blur();
+      }
+    });
+  }
   bindSearchAssist(document);
 
   const librarySearchMode = document.getElementById('librarySearchMode');
   if (librarySearchMode) librarySearchMode.addEventListener('change', () => {
+    if(Capacitor.getPlatform()==='android'){state.librarySearchAssistOpen=false;refreshSearchAssist();}
     state.librarySearchMode = librarySearchMode.value === 'content' ? 'content' : 'catalog';
     state.libraryLimit = 48;
     runLibrarySearch();
@@ -10357,10 +10401,19 @@ if (Capacitor.getPlatform() === 'android' && Capacitor.isNativePlatform()) {
     // native player/miniplayer cleanup and destination render are done.
     navigate: tab => {
       const button=document.querySelector(`.bottom-nav [data-nav="${tab}"]`);
-      return button ? navigateToScreen(button) : undefined;
+      return button ? navigateToScreen(button,{fromSwipe:true}) : undefined;
     }
   });
 }
+
+// One document listener for all renders; taps outside the search dismiss it.
+document.addEventListener('pointerdown',event=>{
+  if(Capacitor.getPlatform()!=='android'||!state.librarySearchAssistOpen)return;
+  const area=document.querySelector('.library-search-autocomplete');
+  if(area?.contains(event.target))return;
+  state.librarySearchAssistOpen=false;
+  refreshSearchAssist();
+},true);
 
 render();
 PlaybackController.init().catch(()=>{});

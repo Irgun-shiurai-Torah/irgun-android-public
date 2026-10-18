@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createAndroidVideoDisplaySync} from '../src/android-video-display.js';
 import {nativeVideoPictureVisible} from './android-native-picture-evidence.mjs';
-import {assertAndroidVideoTimes,nativeControllerRevealPoint,nativeDoubleTapPoint} from './android-video-display-regression.mjs';
+import {assertAndroidVideoTimes,nativeControllerRevealPoint,nativeDoubleTapPoint,nativeControlsReady,revealNativeControlsWithPhysicalTaps} from './android-video-display-regression.mjs';
 
 test('native Media3 surface uses TextureView to preserve actual scroll-clipped video pixels',()=>{
  const java=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
@@ -279,3 +279,121 @@ test('partly scrolled picture measurement waits for real controller auto-hide wi
  assert.equal(commands.length,3);assert.equal(report.checks.length,1);
   assert.equal(report.checks[0].brightFraction,.5,'Measure the entire exposed native surface');
 });
+
+test('native Media3 visible scrim alone is NOT proof the toolbar and seek bar appeared',()=>{
+ const full={controllerFullyVisible:true,pipButtonVisible:true,qualityButtonVisible:true,
+   elapsedTimeRect:{},durationTimeRect:{},seekBarRect:{}};
+ assert.equal(nativeControlsReady(full),true);
+ for(const key of Object.keys(full))assert.equal(nativeControlsReady({...full,[key]:null}),false,key);
+});
+
+test('controller visibility guard reads current state immediately before the eight-second timeout',async()=>{
+ const media={controllerFullyVisible:true,pipButtonVisible:true,qualityButtonVisible:true,
+   elapsedTimeRect:{},durationTimeRect:{},seekBarRect:{},doubleTapSeekCount:0};
+ let taps=0;
+ await revealNativeControlsWithPhysicalTaps({sample:async()=>({media3:{...media}}),
+   adb:()=>taps++,delay:async()=>{}});
+ assert.equal(taps,0);
+});
+
+
+test('fresh native controller check accepts already-visible controls after a real physical tap',async()=>{
+ const media={surfaceX:0,surfaceY:121,surfaceVisibleWidth:320,surfaceVisibleHeight:180,
+   controllerFullyVisible:true,pipButtonVisible:true,qualityButtonVisible:true,
+   elapsedTimeRect:{x:10,y:275,width:44,height:19},
+   durationTimeRect:{x:248,y:275,width:56,height:19},
+   seekBarRect:{x:0,y:221,width:320,height:48},doubleTapSeekCount:0};
+ const touches=[],delays=[];
+ const shown=await revealNativeControlsWithPhysicalTaps({
+   sample:async()=>({media3:{...media}}),fresh:true,
+   adb:(...args)=>touches.push(args),delay:async ms=>delays.push(ms)
+ });
+ assert.ok(nativeControlsReady(shown.media3));
+ assert.equal(touches.length,1,'A controller that stays fully visible must not exhaust three unnecessary tap retries');
+ assert.equal(touches[0][0],'shell');
+ assert.equal(touches[0][1],'input');
+ assert.equal(touches[0][2],'tap');
+ assert.equal(shown.media3.doubleTapSeekCount,0,'Controller refresh may not accidentally seek');
+ assert.ok(delays.includes(550),'Tap attempts should be separated beyond the double-tap seek window');
+});
+
+test('partial controller visibility performs separate native hide and reveal taps',async()=>{
+ const media={surfaceX:0,surfaceY:0,surfaceVisibleWidth:320,surfaceVisibleHeight:640,
+   controllerFullyVisible:true,pipButtonVisible:false,qualityButtonVisible:false,
+   elapsedTimeRect:null,durationTimeRect:null,seekBarRect:null,doubleTapSeekCount:0};
+ let taps=0;const delays=[];
+ const shown=await revealNativeControlsWithPhysicalTaps({
+   sample:async()=>({media3:{...media}}),delay:async ms=>delays.push(ms),
+   adb:()=>{taps++;if(taps===1)media.controllerFullyVisible=false;
+     else Object.assign(media,{controllerFullyVisible:true,pipButtonVisible:true,
+       qualityButtonVisible:true,elapsedTimeRect:{},durationTimeRect:{},seekBarRect:{}});}
+ });
+ assert.equal(taps,2);assert.ok(delays.includes(550));
+ assert.ok(nativeControlsReady(shown.media3));
+ assert.equal(shown.media3.doubleTapSeekCount,0);
+});
+
+test('controller recovery retries lost physical taps but fails on persistent hidden controls or a seek',async()=>{
+ const base=()=>({surfaceX:0,surfaceY:0,surfaceVisibleWidth:320,surfaceVisibleHeight:640,
+   controllerFullyVisible:false,pipButtonVisible:false,qualityButtonVisible:false,
+   elapsedTimeRect:null,durationTimeRect:null,seekBarRect:null,doubleTapSeekCount:0});
+ const m=base();let taps=0;
+ await revealNativeControlsWithPhysicalTaps({sample:async()=>({media3:{...m}}),
+   delay:async()=>{},adb:()=>{if(++taps===2)Object.assign(m,{controllerFullyVisible:true,
+     pipButtonVisible:true,qualityButtonVisible:true,elapsedTimeRect:{},durationTimeRect:{},seekBarRect:{}});}});
+ assert.equal(taps,2);
+ const failed=base();let failures=0;
+ await assert.rejects(()=>revealNativeControlsWithPhysicalTaps({sample:async()=>({media3:{...failed}}),
+   delay:async()=>{},adb:()=>failures++}),/did not respond to three physical reveal attempts/);
+ assert.equal(failures,3);
+ const accidental=base();
+ await assert.rejects(()=>revealNativeControlsWithPhysicalTaps({
+   sample:async()=>({media3:{...accidental}}),delay:async()=>{},
+   adb:()=>{accidental.doubleTapSeekCount++;}}),/must never seek/);
+});
+
+test('Android Library section and top navigation controls are bigger and centered without changing iOS',()=>{
+ const css=readFileSync('src/style.css','utf8');
+ const section=css.slice(css.indexOf('/* Android-only centered and larger page controls */'));
+ assert.ok(section.length>400);
+ assert.match(section,/body\.irgun-android \.library-tabs\.library-tabs-scroll/);
+ assert.match(section,/justify-content:center!important/);
+ assert.match(section,/flex-wrap:wrap!important/);
+ assert.match(section,/min-height:44px/);
+ assert.match(section,/body\.irgun-android \.topbar \.top-store/);
+ assert.match(section,/body\.irgun-android \.toolbar-card \.segmented button/);
+ assert.match(section,/@media \(max-width:390px\)/);
+});
+
+test('portrait-locked fullscreen quality and speed menus follow the same rotated Media3 PlayerView',()=>{
+  const java=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
+  const activity=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/MainActivity.java','utf8');
+  assert.match(java,/Math\.abs\(surface\.getRotation\(\)\) != 90f/);
+  assert.match(java,/private boolean showRotatedChoiceMenu\(/);
+  assert.match(java,/surface\.addView\(overlay,new FrameLayout\.LayoutParams\(/,
+    'The popup must inherit PlayerView rotation rather than be a portrait Activity dialog');
+  assert.match(java,/rotatedChoicePanel = panel/);
+  assert.match(java,/rotatedChoiceOverlay = overlay/);
+  assert.match(java,/setOnClickListener\(view -> dismissRotatedChoiceMenuInternal\(\)\)/);
+  assert.match(java,/rotatedChoiceOverlay != null && !remainsSideways/);
+  assert.match(java,/rotatedChoiceOverlay != null[\s\S]*?return super\.dispatchTouchEvent\(event\)/,
+    'A modal touch cannot also double-tap seek or minimize the same video');
+  assert.match(java,/scrollHeight = Math\.min\(dp\(44\*labels\.length\)/,
+    'Speed choices must remain scrollable on a short landscape screen');
+  assert.match(java,/showRotatedChoiceMenu\("quality","Video quality"/);
+  assert.match(java,/showRotatedChoiceMenu\("speed","Playback speed"/);
+  assert.match(java,/response\.put\("qualityMenuVisible",[\s\S]*?"quality"\.equals\(rotatedChoiceKind\)/);
+  assert.match(java,/response\.put\("speedMenuVisible",[\s\S]*?"speed"\.equals\(rotatedChoiceKind\)/);
+  assert.match(java,/response\.put\("rotatedMenuParentRotationDegrees"/);
+  assert.match(activity,/if \(IrgunNativeVideoPlugin\.dismissRotatedChoiceMenu\(\)\) return;/);
+  assert.match(java,/new AlertDialog\.Builder\(getActivity\(\)\)\.setTitle\("Video quality"\)/,
+    'Ordinary unlocked fullscreen retains native Android quality dialog');
+  assert.match(java,/new AlertDialog\.Builder\(getActivity\(\)\)\.setTitle\("Playback speed"\)/,
+    'Ordinary unlocked fullscreen retains native Android speed dialog');
+  assert.match(java,/applyQualityChoice\(player,choices,which\)/,
+    'Both rotated and regular menus must select the same Media3 track');
+  assert.doesNotMatch(java.slice(java.indexOf('private boolean showRotatedChoiceMenu('),
+    java.indexOf('private void updateVideoActions()')),/setRequestedOrientation|new ExoPlayer|seekTo\(/,
+    'Choosing quality or speed must not force device rotation, rebuild a player or seek');
+});
+

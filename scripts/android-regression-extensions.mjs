@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
-import {settledNativeTapPoint,waitForNativeWindowFocus} from './android-native-tap-point.mjs';
+import {settledNativeTapPoint,waitForNativeWindowFocus,waitForRestoredAndroidViewport} from './android-native-tap-point.mjs';
 import {safeNativeBackgroundHandoff} from './android-background-handoff-check.mjs';
 import {startMediaRequest,completeMediaRequest,failedDuringOffline} from './android-network-evidence.mjs';
 import {fullscreenEducationTapPoint,mediaNotificationClock,settledMediaNotificationControlPoint} from './android-system-ui-observation.mjs';
@@ -74,6 +74,41 @@ async function command(method,params={}) {
   });
 }
 async function evaluate(expression) {return command('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true}).then(result=>result.result.value);}
+
+async function waitForNativeBridgeReady(timeout=45000) {
+  const deadline=Date.now()+timeout;
+  let last={};
+  while(Date.now()<deadline) {
+    try {
+      // CDP can attach while the splash WebView exists but before Capacitor's
+      // JS bridge and read-only QA observer have been installed.
+      const state=JSON.parse(await evaluate(
+        'JSON.stringify({url:location.href,readyState:document.readyState,'+
+        'qa:!!window.ISTReleaseQA?.snapshot,'+
+        'nativePromiseType:typeof window.Capacitor?.nativePromise})'));
+      last=state;
+      if(state.qa&&state.nativePromiseType==='function') {
+        const geometry=await evaluate(
+          "window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
+        if(geometry&&Number.isFinite(geometry.left)&&Number.isFinite(geometry.top)&&
+           Number.isFinite(geometry.right)&&Number.isFinite(geometry.bottom)&&
+           geometry.right>geometry.left&&geometry.bottom>geometry.top) {
+          report.bridgeReadyAt=new Date().toISOString();
+          report.bridgeReady={...state,focused:geometry.focused};
+          save();
+          return geometry;
+        }
+        last={...state,geometry};
+      }
+    } catch(error) {
+      last={...last,observationError:String(error?.message||error)};
+    }
+    await delay(350);
+  }
+  throw new Error('Capacitor native bridge and QA observer did not become ready after WebView startup; last='+
+    JSON.stringify(last));
+}
+
 async function read() {
   const snap=await evaluate('JSON.stringify(window.ISTReleaseQA?.snapshot?.() || {observerMissing:true})');
   const s=JSON.parse(snap);
@@ -380,7 +415,7 @@ async function sampleMovingVideo(){
 
 ensureReport();
 try{
-  await connect();bounds=await nativeBounds();
+  await connect();await waitForNativeBridgeReady();bounds=await nativeBounds();
   const initial=await wait(s=>s.ready&&s.watchId&&s.watchMode==='audio'&&s.native.audioIsPlaying,'Existing real-MP4 audio/video handoff test must leave audio playing');
   assert.equal(initial.isLoggedIn,process.env.IRGUN_EXPECT_SIGNED_IN==='1','Media suite must execute in its declared logged-in or logged-out state');
   report.accountMode=initial.isLoggedIn?'logged-in':'logged-out';
@@ -389,7 +424,7 @@ try{
   assert.ok(Math.abs(initial.speed-1)<.01&&Math.abs(initial.native.playbackSpeed-1)<.05,
     'A new Android playback session must default to 1x, never 0.75x');
   audibleAudio(initial);report.initial={watchId:initial.watchId,positionMs:initial.native.audioPositionMs,defaultSpeed:initial.speed};
-  checks('Started from successful real-media 10-minute audio/video handoff');
+  checks('Started from successful real-MP4 audio/video handoff');
 
   await section('Repeated audio/video handoffs preserve playing position and single audio source',async()=>{
     for(let i=0;i<2;i++){
@@ -829,7 +864,7 @@ try{
       assert.ok(end.native.audioPositionMs>start.native.audioPositionMs+1400,'Downloaded audio must continue playing without internet');
       checks('Actual downloaded audio played while offline',{bytes:record.bytes,downloadAttempts:record.downloadAttempts});
       ws.close();adb('shell','am','force-stop',pkg);adb('shell','am','start','-W','-n',pkg+'/.SplashActivity');
-      await delay(2500);await connect();bounds=await nativeBounds();
+      await delay(2500);await connect();await waitForNativeBridgeReady();bounds=await nativeBounds();
       const restarted=await wait(s=>s.ready&&s.offline.some(x=>x.key===record.key),'Actual offline app restart must load the cached library and saved download');
       assert.equal(restarted.isLoggedIn,process.env.IRGUN_EXPECT_SIGNED_IN==='1','Offline restart must retain the declared account session');
       await tap('.bottom-nav [data-nav="library"]');
@@ -1167,7 +1202,7 @@ try{
     adb('shell','am','force-stop',pkg);
     adb('shell','am','start','-W','-n',pkg+'/.SplashActivity');
     await delay(3000);
-    await connect();bounds=await nativeBounds();
+    await connect();await waitForNativeBridgeReady();bounds=await nativeBounds();
     const restored=await wait(s=>s.ready,'App did not reload after force-stop',45000);
     assert.ok(Math.abs(restored.speed-1.5)<0.01,'1.5x playback speed preference was lost after relaunch');
   });
@@ -1182,9 +1217,14 @@ try{
       if (/^he/.test((await read()).lang)) await tap('[data-language-toggle]');
       const english=await wait(s=>s.ready&&s.lang==='en','English app must render before narrow layout');
       assert.ok(english.ready);
+      const readLayout=async()=>JSON.parse(await evaluate('JSON.stringify({w:innerWidth,h:innerHeight,lang:document.documentElement.lang,dir:document.documentElement.dir,nav:[...document.querySelectorAll(".bottom-nav [data-nav]")].map(x=>{let r=x.getBoundingClientRect();return {key:x.dataset.nav,width:r.width,left:r.left,right:r.right,bottom:r.bottom}})})'));
+      // A focused Android Activity can already have 320x640 native coordinates
+      // while WebView still reports 240x320 after wm resize. Snapshot both
+      // before resizing; wait for both to restore before the next real tap.
+      const normalDom=await readLayout();
+      const normalNative=await evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})");
       adb('shell','wm','size','240x320');
       await delay(1400);
-      const readLayout=async()=>JSON.parse(await evaluate('JSON.stringify({w:innerWidth,h:innerHeight,lang:document.documentElement.lang,dir:document.documentElement.dir,nav:[...document.querySelectorAll(".bottom-nav [data-nav]")].map(x=>{let r=x.getBoundingClientRect();return {key:x.dataset.nav,width:r.width,left:r.left,right:r.right,bottom:r.bottom}})})'));
       const englishScreen=await readLayout();
       assert.match(adb('shell','wm','size'),/Override size:\s*240x320/,
         'Android must actually use a 240x320 screen');
@@ -1199,21 +1239,71 @@ try{
       // the UI hierarchy cannot expose accurate WebView hit-boxes after wm resize.
       // Both reduced-width layouts below are still rendered by the real emulator.
       adb('shell','wm','size','reset');
-      await delay(1100);
-      bounds=await nativeBounds();
-      await tap('[data-language-toggle]');
-      await wait(s=>s.lang==='he'||s.lang==='he-IL','Real language button did not activate Hebrew');
+      const restored=await waitForRestoredAndroidViewport({
+        expected:{native:normalNative,dom:{width:normalDom.w,height:normalDom.h}},
+        readNative:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),
+        readDom:async()=>JSON.parse(await evaluate('JSON.stringify({width:innerWidth,height:innerHeight})')),
+        delay
+      });
+      assert.ok(!/Override size:/.test(adb('shell','wm','size')),
+        'Android emulator must really restore its physical display size before tapping the language control');
+      bounds=[restored.native.left,restored.native.top,restored.native.right,restored.native.bottom];
+      const languageTaps=[];
+      let hebrew;
+      for(let attempt=0;attempt<2;attempt++) {
+        const current=await read();
+        if(/^he/.test(current.lang)){hebrew=current;break;}
+        assert.equal(current.lang,'en','English/Hebrew QA must not switch from an unrelated language state');
+        const target=await hit('[data-language-toggle]');
+        assert.ok(target,'The real language button must be visible and unobstructed after restoring display size');
+        const position=await tap('[data-language-toggle]');
+        languageTaps.push({position,target,restored:restored.dom,attempt:attempt+1});
+        try {
+          hebrew=await wait(s=>s.lang==='he'||s.lang==='he-IL',
+            'Physical language button tap failed after display resize',6500);
+          break;
+        }catch(error) {
+          if(attempt===1)throw new Error(String(error.message)+
+            '; physicalTaps='+JSON.stringify(languageTaps));
+          // An emulator input event may be dropped while its display is
+          // still settling. Revalidate actual geometry and retry one real
+          // ADB touch. Never set i18n state from the test.
+          await waitForRestoredAndroidViewport({
+            expected:{native:normalNative,dom:{width:normalDom.w,height:normalDom.h}},
+            readNative:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),
+            readDom:async()=>JSON.parse(await evaluate('JSON.stringify({width:innerWidth,height:innerHeight})')),
+            delay
+          });
+        }
+      }
+      assert.ok(hebrew&&/^he/.test(hebrew.lang),'Android Hebrew transition must be observed from a real touch');
+      checks('Android window and WebView restore before physical Hebrew toggle',
+        {normalSize:originalSize,restored,languageTaps});
       adb('shell','wm','size','240x320');
-      await delay(1100);
-      const hebrewScreen=await readLayout();
-      assert.ok(/^he/.test(hebrewScreen.lang),'Hebrew interface did not survive narrow-screen resize');
-      assert.ok(hebrewScreen.dir==='rtl',
-        'Hebrew document must be explicitly right-to-left');
-      assert.ok(hebrewScreen.nav.length>=3,'Hebrew narrow layout needs main navigation');
-      assert.ok(hebrewScreen.nav.every(n=>n.width>=25&&n.left>=-4&&n.right<=hebrewScreen.w+4),
-        'Hebrew navigation is clipped on small screens');
+      // WebView relayout after a language change and display override is async.
+      // Require three consecutive valid samples instead of trusting one stale
+      // innerWidth/rect snapshot. Preserve samples and screenshot BEFORE restore.
+      const hebrewSamples=[];
+      let hebrewScreen=null,stableHebrewLayout=0;
+      for(let attempt=0;attempt<36;attempt++){
+        const sample=await readLayout();
+        const fits=sample.nav.length>=3&&sample.nav.every(n=>
+          n.width>=25&&n.left>=-4&&n.right<=sample.w+4);
+        hebrewSamples.push({w:sample.w,h:sample.h,lang:sample.lang,dir:sample.dir,nav:sample.nav,fits});
+        stableHebrewLayout=fits&&sample.lang.startsWith('he')&&sample.dir==='rtl'
+          ?stableHebrewLayout+1:0;
+        hebrewScreen=sample;
+        if(stableHebrewLayout>=3)break;
+        await delay(250);
+      }
       screenshot('small-screen-hebrew');
-      report.smallScreen={english:englishScreen,hebrew:hebrewScreen,actualSize:adb('shell','wm','size')};
+      assert.ok(/^he/.test(hebrewScreen.lang),'Hebrew interface did not survive narrow-screen resize: '+JSON.stringify(hebrewSamples));
+      assert.ok(hebrewScreen.dir==='rtl','Hebrew document must be explicitly right-to-left: '+JSON.stringify(hebrewSamples));
+      assert.ok(hebrewScreen.nav.length>=3,'Hebrew narrow layout needs main navigation: '+JSON.stringify(hebrewSamples));
+      assert.ok(stableHebrewLayout>=3,
+        'Hebrew navigation must fit the 240x320 viewport in three consecutive WebView layouts; samples='+
+        JSON.stringify(hebrewSamples));
+      report.smallScreen={english:englishScreen,hebrew:hebrewScreen,hebrewSamples,actualSize:adb('shell','wm','size')};
     }finally{
       adb('shell','wm','size','reset');await delay(900);
     }

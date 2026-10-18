@@ -809,12 +809,17 @@ test('restart restores the exact Drive-inclusive catalog cache and retains legac
     const state={counter:1,trends:{}};
     const cache=new Map([['bootstrap:'+path,{data:[video],savedAt:123}]]);
     const context={state,Math,Map,console:{warn(){}},loadMetadata:async()=>{},
+      // Warm-start cache is usable while online without falsely announcing
+      // an offline fallback. Its platform/network context must be explicit.
+      Capacitor:{getPlatform:()=> 'android'},navigator:{onLine:true},
       offlineCacheGet:async key=>cache.get(key)||null,enrichVideo:v=>v,enrichAudio:v=>v,
       itemDate:()=>0,videoId:v=>v.id,rawAudioId:v=>v.id,render(){}};
     const start=mainSource.indexOf('async function hydrateInitialCatalogCache(');
     runInNewContext(mainSource.slice(start,mainSource.indexOf('async function bootstrap(',start))+'\nthis.hydrate=hydrateInitialCatalogCache;',context);
     assert.equal(await context.hydrate(),true,'The saved '+path+' catalog must be usable after process restart');
     assert.equal(state.loading,false);assert.equal(state.videoById.get(video.id),video);
+    assert.equal(state.usingCachedLibrary,false,
+      'Cached videos load immediately, but Android must wait for the live check before showing the offline notice');
   }
 });
 test('Android session restores only verified offline identity for real /me transport failures, never revoked tokens',async()=>{
@@ -1535,4 +1540,102 @@ test('late HLS startup recovery retains one decoder and exposes real failure cau
     'A recovered HLS start must not replace the existing decoded media source');
   assert.match(source,/video\.dataset\.startupFailureReason/,
     'Startup failure must preserve the actual error for emulator diagnostics');
+});
+
+
+test('Android account regression runs the complete authenticated and media suite',()=>{
+ const source=readFileSync('scripts/android-regression-extensions.mjs','utf8');
+ const shell=readFileSync('scripts/android-emulator-account.sh','utf8');
+ const workflow=readFileSync('.github/workflows/android-release-regressions.yml','utf8');
+ assert.match(source,/await section\('Repeated audio\/video handoffs preserve playing position and single audio source'/);
+ assert.match(source,/await section\('Small-screen English\/Hebrew layouts retain usable navigation'/);
+ assert.match(shell,/node scripts\/android-emulator-account\.mjs/);
+ assert.match(workflow,/Independent authenticated comment CRUD, deletion and rejection checks/);
+ assert.match(workflow,/Independent Android token and website cookie session sync checks/);
+ assert.doesNotMatch(source,/IRGUN_SMALL_SCREEN_ONLY/);
+ assert.doesNotMatch(shell,/IRGUN_SMALL_SCREEN_ONLY/);
+ assert.doesNotMatch(workflow,/QUICK-CHECK API34|IRGUN_SMALL_SCREEN_ONLY/);
+});
+
+
+test('Android account regression waits for the native Capacitor bridge before taking window bounds',()=>{
+ const source=readFileSync(new URL('./android-regression-extensions.mjs',import.meta.url),'utf8');
+ const shell=readFileSync(new URL('./android-emulator-account.sh',import.meta.url),'utf8');
+ const workflow=readFileSync(new URL('../.github/workflows/android-release-regressions.yml',import.meta.url),'utf8');
+ assert.match(source,/async function waitForNativeBridgeReady\(timeout=45000\)/);
+ assert.match(source,/state\.qa&&state\.nativePromiseType==='function'/);
+ assert.match(source,/await connect\(\);await waitForNativeBridgeReady\(\);bounds=await nativeBounds\(\)/);
+ assert.match(shell,/node scripts\/android-emulator-account\.mjs/);
+ assert.doesNotMatch(workflow,/IRGUN_SMALL_SCREEN_ONLY|QUICK-CHECK API34/);
+});
+
+test('Android floating navigation has narrow-viewport class and viewport-anchored layout',()=>{
+ const css=readFileSync(new URL('../src/style.css',import.meta.url),'utf8');
+ const js=readFileSync(new URL('../src/android-bottom-navigation.js',import.meta.url),'utf8');
+ assert.match(js,/innerWidth/);
+ assert.match(js,/android-narrow-viewport/);
+ assert.match(js,/addEventListener\('resize',syncCompactViewport/);
+ assert.match(js,/visualViewport\?\.addEventListener\('resize',syncCompactViewport/);
+ assert.match(css,/body\.irgun-android\.android-narrow-viewport #androidBottomNavigationMount\s*\{[\s\S]*?position:fixed!important/);
+ assert.match(css,/body\.irgun-android\.android-narrow-viewport #androidBottomNavigationMount \.bottom-nav\.android-floating-nav\s*\{[\s\S]*?position:absolute!important/);
+ assert.match(css,/grid-template-columns:\s*repeat\(5,minmax\(0,1fr\)\)/);
+ assert.match(css,/pointer-events:auto!important/);
+ assert.match(css,/text-overflow:ellipsis!important/);
+});
+
+test('Android Library recent searches remain hidden until search focus',()=>{
+  const start=mainSource.indexOf('function searchAssistHtml() {');
+  const end=mainSource.indexOf('function refreshSearchAssist() {',start);
+  assert.ok(start>0&&end>start,'Find the actual search-assist HTML function');
+  const platform={current:'android'};
+  const state={libraryQuery:'',librarySearchAssistOpen:false,
+    recentSearches:['Rav Yosef Sayagh','Rav Yaakov Zev Smith','Rav Asher Anshel Eckstein','bald','Rav Ahron Silberstein'],
+    speakerById:new Map([['one',{id:'one'}]]),metadata:{topics:[]}};
+  const esc=x=>String(x).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+  const context={state,Capacitor:{getPlatform:()=>platform.current},
+    currentLanguage:()=> 'en',esc,svgIcon:()=>'<svg></svg>',
+    lectureCodeQuery:()=>null,normalizeText:value=>String(value).toLowerCase(),
+    speakerLabel:()=> 'Rav Yosef Sayagh',topicLabel:()=> ''};
+  runInNewContext(mainSource.slice(start,end)+'\nthis.searchAssist=searchAssistHtml;',context);
+  assert.equal(context.searchAssist(),'','Recent searches must not occupy page space until the user opens Search');
+  state.librarySearchAssistOpen=true;
+  const open=context.searchAssist();
+  assert.match(open,/class="search-assist android-search-assist"/);
+  assert.match(open,/Recent searches/);
+  assert.equal((open.match(/class="search-assist-recent"/g)||[]).length,5);
+  assert.doesNotMatch(open,/<small>Recent<\/small>/,
+    'A compact search row must not repeat the large Recent subtitle');
+  state.libraryQuery='Yosef';
+  const typed=context.searchAssist();
+  assert.match(typed,/data-search-suggestion="Rav Yosef Sayagh"/);
+  assert.doesNotMatch(typed,/search-assist-recent/,
+    'Typing replaces recent history with normal speaker/topic suggestions');
+  state.librarySearchAssistOpen=false;
+  assert.equal(context.searchAssist(),'','Choosing a suggestion or leaving the search should close it');
+  platform.current='ios';
+  state.libraryQuery='';
+  assert.match(context.searchAssist(),/<small>Recent<\/small>/,
+    'iOS retains its existing recent-search display behavior');
+});
+
+test('Android Library autocomplete floats over results and closes on outside interaction',()=>{
+  const css=readFileSync(new URL('../src/style.css',import.meta.url),'utf8');
+  const c=css.slice(css.indexOf('/* Android Shiurim compact on-focus search history */'));
+  assert.ok(c.length>1200);
+  assert.match(c,/body\.irgun-android \.library-search-autocomplete/);
+  assert.match(c,/position:relative/);
+  assert.match(c,/#librarySearchAssist \{[\s\S]*?position:absolute/);
+  assert.match(c,/top:calc\(100% \+ 5px\)/);
+  assert.match(c,/max-height:min\(42vh,320px\)/);
+  assert.match(c,/min-height:44px/);
+  const start=mainSource.indexOf('function shiurimHtml() {');
+  const end=mainSource.indexOf('function searchHtml() {',start);
+  const html=mainSource.slice(start,end);
+  assert.match(html,/class="library-search-autocomplete"/);
+  assert.match(html,/id="librarySearchAssist"/);
+  assert.match(html,/aria-controls="librarySearchAssist"/);
+  assert.match(mainSource,/librarySearch\.addEventListener\('focus',openAssist\)/);
+  assert.match(mainSource,/librarySearch\.addEventListener\('blur'/);
+  assert.match(mainSource,/document\.addEventListener\('pointerdown',event=>\{/);
+  assert.match(mainSource,/state\.librarySearchAssistOpen=false;[\s\S]*?runLibrarySearch\(\); refreshSearchAssist\(\);/);
 });

@@ -437,8 +437,10 @@ test('native PiP, resolution and swipe controls are exercised through real Andro
   assert.match(bridge,/__irgunEnterSystemPipFromNative/);
   assert.doesNotMatch(bridge.slice(bridge.indexOf('pipButton=iconButton'),bridge.indexOf('pipButton.setVisibility')),/enterIrgunPictureInPicture\(/,
     'Toolbar PiP must never bypass the working prepared JS entry path');
-  const quality=bridge.slice(bridge.indexOf('    private void showQualityMenu()'),bridge.indexOf('    private void updateVideoActions()'));
+  const quality=bridge.slice(bridge.indexOf('    private void applyQualityChoice('),bridge.indexOf('    private void updateVideoActions()'));
   assert.match(quality,/getTrackSelectionParameters/);
+  assert.match(quality,/showRotatedChoiceMenu\("quality"/);
+  assert.match(quality,/applyQualityChoice\(player,choices,which\)/);
   assert.match(quality,/clearOverridesOfType\(C.TRACK_TYPE_VIDEO\)/);
   assert.match(quality,/new TrackSelectionOverride/);
   assert.doesNotMatch(quality,/seekTo|setMediaItem|\.prepare\(|new ExoPlayer/);

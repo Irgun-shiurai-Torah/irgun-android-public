@@ -7,7 +7,7 @@ import {nativeHierarchy} from './android-native-hierarchy.mjs';
 import {fullscreenEducationTapPoint} from './android-system-ui-observation.mjs';
 import {settledNativeTapPoint,waitForNativeWindowFocus} from './android-native-tap-point.mjs';
 import {typeObservedNativeText} from './android-native-text-entry.mjs';
-import {verifyAndroidVideoDisplay,assertAndroidVideoTimes,nativeControllerRevealPoint,nativeDoubleTapPoint} from './android-video-display-regression.mjs';
+import {verifyAndroidVideoDisplay,assertAndroidVideoTimes,nativeControllerRevealPoint,nativeDoubleTapPoint,revealNativeControlsWithPhysicalTaps} from './android-video-display-regression.mjs';
 import {verifyAndroidTaskDismissal} from './android-task-dismissal-regression.mjs';
 
 // Read the real WebView through CDP, but perform every navigation gesture with
@@ -405,33 +405,13 @@ try {
       adb('shell','input','tap',...education.map(String));
       await waitForNativeWindowFocus({readBounds:observeWindow,delay});
     }
-    const s=await sample(), m=s.media3;
-    // Previously 48% of the player overlapped the real seek bar on a
-    // 320x640 emulator, silently seeking a 1:42 lecture to ~1:40.
-    // Read the actual seek rectangle and reveal controls above it.
-    const point=nativeControllerRevealPoint(m);
-    const hasTimeRow=m.elapsedTimeRect&&m.durationTimeRect&&m.seekBarRect;
-    if(m.controllerFullyVisible&&(fresh||!hasTimeRow)){
-      // A visible control may have only milliseconds left on its timer.
-      // Physically hide/show it before launching the held-touch instrument,
-      // whose process startup must not consume that remaining timeout.
-      adb('shell','input','tap',...point);
-      await waitNative(s=>!s.media3.controllerFullyVisible,'Physical tap must hide controls',10000);
-      // Separate these controller taps beyond Android's double-tap window.
-      // The same right-edge pair must not become a +15-second user gesture.
-      await delay(500);
-    }
-    if (fresh||!m.controllerFullyVisible||!hasTimeRow) {
-      adb('shell','input','tap',...point);
-    }
-    const shown=await waitNative(s=>s.media3.controllerFullyVisible&&s.media3.pipButtonVisible&&s.media3.qualityButtonVisible&&
-      s.media3.elapsedTimeRect&&s.media3.durationTimeRect&&s.media3.seekBarRect,
-      'Native controls, elapsed time, total duration and seek bar must all be visible after layout settles',10000);
+    // Observe the native controls immediately. If a real tap was lost during
+    // fullscreen/rotation, retry physical Android input, not JavaScript state.
+    const shown=await revealNativeControlsWithPhysicalTaps({sample,adb,delay,fresh});
     assert.equal(shown.media3.settingsButtonVisible,false,
       'The duplicate bottom settings gear must stay removed whenever controls appear');
     assertAndroidVideoTimes(shown.media3);
-    if(fresh)assert.equal(shown.media3.doubleTapSeekCount,m.doubleTapSeekCount,
-      'Physically refreshing controls must not trigger a double-tap seek');
+    // The physical-tap helper already verifies no 15-second seek was triggered.
     return shown;
   };
   const samePlayback=(before,after,label,elapsed)=>{
@@ -444,7 +424,7 @@ try {
   };
   await verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,delay,report,
     capturePicture:captureVisibleNativePicture,
-    showControls:()=>showNativeControls(),tapExit:()=>tapNativeLabel('Exit video fullscreen')});
+    showControls:()=>showNativeControls(),tapExit:()=>tapNativeLabel('Exit video fullscreen'),tapNativeLabel});
   if(process.env.IRGUN_VIDEO_DISPLAY_ONLY==='1') {
     report.scope='Physical tablet video rotation and screen wake; separate from full media/account suite';
   } else {
