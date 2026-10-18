@@ -84,7 +84,10 @@ try {
     assert.ok(point, `Hit-tested swipe area required for ${from.tab}`);
     const start = nativePoint(point), end = nativePoint({ ...point, x: point.endX });
     const index = from.tabs.indexOf(from.tab);
-    const expected = from.tabs[index + (dx < 0 ? 1 : -1)] || from.tab;
+    // Tabs are measured in visual left-to-right order. Physical finger
+    // direction follows the reading direction: RTL reverses the adjacent index.
+    const step = from.lang.startsWith('he') ? (dx < 0 ? -1 : 1) : (dx < 0 ? 1 : -1);
+    const expected = from.tabs[index + step] || from.tab;
     // Observe the physical page midway through actual Android input. A test
     // that only checks the destination would miss the prior jump-only behavior.
     const direction = dx < 0 ? 'left' : 'right';
@@ -131,10 +134,12 @@ try {
     const order = (await read()).tabs;
     const homeIndex = order.indexOf('home');
     assert.ok(homeIndex === 0 || homeIndex === order.length - 1);
-    const forward = homeIndex === 0 ? -1 : 1;
-    await swipe(-forward); // Home end must not wrap
-    for (let i = 0; i < order.length; i++) await swipe(forward);
-    for (let i = 0; i < order.length; i++) await swipe(-forward);
+    // The Home boundary is the physical OUTSIDE edge: right in LTR,
+    // left in RTL. Traverse inward across every visible neighbor, then back.
+    const outward = homeIndex === 0 ? 1 : -1;
+    await swipe(outward); // Home end must not wrap
+    for (let i = 0; i < order.length; i++) await swipe(-outward);
+    for (let i = 0; i < order.length; i++) await swipe(outward);
     assert.equal((await read()).tab, 'home');
   };
   await traverse();
