@@ -39,10 +39,17 @@ export function recentsDismissGesture(xml,{width,height,topTaskIsIrgun=false}) {
   const rect=card?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/)?.slice(1).map(Number);
   assert.ok(rect&&rect[0]>=0&&rect[1]>=0&&rect[2]<=width&&rect[3]<=height&&
     rect[2]>rect[0]&&rect[3]>rect[1],'Actual Recents must expose the visible Irgun screenshot card before swiping');
-  // The thumbnail's OCR/image-selection targets can consume a center drag.
-  // Use its plain outer edge for a short, decisive task-dismiss fling.
-  const x=rect[2]-6;
-  return [x,Math.round(rect[1]+(rect[3]-rect[1])*.65),x,Math.max(1,Math.round(height*.05))];
+  // Pixel Launcher's task screenshot has rounded/clipped edges. The previous
+  // touch at rect.right-6 hit the edge rather than the draggable task: the
+  // actual Android screenshot was byte-identical before and after the swipe.
+  // Start well inside the real, observed Irgun card, but off its centre where
+  // Overview's image/text selection affordances can intercept a gesture.
+  const x=rect[0]+Math.round((rect[2]-rect[0])*.72);
+  const y=Math.round(rect[1]+(rect[3]-rect[1])*.65);
+  const endY=Math.max(1,Math.round(height*.05));
+  assert.ok(x>=rect[0]+12&&x<=rect[2]-12&&y>rect[1]&&y<rect[3]&&
+    endY<y,'Recents fling must start INSIDE the visible card and travel upward');
+  return [x,y,x,endY];
 }
 
 // Do not mistake historical media-button receiver names for a live session.
@@ -100,6 +107,30 @@ export async function verifyAndroidTaskDismissal({adb,sample,delay,report}) {
   writeFileSync('emulator-report/task-dismissal-before.png',execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));
   adb('shell','input','swipe',...gesture.map(String),'180');
   report.gestures.push({recentsSwipeUp:gesture});
+  // Verify the gesture really dismissed the TASK before attributing a still
+  // running service/notification to the app. A missed Launcher fling must not
+  // be mistaken for a Media3 teardown bug. Never simulate task removal with
+  // force-stop, am stack remove, or a synthetic Java callback.
+  let recentAfter='',taskDismissed=false;
+  for(let n=0;n<24;n++){
+    recentAfter=adb('shell','dumpsys','activity','-a','recents');
+    if(!hasIrgunRecentTask(recentAfter)){taskDismissed=true;break;}
+    await delay(250);
+  }
+  if(!taskDismissed){
+    writeFileSync('emulator-report/task-dismissal-after-activity-recents.txt',recentAfter);
+    try {
+      writeFileSync('emulator-report/task-dismissal-after.png',
+        execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));
+    } catch (_) { /* keep the original, specific assertion */ }
+    try { nativeHierarchy('emulator-report/task-dismissal-after-recents.xml'); }
+    catch (_) { /* task presence is already grounded in ActivityManager */ }
+  }
+  assert.ok(taskDismissed,
+    'Physical Recents swipe did not remove the Irgun task; playback service '+
+    'cannot be expected to stop until the system removes that task. '+
+    'See before/after Recents screenshots and native hierarchy; gesture='+
+    JSON.stringify(gesture));
   const stopped=()=>{
     const logs=adb('shell','logcat','-d','-s','IrgunPlayback:D','*:S');
     const services=adb('shell','dumpsys','activity','services',pkg);

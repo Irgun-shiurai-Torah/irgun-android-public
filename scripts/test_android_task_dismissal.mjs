@@ -80,12 +80,30 @@ public class IrgunPlaybackService {
 
 test('Recents gesture targets the observed Irgun card and refuses another app or offscreen thumbnail',()=>{
   const card=(name,bounds='[30,180][290,550]')=>`<hierarchy><node content-desc="${name}" resource-id="com.google.android.apps.nexuslauncher:id/snapshot" visible="true" bounds="${bounds}"></node></hierarchy>`;
-  assert.deepEqual(recentsDismissGesture(card('Screenshot of Irgun Shiurai Torah'),{width:320,height:640}),[284,421,284,32]);
+  assert.deepEqual(recentsDismissGesture(card('Screenshot of Irgun Shiurai Torah'),{width:320,height:640}),[217,421,217,32]);
   assert.throws(()=>recentsDismissGesture(card(''),{width:320,height:640}),/Irgun/);
-  assert.deepEqual(recentsDismissGesture(card(''),{width:320,height:640,topTaskIsIrgun:true}),[284,421,284,32]);
+  assert.deepEqual(recentsDismissGesture(card(''),{width:320,height:640,topTaskIsIrgun:true}),[217,421,217,32]);
   assert.throws(()=>recentsDismissGesture(card('Screenshot of Settings'),{width:320,height:640,topTaskIsIrgun:true}),/Irgun/);
   assert.throws(()=>recentsDismissGesture(card('Screenshot of Settings'),{width:320,height:640}),/Irgun/);
   assert.throws(()=>recentsDismissGesture(card('Screenshot of Irgun Shiurai Torah','[-290,180][-30,550]'),{width:320,height:640}),/Irgun/);
+});
+
+test('Recents fling starts inside the observed rounded task card, never its clipped edge',()=>{
+ const node=(bounds)=>'<node content-desc="Screenshot of Irgun Shiurai Torah" resource-id="com.google.android.apps.nexuslauncher:id/snapshot" visible="true" bounds="'+bounds+'">';
+ const [sx,sy,ex,ey]=recentsDismissGesture(node('[48,79][272,510]'),{width:320,height:640});
+ assert.deepEqual([sx,sy,ex,ey],[209,359,209,32]);
+ assert.ok(sx>48+20&&sx<272-20,'Touch must not start in clipped/rounded screenshot border');
+ assert.ok(sy>79+60&&sy<510-60,'Touch starts vertically within actual draggable content');
+ assert.ok(ey<sy-200,'Physical swipe must travel upward beyond Launcher removal threshold');
+});
+
+test('recents swipe regression verifies actual task disappearance BEFORE service destruction',()=>{
+ const source=readFileSync('scripts/android-task-dismissal-regression.mjs','utf8');
+ assert.ok(source.indexOf('assert.ok(taskDismissed,')>source.indexOf('adb(\'shell\',\'input\',\'swipe\''));
+ assert.ok(source.indexOf('assert.ok(taskDismissed,')<source.indexOf('const stopped=()=>{'));
+ assert.match(source,/task-dismissal-after-recents\.xml/);
+ assert.match(source,/task-dismissal-after\.png/);
+ assert.doesNotMatch(source,/force-stop|am\x27,\x27stack\x27,\x27remove/,'Never fake app task removal');
 });
 
 test('dismissal accepts historical receiver metadata but rejects an actual session record',()=>{
