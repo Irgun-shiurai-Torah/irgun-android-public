@@ -193,3 +193,35 @@ export async function verifyAndroidVideoDisplay({adb,evaluate,sample,waitNative,
   await delay(700);
  }
 }
+
+
+/* Real Android input-only controller recovery: no UI state injection, playback
+ * setters, or Media3/player rebuild. The toolbar and the time row BOTH count. */
+export const nativeControlsReady=m=>Boolean(m?.controllerFullyVisible&&m?.pipButtonVisible&&
+  m?.qualityButtonVisible&&m?.elapsedTimeRect&&m?.durationTimeRect&&m?.seekBarRect);
+export async function revealNativeControlsWithPhysicalTaps({sample,adb,delay,fresh=false}) {
+  let last=await sample(),seekCount=last.media3.doubleTapSeekCount;
+  const guard=s=>assert.equal(s.media3.doubleTapSeekCount,seekCount,
+    'Physical controller reveal must never seek the lecture');
+  if(!fresh&&nativeControlsReady(last.media3))return last; // no 10-second stale visibility wait
+  for(let attempt=0;attempt<3;attempt++){
+    last=await sample();guard(last);
+    if(!fresh&&nativeControlsReady(last.media3))return last;
+    const point=nativeControllerRevealPoint(last.media3);
+    if(last.media3.controllerFullyVisible) {
+      // Custom toolbar may be hidden while Media3's controller says "visible":
+      // physically hide then show to force the native listener to refresh.
+      adb('shell','input','tap',...point);
+      let hidden=false;
+      for(let i=0;i<7;i++){await delay(200);last=await sample();guard(last);
+        if(!last.media3.controllerFullyVisible){hidden=true;break;}}
+      await delay(550); // safely outside Android's double-tap seek window
+      if(!hidden)continue;
+    }
+    adb('shell','input','tap',...point);
+    for(let i=0;i<9;i++){await delay(240);last=await sample();guard(last);
+      if(nativeControlsReady(last.media3))return last;}
+    await delay(550);
+  }
+  throw Error('Native controls did not respond to three physical reveal attempts; last='+JSON.stringify(last));
+}

@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createAndroidVideoDisplaySync} from '../src/android-video-display.js';
 import {nativeVideoPictureVisible} from './android-native-picture-evidence.mjs';
-import {assertAndroidVideoTimes,nativeControllerRevealPoint,nativeDoubleTapPoint} from './android-video-display-regression.mjs';
+import {assertAndroidVideoTimes,nativeControllerRevealPoint,nativeDoubleTapPoint,nativeControlsReady,revealNativeControlsWithPhysicalTaps} from './android-video-display-regression.mjs';
 
 test('native Media3 surface uses TextureView to preserve actual scroll-clipped video pixels',()=>{
  const java=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java','utf8');
@@ -278,4 +278,68 @@ test('partly scrolled picture measurement waits for real controller auto-hide wi
  assert.equal(await capture(visible,'partial'),.5);assert.ok(captured);
  assert.equal(commands.length,3);assert.equal(report.checks.length,1);
   assert.equal(report.checks[0].brightFraction,.5,'Measure the entire exposed native surface');
+});
+
+test('native Media3 visible scrim alone is NOT proof the toolbar and seek bar appeared',()=>{
+ const full={controllerFullyVisible:true,pipButtonVisible:true,qualityButtonVisible:true,
+   elapsedTimeRect:{},durationTimeRect:{},seekBarRect:{}};
+ assert.equal(nativeControlsReady(full),true);
+ for(const key of Object.keys(full))assert.equal(nativeControlsReady({...full,[key]:null}),false,key);
+});
+
+test('controller visibility guard reads current state immediately before the eight-second timeout',async()=>{
+ const media={controllerFullyVisible:true,pipButtonVisible:true,qualityButtonVisible:true,
+   elapsedTimeRect:{},durationTimeRect:{},seekBarRect:{},doubleTapSeekCount:0};
+ let taps=0;
+ await revealNativeControlsWithPhysicalTaps({sample:async()=>({media3:{...media}}),
+   adb:()=>taps++,delay:async()=>{}});
+ assert.equal(taps,0);
+});
+
+test('partial controller visibility performs separate native hide and reveal taps',async()=>{
+ const media={surfaceX:0,surfaceY:0,surfaceVisibleWidth:320,surfaceVisibleHeight:640,
+   controllerFullyVisible:true,pipButtonVisible:false,qualityButtonVisible:false,
+   elapsedTimeRect:null,durationTimeRect:null,seekBarRect:null,doubleTapSeekCount:0};
+ let taps=0;const delays=[];
+ const shown=await revealNativeControlsWithPhysicalTaps({
+   sample:async()=>({media3:{...media}}),delay:async ms=>delays.push(ms),
+   adb:()=>{taps++;if(taps===1)media.controllerFullyVisible=false;
+     else Object.assign(media,{controllerFullyVisible:true,pipButtonVisible:true,
+       qualityButtonVisible:true,elapsedTimeRect:{},durationTimeRect:{},seekBarRect:{}});}
+ });
+ assert.equal(taps,2);assert.ok(delays.includes(550));
+ assert.ok(nativeControlsReady(shown.media3));
+ assert.equal(shown.media3.doubleTapSeekCount,0);
+});
+
+test('controller recovery retries lost physical taps but fails on persistent hidden controls or a seek',async()=>{
+ const base=()=>({surfaceX:0,surfaceY:0,surfaceVisibleWidth:320,surfaceVisibleHeight:640,
+   controllerFullyVisible:false,pipButtonVisible:false,qualityButtonVisible:false,
+   elapsedTimeRect:null,durationTimeRect:null,seekBarRect:null,doubleTapSeekCount:0});
+ const m=base();let taps=0;
+ await revealNativeControlsWithPhysicalTaps({sample:async()=>({media3:{...m}}),
+   delay:async()=>{},adb:()=>{if(++taps===2)Object.assign(m,{controllerFullyVisible:true,
+     pipButtonVisible:true,qualityButtonVisible:true,elapsedTimeRect:{},durationTimeRect:{},seekBarRect:{}});}});
+ assert.equal(taps,2);
+ const failed=base();let failures=0;
+ await assert.rejects(()=>revealNativeControlsWithPhysicalTaps({sample:async()=>({media3:{...failed}}),
+   delay:async()=>{},adb:()=>failures++}),/did not respond to three physical reveal attempts/);
+ assert.equal(failures,3);
+ const accidental=base();
+ await assert.rejects(()=>revealNativeControlsWithPhysicalTaps({
+   sample:async()=>({media3:{...accidental}}),delay:async()=>{},
+   adb:()=>{accidental.doubleTapSeekCount++;}}),/must never seek/);
+});
+
+test('Android Library section and top navigation controls are bigger and centered without changing iOS',()=>{
+ const css=readFileSync('src/style.css','utf8');
+ const section=css.slice(css.indexOf('/* Android-only centered and larger page controls */'));
+ assert.ok(section.length>400);
+ assert.match(section,/body\.irgun-android \.library-tabs\.library-tabs-scroll/);
+ assert.match(section,/justify-content:center!important/);
+ assert.match(section,/flex-wrap:wrap!important/);
+ assert.match(section,/min-height:44px/);
+ assert.match(section,/body\.irgun-android \.topbar \.top-store/);
+ assert.match(section,/body\.irgun-android \.toolbar-card \.segmented button/);
+ assert.match(section,/@media \(max-width:390px\)/);
 });

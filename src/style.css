@@ -3164,3 +3164,61 @@ body.irgun-android .paid-card { scroll-margin-top:calc(84px + env(safe-area-inse
   body.irgun-android .paid-folder-children { margin-inline-start:6px; padding:8px 5px 10px 9px; }
   body.irgun-android .paid-folder-count { max-width:72px; font-size:9px; }
 }
+
+
+/* Android-only centered and larger page controls */
+/* Library categories use centered WRAPPED rows, not a clipped scroll strip. */
+body.irgun-android .library-tabs.library-tabs-scroll {
+  justify-content:center!important;
+  display:flex!important;
+  flex-wrap:wrap!important;
+  align-items:center;
+  overflow:visible;
+  gap:8px!important;
+  padding:9px;
+  margin-inline:auto;
+  max-width:100%;
+  border-radius:16px;
+}
+body.irgun-android .library-tabs.library-tabs-scroll button {
+  flex:0 1 auto!important;
+  min-height:44px;
+  padding:11px 14px;
+  font-size:13.5px;
+  line-height:1.2;
+  text-align:center;
+}
+body.irgun-android .toolbar-card .segmented button,
+body.irgun-android .content > .segmented:not(.library-tabs) button {
+  min-height:44px;
+  padding:10px 13px;
+  font-size:13px;
+}
+body.irgun-android .topbar .top-store,
+body.irgun-android .topbar .top-contact {
+  width:40px;
+  height:40px;
+  flex-basis:40px;
+  border-radius:12px;
+}
+body.irgun-android .topbar .top-store svg,
+body.irgun-android .topbar .top-contact svg {
+  width:20px;
+  height:20px;
+}
+body.irgun-android .topbar .app-language-button,
+body.irgun-android .topbar .top-account {
+  min-height:40px;
+  padding:8px 10px;
+  font-size:10.5px;
+  line-height:1.15;
+}
+body.irgun-android .topbar .top-account {max-width:110px;}
+@media (max-width:390px) {
+  body.irgun-android .library-tabs.library-tabs-scroll {gap:7px!important;padding:8px 6px;}
+  body.irgun-android .library-tabs.library-tabs-scroll button {font-size:12.5px;padding:10px 11px;}
+  body.irgun-android .topbar .top-store,
+  body.irgun-android .topbar .top-contact {width:38px;height:38px;flex-basis:38px;}
+  body.irgun-android .topbar .app-language-button,
+  body.irgun-android .topbar .top-account {min-height:38px;padding:7px 8px;font-size:10px!important;}
+}
