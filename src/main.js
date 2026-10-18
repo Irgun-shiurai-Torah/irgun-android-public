@@ -2087,6 +2087,11 @@ async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 7000) {
 async function bootstrapJson(path) {
   const rawPath = String(path || '');
   const key = `bootstrap:${rawPath}`;
+  // Only the main video catalog determines whether the Android app is using
+  // a saved *library*. Secondary feeds (likes, trends or optional audio) must
+  // not flash an offline banner or clear a genuine video-catalog outage when
+  // concurrent requests finish in a different order.
+  const tracksSavedLibrary = Capacitor.getPlatform() !== 'android' || rawPath.startsWith('/video-map');
   let networkError = null;
   if (navigator.onLine !== false) {
     try {
@@ -2123,7 +2128,7 @@ async function bootstrapJson(path) {
         }
       }
       offlineCachePut(key, data).catch(() => {});
-      if (isCatalog) {
+      if (isCatalog && tracksSavedLibrary) {
         state.offlineMode = false;
         state.usingCachedLibrary = false;
         state.offlineCacheSavedAt = 0;
@@ -2136,9 +2141,11 @@ async function bootstrapJson(path) {
 
   const cached = await offlineCacheGet(key);
   if (cached && Object.prototype.hasOwnProperty.call(cached, 'data')) {
-    state.offlineMode = true;
-    state.usingCachedLibrary = true;
-    state.offlineCacheSavedAt = Math.max(Number(state.offlineCacheSavedAt) || 0, Number(cached.savedAt) || 0);
+    if (tracksSavedLibrary) {
+      state.offlineMode = true;
+      state.usingCachedLibrary = true;
+      state.offlineCacheSavedAt = Math.max(Number(state.offlineCacheSavedAt) || 0, Number(cached.savedAt) || 0);
+    }
     return cached.data;
   }
   throw networkError || new Error('No internet connection and no saved library is available yet.');
@@ -2548,7 +2555,12 @@ async function hydrateInitialCatalogCache() {
     state.likeCounts = likeCounts || {};
     state.libraryReady = true;
     state.loading = false;
-    state.usingCachedLibrary = true;
+    // Showing recently saved lectures right away is only a warm startup.
+    // Android should not claim the LIVE library failed before checking it.
+    // A confirmed disconnected device may still show the offline notice;
+    // bootstrapJson turns it on if a real live catalog request fails.
+    state.usingCachedLibrary = Capacitor.getPlatform()==='android'
+      ? navigator.onLine === false : true;
     state.offlineCacheSavedAt = Math.max(...cached.map(entry => Number(entry?.savedAt)||0), 0);
     render();
     return true;

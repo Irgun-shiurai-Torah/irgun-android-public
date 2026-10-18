@@ -20,7 +20,7 @@ const fetchLibrary=(platform,network,cached=null)=>{
     offlineCacheGet:async()=>cached,
     console:{warn:()=>{}},setTimeout,Date,Number,Promise};
   const f=new Function(...Object.keys(args),loadCatalog+'return bootstrapJson;')(...Object.values(args));
-  return {run:()=>f('/video-map?driveLibrary=1'),requests,cachedWrites,state};
+  return {run:(path='/video-map?driveLibrary=1')=>f(path),requests,cachedWrites,state};
 };
 
 test('Android retries a failing live video catalog once; it never substitutes an empty fake catalog',async()=>{
@@ -75,6 +75,71 @@ test('Android retries the bundled speaker metadata without changing its canonica
   assert.equal(state.speakerById.get('s123').nameHe,'הרב אברהם יפה');
   assert.equal(state.topicById.get('t1').name,'Torah');
   assert.equal(state.speakerAliasToId.get('הרב אברהם יפה'),'s123');
+});
+
+
+test('Android startup shows cached lectures immediately without prematurely claiming the network failed',async()=>{
+  const warmStart=capture('async function hydrateInitialCatalogCache() {','async function bootstrap(options = {}) {');
+  const warm=(platform,online)=>{
+    const cache={'bootstrap:/video-map?driveLibrary=1':{
+      data:[{id:'cached-shiur',title:'Saved shiur'}],savedAt:987654321
+    }};
+    const state={libraryReady:false,loading:true,usingCachedLibrary:false,offlineCacheSavedAt:0,
+      counter:50,trends:{week:new Map(),month:new Map(),all:new Map()}};
+    const renderCalls=[];
+    const deps={state,loadMetadata:async()=>{},offlineCacheGet:async key=>cache[key]||null,
+      enrichVideo:v=>v,enrichAudio:v=>v,itemDate:()=>0,videoId:v=>v.id,rawAudioId:v=>v.id,
+      render:()=>renderCalls.push({ready:state.libraryReady,offline:state.usingCachedLibrary}),
+      console:{warn:()=>{}},Capacitor:{getPlatform:()=>platform},
+      navigator:{onLine:online}};
+    const hydrate=new Function(...Object.keys(deps),warmStart+'return hydrateInitialCatalogCache;')(...Object.values(deps));
+    return {run:hydrate,state,renderCalls};
+  };
+  const android=warm('android',true);
+  assert.equal(await android.run(),true);
+  assert.equal(android.state.libraryReady,true);
+  assert.equal(android.state.videos[0].id,'cached-shiur');
+  assert.equal(android.state.usingCachedLibrary,false,'A warm cache does not prove the live catalog is unavailable');
+  assert.equal(android.state.offlineCacheSavedAt,987654321,'Keep the real cached timestamp');
+  assert.deepEqual(android.renderCalls,[{ready:true,offline:false}],
+    'Show cached lectures immediately, but without a misleading offline notice');
+  const disconnected=warm('android',false);
+  assert.equal(await disconnected.run(),true);
+  assert.equal(disconnected.state.usingCachedLibrary,true,
+    'A device reporting a genuine offline state may mark the saved library immediately');
+  const ios=warm('ios',true);
+  assert.equal(await ios.run(),true);
+  assert.equal(ios.state.usingCachedLibrary,true,'Do not change iOS startup behavior');
+});
+
+test('Android optional feed outages never flag a working live video catalog as saved',async()=>{
+  const real=[{id:'live-shiur'}];
+  const f=fetchLibrary('android',attempt=>{
+    if(attempt===1)return real;
+    throw Error('secondary source not available');
+  },{data:{items:[]},savedAt:100});
+  assert.deepEqual(await f.run(),real);
+  assert.equal(f.state.usingCachedLibrary,false);
+  assert.deepEqual(await f.run('/audio-map'),{items:[]});
+  assert.equal(f.state.usingCachedLibrary,false,
+    'An optional audio cache must not claim the entire video catalog is offline');
+  assert.deepEqual(await f.run('/trending?period=week&limit=2500'),{items:[]});
+  assert.equal(f.state.offlineMode,true,'Initial fixture should remain unchanged by secondary feeds');
+  assert.equal(f.state.usingCachedLibrary,false);
+});
+
+test('Android a genuine saved video fallback stays announced even after a secondary feed succeeds',async()=>{
+  const fallback=[{id:'saved-shiur'}];
+  const f=fetchLibrary('android',attempt=>{
+    if(attempt<=2)throw Error('video-map offline');
+    return {items:[]};
+  },{data:fallback,savedAt:1234567});
+  assert.deepEqual(await f.run(),fallback);
+  assert.equal(f.state.usingCachedLibrary,true);
+  assert.equal(f.state.offlineCacheSavedAt,1234567);
+  assert.deepEqual(await f.run('/audio-map'),{items:[]});
+  assert.equal(f.state.usingCachedLibrary,true,
+    'A successful optional audio request may not hide a real video-map failure');
 });
 
 test('Visible moving pixels above partial letterboxing are video; a truly black PlayerView still fails',()=>{
