@@ -323,7 +323,22 @@ try{
  await tap('shiurim');await tap('open');await wait(s=>!!s.watchId,'Lecture did not open');const id=(await read()).watchId;
  assert.equal(id,playbackFixtureId,'Account UI must open the verified native-video/audio lecture');
  report.accountMutationsStartedAt=new Date().toISOString();const before=await read();await tap('like');await wait(s=>s.likes.includes(id)!==before.likes.includes(id),'Like toggle failed');report.checks.push('Native Like toggle');
- await tap('save');await tap('later');await wait(s=>s.later.includes(id)!==before.later.includes(id),'Save toggle failed');await closeSavePicker();report.checks.push('Native Watch Later toggle and dialog closure');await tap('follow');await wait(s=>JSON.stringify(s.follows)!==JSON.stringify(before.follows),'Follow toggle failed');report.checks.push('Native speaker follow toggle');
+ await tap('save');await tap('later');await wait(s=>s.later.includes(id)!==before.later.includes(id),'Save toggle failed');await closeSavePicker();report.checks.push('Native Watch Later toggle and dialog closure');
+ const followBefore=await read();await tap('follow');
+ try {
+  await wait(s=>JSON.stringify(s.follows)!==JSON.stringify(followBefore.follows),'Follow toggle failed');
+ } catch(error) {
+  const failed=await read();
+  report.followFailure={
+   target:failed.followTarget ? {key:failed.followTarget.key,active:failed.followTarget.active,text:failed.followTarget.text,rendered:failed.followTarget.rendered} : null,
+   beforeCount:followBefore.follows.length,afterCount:failed.follows.length,
+   targetAlreadyInClientState:failed.followTarget ? followBefore.follows.includes('speaker:'+failed.followTarget.key) : null,
+   followsBefore:followBefore.follows,followsAfter:failed.follows,
+   requests:failed.followRequests||[],screen:failed.screen,loggedIn:failed.loggedIn
+  };
+  throw new Error('Follow toggle failed; safe diagnostic: '+JSON.stringify(report.followFailure));
+ }
+ report.checks.push('Native speaker follow toggle');
 
  // Previous test waited for history without ever pressing Play. The physical
  // emulator screenshot showed a paused Audio player at 0:00, so explicitly
