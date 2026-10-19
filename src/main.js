@@ -3849,8 +3849,8 @@ function shell(content) {
         <div class="top-actions">
           <button class="top-store" data-nav="paid" aria-label="Purchase" title="Purchase">${svgIcon('store')}</button>
           <button class="top-contact" data-nav="contact" aria-label="Contact" title="Contact">${svgIcon('mail')}</button>
-          <button class="app-language-button" data-language-toggle="1">${currentLanguage() === 'he' ? 'English' : 'עברית'}</button>
-          <button class="top-account" data-nav="account">${state.user ? esc(state.user.name || 'Account') : tr('Sign In')}</button>
+          <button class="app-language-button" data-language-toggle="1"><span class="top-button-label">${currentLanguage() === 'he' ? 'English' : 'עברית'}</span></button>
+          <button class="top-account" data-nav="account"><span class="top-button-label">${state.user ? esc(state.user.name || 'Account') : tr('Sign In')}</span></button>
         </div>
       </div>
     </header>
@@ -4141,17 +4141,17 @@ function homeHtml() {
       <div class="hero-overlay" aria-hidden="true"></div>
       <div class="hero-content">
         <h1>Torah, wherever you are.</h1>
-        <p>Live shiurim, thousands of recordings, powerful search, schedules and your personal Torah library — in one app.</p>
-        <div class="hero-actions"><button class="hero-btn primary" data-nav="shiurim">${svgIcon('play')} Browse Shiurim</button><button class="hero-btn glass" data-nav="live">${svgIcon('live')} Watch Live</button></div>
-        <div class="counter-card pro-counter"><strong>${state.counter.toLocaleString()}</strong><span>Shiurim played</span></div>
+        <p>Live shiurim, thousands of recordings, and your personal Torah library—all in one app.</p>
+        <div class="hero-actions"><button class="hero-btn primary" data-nav="shiurim">${svgIcon('play')} <span class="hero-btn-label">Browse Shiurim</span></button><button class="hero-btn glass" data-nav="live">${svgIcon('live')} <span class="hero-btn-label">Watch Live</span></button></div>
+        <div class="counter-card pro-counter"><strong>${state.counter.toLocaleString()}</strong><span>Shiurim Played</span></div>
       </div>
     </section>
 
     <section class="home-shortcuts" aria-label="Quick access">
-      <button class="home-shortcut" data-nav="schedule"><span>${svgIcon('calendar')}</span><div class="home-shortcut-copy"><strong>Schedule</strong><small>Upcoming Shiurim</small></div></button>
-      <button class="home-shortcut" data-nav="paid"><span>${svgIcon('store')}</span><div class="home-shortcut-copy"><strong>Purchase</strong><small>Premium collections</small></div></button>
-      <button class="home-shortcut" data-nav="donate"><span>${svgIcon('donate')}</span><div class="home-shortcut-copy"><strong>Sponsor Torah</strong><small>Donate or dedicate</small></div></button>
-      <button class="home-shortcut" data-nav="library"><span>${svgIcon('library')}</span><div class="home-shortcut-copy"><strong>Your Library</strong><small>Likes &amp; history</small></div></button>
+      <button class="home-shortcut" data-nav="schedule"><span>${svgIcon('calendar')}</span><div class="home-shortcut-copy"><strong>Schedule</strong></div></button>
+      <button class="home-shortcut" data-nav="paid"><span>${svgIcon('store')}</span><div class="home-shortcut-copy"><strong>Purchase</strong></div></button>
+      <button class="home-shortcut" data-nav="donate"><span>${svgIcon('donate')}</span><div class="home-shortcut-copy"><strong>Sponsor Torah</strong></div></button>
+      <button class="home-shortcut" data-nav="library"><span>${svgIcon('library')}</span><div class="home-shortcut-copy"><strong>Your Library</strong></div></button>
     </section>
 
     ${homeDiscoveryHtml()}
