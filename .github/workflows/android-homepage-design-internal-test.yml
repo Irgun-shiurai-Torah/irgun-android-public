@@ -1,0 +1,132 @@
+name: Android Homepage Design - Signed Test and Internal Upload
+
+# Isolated QA workflow; does not merge into main or publish to Production.
+# Only the specially marked publish commit uploads to Play Internal Testing.
+on:
+  push:
+    branches:
+      - qa/android-homepage-design-20261019
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irgun-android-home-design-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  signed-design-test:
+    name: Signed Android Homepage Design QA APK and AAB
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Select unique test version after approved admin QA build
+        shell: bash
+        run: |
+          set -euo pipefail
+          CODE=$((215 + GITHUB_RUN_NUMBER))
+          echo "IRGUN_ANDROID_VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+          echo "IRGUN_ANDROID_VERSION_NAME=1.0.${CODE}-designqa" >> "$GITHUB_ENV"
+          echo "Android design test 1.0.${CODE}-designqa"
+
+      - name: Check out isolated design QA branch
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Install Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -perm -111 | sort -V | tail -n 1)"
+          fi
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Require working signing credentials
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          test -n "$ANDROID_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$ANDROID_KEY_PASSWORD"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/irgun-upload-key.jks"
+          test -s "$RUNNER_TEMP/irgun-upload-key.jks"
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Prepare launcher icons
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+          bash scripts/prepare_android_icons.sh
+      - name: Run source tests
+        run: node --test scripts/test_android_sources.mjs
+      - name: Build Android WebView with native Media3 beta
+        env:
+          VITE_ANDROID_MEDIA3_VIDEO_BETA: 'true'
+        run: npm run build
+      - name: Sync Android project
+        run: npx cap sync android
+      - name: Generate Android icon resources
+        run: bash scripts/prepare_android_icons.sh
+
+      - name: Build signed release APK and AAB with R8 disabled
+        working-directory: android
+        env:
+          IRGUN_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/irgun-upload-key.jks
+          IRGUN_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          IRGUN_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          IRGUN_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon clean :app:assembleRelease :app:bundleRelease
+      - name: Verify stable non-R8 signed build
+        run: |
+          set -euo pipefail
+          test -s android/app/build/outputs/apk/release/app-release.apk
+          test -s android/app/build/outputs/bundle/release/app-release.aab
+          test ! -s android/app/build/outputs/mapping/release/mapping.txt
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --verbose android/app/build/outputs/apk/release/app-release.apk
+      - name: Package signed Android design build
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts
+          cp android/app/build/outputs/apk/release/app-release.apk             "build-artifacts/Irgun-Home-Design-${IRGUN_ANDROID_VERSION_NAME}-signed.apk"
+          cp android/app/build/outputs/bundle/release/app-release.aab             "build-artifacts/Irgun-Home-Design-${IRGUN_ANDROID_VERSION_NAME}.aab"
+          printf '%s\n' "Android homepage design QA build; PR #57 (main-based; R8 disabled)."             "Version: ${IRGUN_ANDROID_VERSION_NAME} (code ${IRGUN_ANDROID_VERSION_CODE})"             "Commit: ${GITHUB_SHA}"             "This build does NOT include the unmerged R8/Admin fixes."             "Google Play Internal Testing only, NOT Production."             > build-artifacts/INSTALL-README.txt
+      - name: Publish downloadable signed test APK and AAB
+        uses: actions/upload-artifact@v7
+        with:
+          name: Irgun-Home-Design-QA-${{ github.run_number }}-signed
+          path: build-artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload approved design AAB to Google Play Internal Testing
+        if: ${{ github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Publish Android homepage design QA to Google Play Internal Testing') }}
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: org.irgunshiuraitorah.app
+          releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed
