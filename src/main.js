@@ -1,4 +1,5 @@
 import './style.css';
+import {mountAdminParity,resetAdminParity} from './admin-parity.js';
 import { clearCommentComposerAfterPost } from './comment-draft.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
 import { createAndroidSwipeMotion } from './android-swipe-motion.js';
@@ -2220,6 +2221,7 @@ function restoreOfflineAccount(){
 function rememberVerifiedAccount(){if(state.token&&state.user)rememberCachedAccount(localStorage,state.token,state.user);}
 
 function resetUserState() {
+  resetAdminParity();
   state.user = null;
   state.myLikes = new Set();
   state.watchLater = new Set();
@@ -5064,6 +5066,7 @@ function accountAdminHtml(){
   <section class="admin-panel-card"><h2>${editSponsor?'Edit Sponsorship':'Add Sponsorship Manually'}</h2><form id="adminSponsorshipForm" class="admin-form-grid"><label>Plan<select id="adminSponsorPlan">${['day','week','month'].map(x=>`<option value="${x}" ${(editSponsor?.plan||'day')===x?'selected':''}>${x[0].toUpperCase()+x.slice(1)}</option>`).join('')}</select></label><label>Start Date<input id="adminSponsorDate" type="date" required value="${esc(editSponsor?.startDate||donationTodayIso())}"></label><label class="full">Dedication<select id="adminSponsorDedication" required><option value="">Choose dedication</option>${SPONSOR_DEDICATION_TYPES.map(x=>`<option ${editSponsor?.dedicationType===x?'selected':''}>${esc(x)}</option>`).join('')}</select></label><label>Name in English<input id="adminSponsorNameEn" value="${esc(editSponsor?.nameEn||'')}"></label><label>Name in Hebrew<input id="adminSponsorNameHe" dir="rtl" value="${esc(editSponsor?.nameHe||'')}"></label><div class="admin-form-actions full"><button class="admin-save" type="submit">${editSponsor?'Save Changes':'Add Approved Sponsorship'}</button>${editSponsor?'<button type="button" data-admin-sponsor-cancel="1">Cancel</button>':''}</div></form><div class="admin-sponsorship-list">${adminSponsorshipCards()}</div></section>
   <section class="admin-panel-card"><h2>Shiur Play Counter</h2><form id="adminViewCountForm" class="admin-inline-form"><select id="adminViewCountPlatform"><option>website</option><option>youtube</option><option>app</option><option>vimeo</option><option>other</option></select><input id="adminViewCountValue" type="number" min="0" step="1" placeholder="Total" required><button class="admin-save" type="submit">Save</button></form><div class="admin-view-list"><small>Live website events: ${Number(state.adminViewCounts.actualWebsiteViews||0).toLocaleString()}</small>${(state.adminViewCounts.items||[]).map(x=>`<div><strong>${esc(x.platform)}</strong><span>${Number(x.count||0).toLocaleString()}</span></div>`).join('')}</div></section>
   <section class="admin-panel-card"><h2>Administrators</h2><form id="adminAddForm" class="admin-inline-form"><input id="adminAddEmail" type="email" placeholder="Account email" required><button class="admin-save" type="submit">Add Admin</button></form><div class="admin-list">${state.adminAdmins.length?state.adminAdmins.map(a=>`<div class="admin-list-row"><div><strong>${esc(a.name||a.email)}</strong><small>${esc(a.email)}${a.bootstrap?' • bootstrap':''}</small></div>${a.bootstrap?'':`<button class="danger" data-admin-remove="${esc(a.id)}">Remove</button>`}</div>`).join(''):'<div class="empty">No administrators configured.</div>'}</div></section>
+  <div id="adminParityMount" class="admin-parity-mount"></div>
   <section class="admin-panel-card"><h2>Content Editing</h2><p>With Admin Mode on, Schedule cards show Add/Edit/Delete, video shiur cards show Edit Shiur, and Paid Shiurim show Add/Edit/Delete. Every save is checked by the protected Worker endpoint.</p><div class="admin-nav-row"><button data-nav="schedule">Open Schedule</button><button data-nav="shiurim">Open Shiurim</button><button data-nav="paid">Open Paid Shiurim</button><button data-external="https://irgunshiuraitorah.com/account.html">Full Website Admin</button></div></section></div>`;
 }
 
@@ -7280,6 +7283,13 @@ function bind() {
   document.querySelectorAll('[data-paid-retry]').forEach(el=>el.addEventListener('click',()=>{state.paidLoaded=false;state.paidError='';loadPaidCatalog(true);}));
 
   document.getElementById('adminModeToggle')?.addEventListener('change', event => { state.adminMode=Boolean(event.target.checked); localStorage.setItem(ADMIN_MODE_KEY,state.adminMode?'1':'0'); setToast(state.adminMode?'Admin Mode enabled.':'Admin Mode hidden.'); render(); });
+  const websiteAdminMount=document.getElementById('adminParityMount');
+  if(websiteAdminMount && state.isAdmin) mountAdminParity(websiteAdminMount,{
+    owner:state.user?.id||state.user?.email||'',
+    apiJson,
+    isAdmin:()=>Boolean(state.user&&state.isAdmin),
+    isAdminMode:()=>Boolean(state.adminMode)
+  });
   document.querySelectorAll('[data-admin-refresh]').forEach(el=>el.addEventListener('click',async()=>{state.adminLoaded=false;await loadAdminData(true);}));
   document.querySelectorAll('[data-admin-live-save]').forEach(el=>el.addEventListener('click',saveAdminLive));
   document.getElementById('adminRibbonForm')?.addEventListener('submit',saveAdminRibbon);

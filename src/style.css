@@ -3375,3 +3375,43 @@ body.irgun-android.android-narrow-viewport #androidBottomNavigationMount .bottom
   font-size:8px!important;
   line-height:11px!important;
 }
+
+/* Additional website administration controls, inside the protected native app
+   Account > Admin page. Keep inputs tappable/scrollable on Samsung tablets. */
+.admin-parity-mount{min-width:0}
+.admin-parity-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:12px}
+.admin-parity-tab{min-height:46px;max-width:100%;padding:10px 12px;border:1px solid #d4deea;border-radius:11px;background:#f6f9fc;color:#18334f;text-align:center;font-weight:750;font-size:12px;line-height:1.25;white-space:normal}
+.admin-parity-tab.active{background:#e8f1fc;border-color:#3d83ca;color:#173a69}
+.admin-parity-panel{min-width:0;margin-top:15px;padding:14px 12px;border:1px solid #e0e7ef;border-radius:14px;background:#f8fafc}
+.admin-parity-panel h3{font-size:16px;color:#17314d;margin:0 0 6px}
+.admin-parity-panel h4{font-size:13px;color:#17314d;margin:15px 0 8px}
+.admin-parity-panel .admin-parity-help{font-size:12px;color:#516277;line-height:1.5;overflow-wrap:anywhere;margin:5px 0 12px}
+.admin-parity-panel input,.admin-parity-panel select,.admin-parity-panel textarea{
+  font:inherit;font-size:14px;line-height:1.35;color:#1c2d45;
+  border-radius:10px;border:1px solid #c9d5e2;background:#fff;min-width:0;max-width:100%;
+  padding:10px 11px;box-sizing:border-box
+}
+.admin-parity-panel textarea{width:100%;min-height:86px;resize:vertical;white-space:pre-wrap}
+.admin-parity-panel input[type=file]{width:100%;overflow:hidden}
+.admin-parity-filters{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;margin:8px 0 12px}
+.admin-parity-filters>*{min-width:0;width:100%;box-sizing:border-box}
+.admin-parity-filters select{height:44px}
+.admin-parity-button,.admin-parity-filters button,.admin-parity-panel button[type=submit]{
+  border-radius:9px;background:#fff;color:#284a76;border:1px solid #cfdaea;
+  font-weight:750;font-size:12px;min-height:40px;padding:9px 12px
+}
+.admin-parity-button:disabled{opacity:.45}
+.admin-parity-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.admin-parity-actions textarea{flex-basis:100%}
+.admin-parity-row{background:#fff;border:1px solid #e0e7f0;border-radius:11px;padding:11px;margin:9px 0;min-width:0;overflow-wrap:anywhere}
+.admin-parity-row-head strong{font-size:13px}
+.admin-parity-subtext{font-size:11px;color:#637084;margin-top:4px}
+.admin-parity-body{font-size:12px;color:#26354b;margin-top:10px;line-height:1.55;white-space:pre-wrap}
+.admin-parity-status{padding:10px 11px;background:#edf6f0;border-radius:9px;font-size:12px;color:#146638;margin:10px 0}
+.admin-parity-status.is-error{background:#ffedef;color:#b42333}
+.admin-parity-pager,.admin-parity-choice{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:9px;margin-top:12px;font-size:12px}
+.admin-parity-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:10px 0}
+.admin-parity-metrics>div{background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:10px 8px}
+.admin-parity-metrics b{display:block;color:#163857;font-size:21px}
+.admin-parity-metrics span{display:block;color:#546b7f;font-size:11px;line-height:1.35}
+@media(min-width:720px){.admin-parity-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}.admin-parity-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.admin-parity-metrics{grid-template-columns:repeat(4,minmax(0,1fr))}}
