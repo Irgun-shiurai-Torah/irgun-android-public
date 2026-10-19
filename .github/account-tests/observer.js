@@ -1,4 +1,35 @@
 // Read-only observations appended to disposable debug builds; no credentials or UI setters.
+
+/*
+ * R8 account diagnostic: record only the outcome of the speaker/topic follow
+ * mutation. Never record request bodies, labels, account identifiers, tokens,
+ * cookies, or passwords. This file is appended only to disposable QA builds.
+ */
+window.__ISTAccountApiRequests = window.__ISTAccountApiRequests || [];
+{
+  const originalApiJson = apiJson;
+  apiJson = async function(path, options) {
+    const normalized = String(path || '').split('?')[0];
+    if (normalized !== '/follows/toggle') return originalApiJson(path, options);
+    const started = Date.now();
+    try {
+      const result = await originalApiJson(path, options);
+      window.__ISTAccountApiRequests.push({
+        path: normalized, status: 200,
+        following: typeof result?.following === 'boolean' ? result.following : null,
+        elapsedMs: Date.now() - started
+      });
+      return result;
+    } catch (error) {
+      window.__ISTAccountApiRequests.push({
+        path: normalized, status: Number(error?.status) || 0,
+        error: String(error?.message || 'request failed').slice(0, 120),
+        elapsedMs: Date.now() - started
+      });
+      throw error;
+    }
+  };
+}
 window.ISTAccountTest = {
   snapshot() {
   const qaComment = state.watchComments?.find(c =>
@@ -45,7 +76,8 @@ window.ISTAccountTest = {
   // swipe and real tap. Missing speaker metadata remains explicitly missing.
   const followTarget=followElement ? (()=>{const r=followElement.getBoundingClientRect();
     return {x:r.x+r.width/2,y:r.y+r.height/2,width:r.width,height:r.height,
-      key:followElement.dataset.followKey||'',rendered:true};})():null;
+      key:followElement.dataset.followKey||'',active:followElement.classList.contains('active'),
+      text:String(followElement.innerText||'').slice(0,80),rendered:true};})():null;
   const video = state.watchVimeo?.getVideoElement?.()
     || document.querySelector('#watchDirectHlsVideo')
     || state.watchVimeo?.video
@@ -67,6 +99,8 @@ window.ISTAccountTest = {
         scrollLeft:libraryStrip.scrollLeft, scrollWidth:libraryStrip.scrollWidth, clientWidth:libraryStrip.clientWidth }
     : null;
   return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,libraryTabStrip,watchScroll,followTarget,
+    swipeGateActive:typeof tabSwipeRenderGate !== 'undefined' && tabSwipeRenderGate.shouldDefer(),
+    followRequests:(window.__ISTAccountApiRequests||[]).slice(-10),
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
     libraryReady:!!state.libraryReady,loading:!!state.loading,bootstrapInFlight:!!bootstrapInFlight,libraryError:String(state.libraryLastFailure||'').slice(0,180),hasStoredSession:!!state.token,
     authBusy:!!state.authBusy,authMode:String(state.authMode||''),
