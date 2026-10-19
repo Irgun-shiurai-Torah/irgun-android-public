@@ -129,8 +129,32 @@ const paidView=()=>observe(`JSON.stringify((()=>{
     lockedPanelId:panel?.dataset.paidDescriptionPanel||'',
     tracks:item?.querySelectorAll('[data-paid-track]').length||0,
     folderNodes:item?.querySelectorAll('.paid-folder-node').length||0,
-    albumExpanded:!!item?.querySelector('.paid-album:not([hidden])')};
+    albumExpanded:!!item?.querySelector('.paid-album:not([hidden])'),
+    listenLabel:String(item?.querySelector('[data-paid-expand]')?.textContent||'').trim().slice(0,60)};
 })())`);
+
+// A physical Listen tap may race with a late authenticated catalog render.
+// Never blindly tap a toggle: opening an already-open collection would close it.
+// Verify the actual visible album before looking for its nested tracks.
+async function ensurePurchasedAlbumOpen(){
+  const selector=`[data-paid-collection-id="${productId}"] [data-paid-expand]`;
+  for(let attempt=0;attempt<4;attempt++){
+    const before=await paidView();
+    if(before.albumExpanded)return before;
+    assert.ok(before.owned&&before.listen,'A purchased Belsky Listen button must exist');
+    assert.ok(await tap(selector,{tries:20}),'Cannot physically tap purchased Belsky Listen');
+    for(let waitAttempt=0;waitAttempt<14;waitAttempt++){
+      await delay(300);
+      const after=await paidView();
+      if(after.albumExpanded)return after;
+    }
+  }
+  const last=await paidView();
+  report.folderFailure={stage:'album-will-not-open',owned:last.owned,
+    albumExpanded:last.albumExpanded,listenLabel:last.listenLabel,
+    tracks:last.tracks,folderNodes:last.folderNodes};
+  throw new Error('Purchased Belsky Listen did not open the album after verified native taps');
+}
 
 const firstTrackPath=()=>observe(`JSON.stringify((()=>{
   // Inspect the already-authorized card DOM, including collapsed descendants.
@@ -198,8 +222,9 @@ try{
       }
       assert.ok(ownedPage.productVisible&&ownedPage.owned,
         'Belsky product was not verified in the authenticated Purchased Library');
-      assert.ok(await tap(`[data-paid-collection-id="${productId}"] [data-paid-expand]`,{tries:28}),
-        'The real owned Listen button is not accessible in Purchased Library');
+      const expanded=await ensurePurchasedAlbumOpen();
+      report.checks.push('Physical purchased Listen opens the real track album');
+      assert.equal(expanded.albumExpanded,true,'Purchased album must be visible before opening track folders');
       // Owned cards can appear before the nested tracks finish loading.
       // Don't mistake that intermediate state for a broken R8 entitlement.
       let target=await firstTrackPath();
