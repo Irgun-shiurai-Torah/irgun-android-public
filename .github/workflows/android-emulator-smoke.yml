@@ -63,7 +63,7 @@ jobs:
           sudo apt-get install -y imagemagick
           bash scripts/prepare_android_icons.sh
       - name: Check tab gesture regressions
-        run: node --test scripts/test_tab_swipes.cjs scripts/test_android_swipe_motion.mjs scripts/test_android_sources.mjs scripts/test_android_native_tap_point.mjs scripts/test_android_native_text_entry.mjs scripts/test_android_video_startup_buffer.mjs scripts/test_android_emulator_prepare.mjs scripts/test_android_background_handoff.mjs scripts/test_android_like_persistence.mjs scripts/test_android_home_position.mjs scripts/test_android_native_media3_beta.mjs
+        run: node --test scripts/test_admin_website_parity.mjs scripts/test_tab_swipes.cjs scripts/test_android_swipe_motion.mjs scripts/test_android_sources.mjs scripts/test_android_native_tap_point.mjs scripts/test_android_native_text_entry.mjs scripts/test_android_video_startup_buffer.mjs scripts/test_android_emulator_prepare.mjs scripts/test_android_background_handoff.mjs scripts/test_android_like_persistence.mjs scripts/test_android_home_position.mjs scripts/test_android_native_media3_beta.mjs
       - name: Append required read-only playback and search observer to disposable APK
         run: cat .github/release-tests/observer.js >> src/main.js
       - run: npm run build
