@@ -313,6 +313,23 @@ try{
  assert.equal(String(loggedIn.profileShownName||'').trim(),accountDisplayName,'Profile screen must display the correct account name');
  report.checks.push('Real Android account name displayed on profile');
  assert.equal((await read()).isAdmin,false,'Use a non-admin dedicated account');assert.ok(String((await read()).accountEmail||'').trim().toLowerCase()===email.trim().toLowerCase(),'Refuse to mutate an account other than the dedicated approved account');report.checks.push('Native email/password login and profile');
+ // A real Samsung Tab S10 crash happened ONLY after sign-in when switching
+ // Home / Account pages. The previous QA suite logged in once but did not
+ // repeatedly stress foreground bottom-tab navigation.
+ const signedInRoute=['home','account','shiurim','account','library','account','home','account'];
+ let checkedRoutes=0;
+ for(let pass=0;pass<3;pass++){
+  for(const target of signedInRoute){
+   await tap(target);
+   await wait(s=>s.ready&&s.loggedIn&&s.screen===target,
+     'Signed-in Android route crashed/stalled on '+target+' pass '+(pass+1),18000);
+   checkedRoutes++;
+  }
+ }
+ report.signedInNavigation={passes:3,routes:checkedRoutes,
+  screens:['home','account','shiurim','library'],retainedSession:true};
+ report.checks.push('24 real signed-in Home/Account/Shiurim/Library tab transitions preserve session');
+
  await tap('language');await wait(s=>s.lang==='he'&&s.dir==='rtl','Native account page must switch to Hebrew RTL');
  const hebrewProfile=await read();assert.equal(String(hebrewProfile.name||'').trim(),accountDisplayName,'Account identity must remain unchanged in Hebrew');
  const hebrewLabels=await readSnapshot('JSON.stringify([...document.querySelectorAll("[data-account-section], [data-logout]")].filter(e=>e.getBoundingClientRect().width>0).map(e=>e.textContent.trim()))');
