@@ -21,7 +21,7 @@ import com.google.firebase.messaging.FirebaseMessaging;
 )
 public class IrgunPushPlugin extends Plugin {
     // Android 13+ permission is a platform permission. Do not look it up via
-    // Capacitor's reflective getPermissionState(): on some R8-optimized builds
+    // Capacitor's reflective permission-state lookup: on R8-optimized builds
     // that path saw missing plugin annotation metadata and threw NPE in
     // Bridge.getPermissionStates() on the native plugin HandlerThread.
     // That fatal exception happened after account sign-in (while hydrating
