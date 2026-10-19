@@ -4,6 +4,8 @@ name: Android R8 - Downloadable QA APK
 # Every push creates a downloadable signed APK. Only an explicitly approved
 # commit (with the special publish marker) uploads to Play Internal Testing.
 # Regular future PR edits must NEVER silently replace the internal test track.
+# This explicit release commit is authorized for the 1.0.209 R8 QA upload after
+# the Android 16 permission-reflection fix and signed-in API 35 tablet checks.
 on:
   push:
     branches:
