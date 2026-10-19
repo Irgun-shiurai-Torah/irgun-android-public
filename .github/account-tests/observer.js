@@ -99,6 +99,7 @@ window.ISTAccountTest = {
         scrollLeft:libraryStrip.scrollLeft, scrollWidth:libraryStrip.scrollWidth, clientWidth:libraryStrip.clientWidth }
     : null;
   return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,libraryTabStrip,watchScroll,followTarget,
+    swipeGateActive:typeof tabSwipeRenderGate !== 'undefined' && tabSwipeRenderGate.shouldDefer(),
     followRequests:(window.__ISTAccountApiRequests||[]).slice(-10),
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
     libraryReady:!!state.libraryReady,loading:!!state.loading,bootstrapInFlight:!!bootstrapInFlight,libraryError:String(state.libraryLastFailure||'').slice(0,180),hasStoredSession:!!state.token,
