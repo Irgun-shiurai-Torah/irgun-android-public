@@ -21,8 +21,17 @@ export function bindTabSwipes(root, {
   let gesture = null;
   let settling = false;
   let suppressClickUntil = 0;
+  let suppressClickPoint = null;
   const view = root.ownerDocument.defaultView;
   const interactive = typeof onDrag === 'function' && typeof onRelease === 'function';
+  // Interactive Android swipes know the actual touchend position. Suppress
+  // only the compatibility click at that position, not a separate tap on a
+  // different control immediately after the swipe (for example, Language).
+  const suppressCompatibilityClick = touch => {
+    suppressClickUntil = Date.now() + 600;
+    suppressClickPoint = interactive && Number.isFinite(touch?.clientX) && Number.isFinite(touch?.clientY)
+      ? {x:touch.clientX,y:touch.clientY} : null;
+  };
   // A horizontal tab swipe should also start over an unfocused Account
   // input or notification checkbox. The earlier blanket input/textarea
   // exclusion left much of the lower Account form unresponsive. Taps remain

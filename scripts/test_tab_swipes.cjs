@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const binder = import('../src/tabSwipe.js');
 
-async function fixture({ rtl = false, blocked = false, scrollable = false, excluded = false, onGestureState, onNavigate = () => {} } = {}) {
+async function fixture({ rtl = false, blocked = false, scrollable = false, excluded = false, interactive = false, onGestureState, onNavigate = () => {} } = {}) {
   const handlers = new Map(), visits = [];
   let active = 'home', allowed = !blocked;
   const root = {
