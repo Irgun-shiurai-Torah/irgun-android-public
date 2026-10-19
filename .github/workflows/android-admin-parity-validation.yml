@@ -1,0 +1,34 @@
+name: Android Admin Website Parity QA
+
+on:
+  push:
+    branches:
+      - feature/android-website-admin-parity-20261019
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irgun-android-admin-parity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity-unit:
+    name: Protected admin parity JavaScript checks and app build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate new admin module and import validators
+        run: node --test scripts/test_admin_website_parity.mjs
+      - name: Validate admin integration and Android gesture tests
+        run: node --test scripts/test_android_sources.mjs scripts/test_tab_swipes.cjs scripts/test_android_swipe_motion.mjs
+      - name: Compile Android app web assets
+        run: npm run build
