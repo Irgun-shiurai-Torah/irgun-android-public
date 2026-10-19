@@ -321,6 +321,11 @@ const state = {
   adminVideoEditor: null,
   adminPaidCatalog: [],
   adminPaidCatalogLoaded: false,
+  adminPaidPromoDirty: false,
+  adminPaidBuyers: [],
+  adminPaidBuyersLoading: false,
+  adminPaidBuyersLoaded: false,
+  adminPaidBuyersError: '',
   adminActionBusy: '',
   contactMessage: '',
   homeTrendPeriod: 'week',
@@ -2261,6 +2266,10 @@ function resetUserState() {
   state.adminSponsorships = [];
   state.adminPaidCatalog = [];
   state.adminPaidCatalogLoaded = false;
+  state.adminPaidPromoDirty = false;
+  state.adminPaidBuyers = [];
+  state.adminPaidBuyersLoaded = false;
+  state.adminPaidBuyersError = '';
   if (state.accountSection === 'admin' || state.accountSection === 'city-admin') state.accountSection = 'profile';
 }
 
@@ -5110,6 +5119,10 @@ function accountAdminHtml(){
   <section class="admin-panel-card"><h2>${editSponsor?'Edit Sponsorship':'Add Sponsorship Manually'}</h2><form id="adminSponsorshipForm" class="admin-form-grid"><label>Plan<select id="adminSponsorPlan">${['day','week','month'].map(x=>`<option value="${x}" ${(editSponsor?.plan||'day')===x?'selected':''}>${x[0].toUpperCase()+x.slice(1)}</option>`).join('')}</select></label><label>Start Date<input id="adminSponsorDate" type="date" required value="${esc(editSponsor?.startDate||donationTodayIso())}"></label><label class="full">Dedication<select id="adminSponsorDedication" required><option value="">Choose dedication</option>${SPONSOR_DEDICATION_TYPES.map(x=>`<option ${editSponsor?.dedicationType===x?'selected':''}>${esc(x)}</option>`).join('')}</select></label><label>Name in English<input id="adminSponsorNameEn" value="${esc(editSponsor?.nameEn||'')}"></label><label>Name in Hebrew<input id="adminSponsorNameHe" dir="rtl" value="${esc(editSponsor?.nameHe||'')}"></label><div class="admin-form-actions full"><button class="admin-save" type="submit">${editSponsor?'Save Changes':'Add Approved Sponsorship'}</button>${editSponsor?'<button type="button" data-admin-sponsor-cancel="1">Cancel</button>':''}</div></form><div class="admin-sponsorship-list">${adminSponsorshipCards()}</div></section>
   <section class="admin-panel-card"><h2>Shiur Play Counter</h2><form id="adminViewCountForm" class="admin-inline-form"><select id="adminViewCountPlatform"><option>website</option><option>youtube</option><option>app</option><option>vimeo</option><option>other</option></select><input id="adminViewCountValue" type="number" min="0" step="1" placeholder="Total" required><button class="admin-save" type="submit">Save</button></form><div class="admin-view-list"><small>Live website events: ${Number(state.adminViewCounts.actualWebsiteViews||0).toLocaleString()}</small>${(state.adminViewCounts.items||[]).map(x=>`<div><strong>${esc(x.platform)}</strong><span>${Number(x.count||0).toLocaleString()}</span></div>`).join('')}</div></section>
   <section class="admin-panel-card"><h2>Administrators</h2><form id="adminAddForm" class="admin-inline-form"><input id="adminAddEmail" type="email" placeholder="Account email" required><button class="admin-save" type="submit">Add Admin</button></form><div class="admin-list">${state.adminAdmins.length?state.adminAdmins.map(a=>`<div class="admin-list-row"><div><strong>${esc(a.name||a.email)}</strong><small>${esc(a.email)}${a.bootstrap?' • bootstrap':''}</small></div>${a.bootstrap?'':`<button class="danger" data-admin-remove="${esc(a.id)}">Remove</button>`}</div>`).join(''):'<div class="empty">No administrators configured.</div>'}</div></section>
+  <section class="admin-panel-card"><div class="section-head"><div><h2>Paid Audio Buyers</h2><p>Accounts with purchased access, including the collection, payment source, and promo code.</p></div><button type="button" data-admin-buyers-refresh="1" ${state.adminPaidBuyersLoading?'disabled':''}>${state.adminPaidBuyersLoaded?'Refresh':'Load buyers'}</button></div>
+  ${state.adminPaidBuyersError?'<div class="error">'+esc(state.adminPaidBuyersError)+'</div>':''}
+  ${state.adminPaidBuyersLoading?'<div class="loading-small">Loading paid buyers…</div>':''}
+  <div class="admin-sponsorship-list">${state.adminPaidBuyersLoaded?(state.adminPaidBuyers.length?state.adminPaidBuyers.map(buyer=>`<article class="admin-donation-card"><h4>${esc(buyer.name||'Account')} · ${esc(buyer.title||buyer.paidAudioId||'Purchased shiur')}</h4><p>${esc(buyer.email||'User #'+String(buyer.userId||''))}</p><p>${esc((Number(buyer.amountCents||0)/100).toLocaleString('en-US',{style:'currency',currency:String(buyer.currency||'USD').toUpperCase()}))} · ${esc(buyer.source||'legacy')} · ${esc(buyer.purchasedAt||'')}${buyer.promoCode?' · Promo: '+esc(buyer.promoCode):''}</p></article>`).join(''):'<div class="empty">No paid audio buyers found.</div>'):'<div class="empty">Select Load buyers to view purchaser records.</div>'}</div></section>
   <section class="admin-panel-card"><h2>Content Editing</h2><p>With Admin Mode on, Schedule cards show Add/Edit/Delete, video shiur cards show Edit Shiur, and Paid Shiurim show Add/Edit/Delete. Every save is checked by the protected Worker endpoint.</p><div class="admin-nav-row"><button data-nav="schedule">Open Schedule</button><button data-nav="shiurim">Open Shiurim</button><button data-nav="paid">Open Paid Shiurim</button><button data-external="https://irgunshiuraitorah.com/account.html">Full Website Admin</button></div></section></div>`;
 }
 
@@ -5127,8 +5140,92 @@ async function adminReviewAction(fingerprint,action){const item=state.adminRevie
 function collectReviewEvents(){return [...document.querySelectorAll('[data-review-row]')].map(row=>{const get=name=>row.querySelector(`[data-review-field="${name}"]`)?.value||'';return {date:get('date'),dateLabel:get('dateLabel'),hebrewDate:get('hebrewDate'),startTime:get('startTime'),endTime:get('endTime'),location:get('location'),venue:get('venue'),speaker:get('speaker'),title:get('title'),program:get('program'),language:get('language'),year:get('year'),shiurCode:get('shiurCode')};});}
 async function approveAdminReview(event){event.preventDefault();if(!state.adminReviewEditor)return;try{await apiJson('/schedule-review/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fingerprint:state.adminReviewEditor.fingerprint,events:collectReviewEvents(),note:document.getElementById('reviewNote')?.value||''})});state.adminReviewEditor=null;state.adminLoaded=false;state.scheduleDataLoaded=false;await Promise.all([loadAdminData(true),loadScheduleData()]);setToast('Schedule approved.');render();}catch(error){setToast(error?.message||'Could not approve schedule.');}}
 
-async function openAdminPaidEditor(id=''){if(!state.isAdmin)return;try{if(!state.adminPaidCatalogLoaded){const data=await apiJson('/admin/paid-catalog');state.adminPaidCatalog=data.items||[];state.adminPaidCatalogLoaded=true;}const item=id?state.adminPaidCatalog.find(x=>String(x.id)===String(id)):null;state.adminPaidEditor=item?{...item,titleEn:item.titleEn||item.title||'',titleHe:item.titleHe||'',driveAliases:[...(item.driveAliases||[])]}:{id:'',title:'',titleEn:'',titleHe:'',speaker:'',description:'',priceCents:0,audience:'',category:'Audio Collections',catalogDetails:'',featured:false,driveAliases:[]};render();}catch(error){setToast(error?.message||'Could not load paid catalog.');}}
-async function saveAdminPaid(event){event.preventDefault();const e=state.adminPaidEditor||{};const titleEn=document.getElementById('adminPaidTitleEn')?.value||'';const titleHe=document.getElementById('adminPaidTitleHe')?.value||'';const item={id:document.getElementById('adminPaidId')?.value||e.id,title:titleEn,titleEn,titleHe,speaker:document.getElementById('adminPaidSpeaker')?.value||'',description:document.getElementById('adminPaidDescription')?.value||'',price:Number(document.getElementById('adminPaidPrice')?.value)||0,audience:document.getElementById('adminPaidAudience')?.value||'',category:document.getElementById('adminPaidCategory')?.value||'',catalogDetails:document.getElementById('adminPaidDetails')?.value||'',featured:Boolean(document.getElementById('adminPaidFeatured')?.checked),driveAliases:String(document.getElementById('adminPaidAliases')?.value||'').split(/[\n,]/).map(x=>x.trim()).filter(Boolean)};try{const data=await apiJson('/admin/paid-catalog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'upsert',item})});state.adminPaidCatalog=data.items||[];state.adminPaidCatalogLoaded=true;state.adminPaidEditor=null;state.paidLoaded=false;await loadPaidCatalog(true);setToast('Paid shiur saved.');render();}catch(error){setToast(error?.message||'Could not save paid shiur.');}}
+async function openAdminPaidEditor(id=''){
+  if(!state.isAdmin)return;
+  try{
+    if(!state.adminPaidCatalogLoaded){
+      const data=await apiJson('/admin/paid-catalog');
+      state.adminPaidCatalog=data.items||[];
+      state.adminPaidCatalogLoaded=true;
+    }
+    const product=id?state.adminPaidCatalog.find(x=>String(x.id)===String(id)):null;
+    state.adminPaidEditor=product?{...product,titleEn:product.titleEn||product.title||'',titleHe:product.titleHe||'',driveAliases:[...(product.driveAliases||[])]}
+      :{id:'',title:'',titleEn:'',titleHe:'',speaker:'',description:'',priceCents:0,audience:'',category:'Audio Collections',catalogDetails:'',featured:false,driveAliases:[],promos:[]};
+    state.adminPaidPromoDirty=false;
+    render();
+  }catch(error){setToast(error?.message||'Could not load paid catalog.');}
+}
+async function loadAdminPaidBuyers(){
+  if(!state.isAdmin||state.adminPaidBuyersLoading)return;
+  state.adminPaidBuyersLoading=true;
+  state.adminPaidBuyersError='';
+  render();
+  try{
+    const data=await apiJson('/admin/paid-purchases');
+    state.adminPaidBuyers=Array.isArray(data.items)?data.items:[];
+    state.adminPaidBuyersLoaded=true;
+  }catch(error){
+    state.adminPaidBuyersError=error?.message||'Could not load buyers.';
+    state.adminPaidBuyersLoaded=false;
+  }finally{state.adminPaidBuyersLoading=false;render();}
+}
+async function saveAdminPaid(event){
+  event.preventDefault();
+  if(!state.isAdmin||!state.adminPaidEditor)return;
+  const original=state.adminPaidEditor;
+  const titleEn=document.getElementById('adminPaidTitleEn')?.value||'';
+  const titleHe=document.getElementById('adminPaidTitleHe')?.value||'';
+  const item={
+    id:document.getElementById('adminPaidId')?.value||original.id,
+    title:titleEn,titleEn,titleHe,
+    speaker:document.getElementById('adminPaidSpeaker')?.value||'',
+    description:document.getElementById('adminPaidDescription')?.value||'',
+    price:Number(document.getElementById('adminPaidPrice')?.value)||0,
+    audience:document.getElementById('adminPaidAudience')?.value||'',
+    category:document.getElementById('adminPaidCategory')?.value||'',
+    catalogDetails:document.getElementById('adminPaidDetails')?.value||'',
+    featured:Boolean(document.getElementById('adminPaidFeatured')?.checked),
+    driveAliases:String(document.getElementById('adminPaidAliases')?.value||'').split(/[\\n,]/).map(x=>x.trim()).filter(Boolean)
+  };
+  const body={action:'upsert',item};
+  if(state.adminPaidPromoDirty){
+    // Product edits never erase existing promos unintentionally. Only include
+    // promo when an administrator explicitly edits its controls.
+    const previous=Array.isArray(original.promos)?original.promos[0]:null;
+    const remove=Boolean(document.getElementById('adminPaidPromoDelete')?.checked);
+    const code=String(document.getElementById('adminPaidPromoCode')?.value||'').trim();
+    const type=document.getElementById('adminPaidPromoType')?.value==='fixed'?'fixed':'percent';
+    const value=Number(document.getElementById('adminPaidPromoValue')?.value);
+    if(!remove&&!code){setToast('Enter a promo code or cancel the promo changes.');return;}
+    if(remove&&!previous){setToast('There is no existing promo to delete.');return;}
+    if(!remove&&(!Number.isFinite(value)||value<0||(type==='percent'&&value>100))){
+      setToast('Enter a valid discount (percentage 0–100).');return;
+    }
+    body.promo={
+      code,previousCode:String(previous?.code||''),
+      discountType:type,
+      discountValue:type==='fixed'?Math.round(value*100):Math.round(value),
+      maxUses:Math.max(0,Math.floor(Number(document.getElementById('adminPaidPromoMaxUses')?.value)||0)),
+      expiresAt:document.getElementById('adminPaidPromoExpires')?.value||'',
+      onePerUser:Boolean(document.getElementById('adminPaidPromoOnePerUser')?.checked),
+      enabled:Boolean(document.getElementById('adminPaidPromoEnabled')?.checked),
+      remove
+    };
+  }
+  try{
+    const data=await apiJson('/admin/paid-catalog',{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
+    });
+    state.adminPaidCatalog=data.items||[];
+    state.adminPaidCatalogLoaded=true;
+    state.adminPaidEditor=null;
+    state.adminPaidPromoDirty=false;
+    state.paidLoaded=false;
+    await loadPaidCatalog(true);
+    setToast('Paid shiur saved.');
+    render();
+  }catch(error){setToast(error?.message||'Could not save paid shiur.');}
+}
 async function deleteAdminPaid(id){if(!confirm('Delete this paid catalog item?'))return;try{await apiJson('/admin/paid-catalog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'delete',productId:id})});state.adminPaidCatalogLoaded=false;state.paidLoaded=false;await loadPaidCatalog(true);setToast('Paid catalog item deleted.');render();}catch(error){setToast(error?.message||'Could not delete paid item.');}}
 function openAdminScheduleEditor(key=''){const event=key?futureScheduleEvents(200).find(x=>scheduleAdminKey(x)===key):null;state.adminScheduleEditor={baseKey:key||'',event:event?{...event}:{date:donationTodayIso(),startTime:'21:00',endTime:'22:00',location:'Boro Park',venue:'',speaker:'',title:'',speakerEn:'',speakerHe:'',topicEn:'',topicHe:'',titleEn:'',titleHe:'',language:'',year:'',program:'',shiurCode:''}};render();}
 async function saveAdminSchedule(event){event.preventDefault();const ed=state.adminScheduleEditor;if(!ed)return;const get=n=>document.querySelector(`[data-admin-schedule-field="${n}"]`)?.value||'';const item={date:get('date'),dateLabel:get('dateLabel'),hebrewDate:get('hebrewDate'),startTime:get('startTime'),endTime:get('endTime'),location:get('location'),venue:get('venue'),speaker:get('speaker'),speakerEn:get('speakerEn'),speakerHe:get('speakerHe'),title:get('title'),titleEn:get('titleEn'),titleHe:get('titleHe'),topicEn:get('topicEn'),topicHe:get('topicHe'),language:get('language'),year:get('year'),program:get('program'),shiurCode:get('shiurCode')};try{await apiJson('/admin/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'upsert',baseKey:ed.baseKey,event:item})});state.adminScheduleEditor=null;state.scheduleDataLoaded=false;await loadScheduleData();setToast('Schedule item saved.');render();}catch(error){setToast(error?.message||'Could not save schedule item.');}}
@@ -5199,7 +5296,16 @@ async function saveAdminVideo(event) {
 function adminEditorHtml(){
   let html='';
   if(state.adminScheduleEditor){const e=state.adminScheduleEditor.event||{};const f=(name,label,type='text',wide=false)=>`<label class="${wide?'full':''}">${label}<input data-admin-schedule-field="${name}" type="${type}" value="${esc(e[name]||'')}"></label>`;html+=`<div class="admin-editor-backdrop"><section class="admin-editor-sheet"><div class="admin-editor-head"><div><span>ADMIN</span><h2>${state.adminScheduleEditor.baseKey?'Edit Schedule Item':'Add Schedule Item'}</h2></div><button data-admin-editor-close="schedule">×</button></div><form id="adminScheduleEditorForm" class="admin-form-grid">${f('date','Date','date')}${f('startTime','Start Time','time')}${f('endTime','End Time','time')}${f('location','Location')}${f('venue','Venue')}${f('speaker','Speaker', 'text', true)}${f('speakerEn','Speaker (English)')}${f('speakerHe','Speaker (Hebrew)')}${f('title','Title','text',true)}${f('titleEn','Title (English)')}${f('titleHe','Title (Hebrew)')}${f('topicEn','Topic (English)')}${f('topicHe','Topic (Hebrew)')}${f('dateLabel','Date Label')}${f('hebrewDate','Hebrew Date')}${f('language','Language')}${f('year','Year')}${f('program','Program')}${f('shiurCode','Shiur Code')}<div class="admin-form-actions full"><button type="button" data-admin-editor-close="schedule">Cancel</button><button class="admin-save" type="submit">Save</button></div></form></section></div>`;}
-  if(state.adminPaidEditor){const e=state.adminPaidEditor;html+=`<div class="admin-editor-backdrop"><section class="admin-editor-sheet"><div class="admin-editor-head"><div><span>ADMIN</span><h2>${e.id?'Edit Paid Shiur':'Add Paid Shiur'}</h2></div><button data-admin-editor-close="paid">×</button></div><form id="adminPaidEditorForm" class="admin-form-grid"><label>Product ID<input id="adminPaidId" value="${esc(e.id||'')}" ${e.id?'readonly':''} placeholder="Auto-generated if blank"></label><label>Price ($)<input id="adminPaidPrice" type="number" min="0" step="0.01" value="${esc((Number(e.priceCents||0)/100)||'')}"></label><label class="full">English Title<input id="adminPaidTitleEn" required value="${esc(e.titleEn||e.title||'')}"></label><label class="full">Hebrew Title<input id="adminPaidTitleHe" dir="rtl" required value="${esc(e.titleHe||'')}"></label><label class="full">Speaker<input id="adminPaidSpeaker" value="${esc(e.speaker||'')}"></label><label>Category<input id="adminPaidCategory" value="${esc(e.category||'')}"></label><label>Audience<input id="adminPaidAudience" value="${esc(e.audience||'')}"></label><label class="full">Catalog Details<input id="adminPaidDetails" value="${esc(e.catalogDetails||'')}"></label><label class="full">Description<textarea id="adminPaidDescription">${esc(e.description||'')}</textarea><small>Formatting: **bold**, _italic_, blank lines for spacing, and - item for bullets.</small></label><label class="full">Drive Matching Aliases<textarea id="adminPaidAliases" placeholder="One per line">${esc((e.driveAliases||[]).join('\n'))}</textarea></label><label class="admin-checkbox full"><input id="adminPaidFeatured" type="checkbox" ${e.featured?'checked':''}> Featured product</label><div class="admin-form-actions full"><button type="button" data-admin-editor-close="paid">Cancel</button><button class="admin-save" type="submit">Save</button></div></form></section></div>`;}
+  if(state.adminPaidEditor){const e=state.adminPaidEditor;const promo=Array.isArray(e.promos)&&e.promos.length?e.promos[0]:null;html+=`<div class="admin-editor-backdrop"><section class="admin-editor-sheet"><div class="admin-editor-head"><div><span>ADMIN</span><h2>${e.id?'Edit Paid Shiur':'Add Paid Shiur'}</h2></div><button data-admin-editor-close="paid">×</button></div><form id="adminPaidEditorForm" class="admin-form-grid"><label>Product ID<input id="adminPaidId" value="${esc(e.id||'')}" ${e.id?'readonly':''} placeholder="Auto-generated if blank"></label><label>Price ($)<input id="adminPaidPrice" type="number" min="0" step="0.01" value="${esc((Number(e.priceCents||0)/100)||'')}"></label><label class="full">English Title<input id="adminPaidTitleEn" required value="${esc(e.titleEn||e.title||'')}"></label><label class="full">Hebrew Title<input id="adminPaidTitleHe" dir="rtl" required value="${esc(e.titleHe||'')}"></label><label class="full">Speaker<input id="adminPaidSpeaker" value="${esc(e.speaker||'')}"></label><label>Category<input id="adminPaidCategory" value="${esc(e.category||'')}"></label><label>Audience<input id="adminPaidAudience" value="${esc(e.audience||'')}"></label><label class="full">Catalog Details<input id="adminPaidDetails" value="${esc(e.catalogDetails||'')}"></label><label class="full">Description<textarea id="adminPaidDescription">${esc(e.description||'')}</textarea><small>Formatting: **bold**, _italic_, blank lines for spacing, and - item for bullets.</small></label><label class="full">Drive Matching Aliases<textarea id="adminPaidAliases" placeholder="One per line">${esc((e.driveAliases||[]).join('\n'))}</textarea></label><label class="admin-checkbox full"><input id="adminPaidFeatured" type="checkbox" ${e.featured?'checked':''}> Featured product</label><details class="full admin-paid-promo" ${promo?'open':''}><summary>Promo code (optional)</summary><p>100% off grants access without charging a card.</p>
+<label>Code<input id="adminPaidPromoCode" data-admin-promo="1" maxlength="40" value="${esc(promo?.code||'')}" placeholder="PROMO100"></label>
+<label>Type<select id="adminPaidPromoType" data-admin-promo="1"><option value="percent" ${promo?.discountType!=='fixed'?'selected':''}>% off</option><option value="fixed" ${promo?.discountType==='fixed'?'selected':''}>$ off</option></select></label>
+<label>Value<input id="adminPaidPromoValue" data-admin-promo="1" type="number" min="0" step="0.01" value="${esc(promo?promo.discountType==='fixed'?(Number(promo.discountValue||0)/100):Number(promo.discountValue||0):100)}"></label>
+<label>Max uses (0 = unlimited)<input id="adminPaidPromoMaxUses" data-admin-promo="1" type="number" min="0" step="1" value="${Number(promo?.maxUses||0)}"></label>
+<label>Expires<input id="adminPaidPromoExpires" data-admin-promo="1" type="date" value="${esc(String(promo?.expiresAt||'').slice(0,10))}"></label>
+<label class="admin-checkbox"><input id="adminPaidPromoOnePerUser" data-admin-promo="1" type="checkbox" ${promo?.onePerUser!==false?'checked':''}> One use per account</label>
+<label class="admin-checkbox"><input id="adminPaidPromoEnabled" data-admin-promo="1" type="checkbox" ${promo?.enabled!==false?'checked':''}> Enabled</label>
+${promo?'<p>Used '+Number(promo.usedCount||0)+' times'+(Number(promo.maxUses)>0?' of '+Number(promo.maxUses):'')+'</p>':''}
+<label class="admin-checkbox"><input id="adminPaidPromoDelete" data-admin-promo="1" type="checkbox" ${promo?'':'disabled'}> Delete existing promo</label></details><div class="admin-form-actions full"><button type="button" data-admin-editor-close="paid">Cancel</button><button class="admin-save" type="submit">Save</button></div></form></section></div>`;}
   if(state.adminVideoEditor){
     const e=state.adminVideoEditor; const isAudio=e._adminMediaKind==='audio'; const val=(...keys)=>keys.map(k=>e[k]).find(v=>v!=null&&String(v)!=='')||'';
     const field=(name,label,value,wide=false,type='text',suggest=true)=>`<label class="${wide?'full':''}">${label}<input data-admin-video-field="${name}" type="${type}" value="${esc(value)}" ${suggest&&ADMIN_MEDIA_ADD_LABELS[name]?`list="admin-${name}-options" data-admin-option-add="${esc(ADMIN_MEDIA_ADD_LABELS[name])}"`:''}></label>`;
@@ -7334,6 +7440,7 @@ function bind() {
   document.querySelectorAll('[data-admin-refresh]').forEach(el=>el.addEventListener('click',async()=>{state.adminLoaded=false;await loadAdminData(true);}));
   document.querySelectorAll('[data-admin-live-save]').forEach(el=>el.addEventListener('click',saveAdminLive));
   document.getElementById('adminRibbonForm')?.addEventListener('submit',saveAdminRibbon);
+  document.querySelectorAll('[data-admin-buyers-refresh]').forEach(el=>el.addEventListener('click',loadAdminPaidBuyers));
   document.querySelectorAll('[data-admin-donations-refresh]').forEach(el=>el.addEventListener('click',async()=>{state.adminLoaded=false;await loadAdminData(true);setToast('Donations refreshed.');}));
   document.getElementById('adminSponsorPricesForm')?.addEventListener('submit',saveAdminSponsorPrices);
   document.getElementById('adminSponsorshipForm')?.addEventListener('submit',saveAdminSponsorship);
@@ -7359,6 +7466,10 @@ function bind() {
   document.querySelectorAll('[data-admin-editor-close]').forEach(el=>el.addEventListener('click',()=>{const kind=el.dataset.adminEditorClose;if(kind==='schedule')state.adminScheduleEditor=null;if(kind==='paid')state.adminPaidEditor=null;if(kind==='video')state.adminVideoEditor=null;if(kind==='review')state.adminReviewEditor=null;render();}));
   document.getElementById('adminScheduleEditorForm')?.addEventListener('submit',saveAdminSchedule);
   document.getElementById('adminPaidEditorForm')?.addEventListener('submit',saveAdminPaid);
+  document.querySelectorAll('[data-admin-promo]').forEach(input=>{
+    input.addEventListener('input',()=>{state.adminPaidPromoDirty=true;});
+    input.addEventListener('change',()=>{state.adminPaidPromoDirty=true;});
+  });
   document.getElementById('adminVideoEditorForm')?.addEventListener('submit',saveAdminVideo);
   document.querySelectorAll('[data-admin-option-add]').forEach(input=>input.addEventListener('change',()=>{if(input.value.trim()===(input.dataset.adminOptionAdd||'')){input.value='';input.placeholder=`Type a new ${input.getAttribute('data-admin-video-field')||'value'}…`;input.focus();}}));
   document.getElementById('adminReviewEditorForm')?.addEventListener('submit',approveAdminReview);
