@@ -3938,13 +3938,16 @@ function clearPersistentVideoMount() {
   document.body.classList.remove('irgun-watch-mini-hosted');
 }
 
-// Native Audio keeps the original video Watch parked outside #app. The
-// JavaScript player flag can briefly lag behind the already-mounted host
-// during native Audio -> Video. Verify the actual mounted lecture instead of
-// the temporary bridge flag to avoid a second full-screen Watch overlay.
+// During native Audio -> Video, restoreParkedHostedVideo() moves the real
+// Media3 host onscreen BEFORE the asynchronous track switch finishes.
+// state.watchMode may still be 'audio' for several frames. Detect the visible
+// same-lecture host from its actual presentation class rather than that
+// lagging state flag: an old #app Audio Watch must not cover native controls.
 function hasPersistentVideoOverlayForCurrentWatch() {
+  const hostIsVisible = persistentVideoMount?.classList?.contains('watch-full-host') ||
+    persistentVideoMount?.classList?.contains('watch-mini-host');
   return Capacitor.getPlatform()==='android' &&
-    state.watchMode==='video' && Boolean(state.watchVideo) &&
+    Boolean(hostIsVisible) && Boolean(state.watchVideo) &&
     persistentVideoMount?.dataset.irgunWatchId===String(videoId(state.watchVideo)) &&
     Boolean(persistentVideoMount.querySelector('.watch-overlay #watchVimeoFrame'));
 }
@@ -9799,7 +9802,12 @@ async function performWatchModeSwitch(mode) {
     try {
       await player.setMode(mode,{offlineUri});
     } catch (error) {
-      if(videoHostPrepared) parkHostedVideoForAudio();
+      if(videoHostPrepared) {
+        parkHostedVideoForAudio();
+        // The restored Video host removed the old Audio Watch synchronously.
+        // If native Video fails, put the Audio UI back without a new player.
+        render();
+      }
       throw error;
     }
     let observed=null;
@@ -9812,7 +9820,10 @@ async function performWatchModeSwitch(mode) {
         (mode==='audio'&&offlineUri&&observed.sourceType!=='offline-mp3')){
       console.warn('[Media3] native mode/file source switch did not commit',observed);
       await player.setMode(previous).catch(()=>{});
-      if(videoHostPrepared) parkHostedVideoForAudio();
+      if(videoHostPrepared) {
+        parkHostedVideoForAudio();
+        render(); // Restore the in-app Audio Watch after a failed Video handoff.
+      }
       return false;
     }
     state.watchResumeSeconds=Math.max(0,Number(observed.positionMs||0)/1000);
