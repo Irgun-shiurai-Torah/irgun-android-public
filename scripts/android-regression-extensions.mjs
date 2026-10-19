@@ -432,8 +432,14 @@ try{
       const v=await videoReady();audibleVideo(v);
       assert.ok(v.video.time>=before-4,'Switch to Video rewound the shiur');
       await delay(2500);
-      const vv=await read();audibleVideo(vv);
-      assert.ok(vv.video.time>v.video.time+1,'Video froze after handoff');
+      // A real HLS segment boundary can briefly empty the native buffer.
+      // Require decoded frames and a moving clock within a bounded deadline:
+      // a frozen video must still fail the regression test.
+      const vv=await wait(s=>s.video&&!s.video.paused&&s.video.ready>=2&&
+        s.video.time>v.video.time+1&&s.video.frames>v.video.frames&&
+        s.media3?.playing&&s.media3.firstFrame,
+        'Video froze after handoff / failed to recover after buffering',25000);
+      audibleVideo(vv);
       const resumed=await audioReady();audibleAudio(resumed);
       assert.ok(Number(resumed.native.audioPositionMs)/1000>=vv.video.time-5,'Return to Audio lost playback progress');
     }
