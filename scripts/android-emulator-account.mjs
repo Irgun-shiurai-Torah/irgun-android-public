@@ -341,6 +341,31 @@ try{
  report.signedInNavigation={passes:3,routes:checkedRoutes,
   screens:['home','account','shiurim','library'],retainedSession:true};
  report.checks.push('24 real signed-in Home/Account/Shiurim/Library tab transitions preserve session');
+ // Samsung Tab S10: an empty Library section can leave the lower viewport
+ // outside <main class="content">. Verify a *physical* signed-in drag begins
+ // in the bottom half of Library and changes to the neighbouring Account tab.
+ await tap('library');
+ await wait(s=>s.screen==='library'&&s.loggedIn,'Native library page unavailable');
+ const lowerLibrary=await readSnapshot(`JSON.stringify((()=>{
+   const surface=document.querySelector('#app .app-shell > .content.android-library-swipe-surface');
+   const nav=document.querySelector('#androidBottomNavigationMount .bottom-nav');
+   if(!surface)return null;
+   const x=innerWidth*.72,endX=innerWidth*.28;
+   const navTop=nav?.getBoundingClientRect().top||innerHeight-92;
+   for(let y=Math.round(innerHeight*.57);y<=Math.min(Math.round(innerHeight*.79),navTop-18);y+=12){
+     const hit=document.elementFromPoint(x,y);
+     if(hit&&surface.contains(hit)&&!hit.closest('select,video,iframe,[role="dialog"]'))
+       return {x,endX,y,width:innerWidth,height:innerHeight,tag:hit.tagName};
+   }
+   return null;
+ })())`);
+ assert.ok(lowerLibrary,'Signed-in Library lower viewport must receive real Android swipes');
+ bounds=await readNativeBounds();
+ const libraryNativeFrom=native(lowerLibrary,lowerLibrary);
+ const libraryNativeTo=native({...lowerLibrary,x:lowerLibrary.endX},lowerLibrary);
+ adb('shell','input','swipe',...libraryNativeFrom.map(String),...libraryNativeTo.map(String),'650');
+ await wait(s=>s.screen==='account'&&s.loggedIn,'Signed-in lower Library swipe must reach Account');
+ report.checks.push('Real signed-in lower Library swipe navigates to Account without losing session');
 
  await tap('language');await wait(s=>s.lang==='he'&&s.dir==='rtl','Native account page must switch to Hebrew RTL');
  const hebrewProfile=await read();assert.equal(String(hebrewProfile.name||'').trim(),accountDisplayName,'Account identity must remain unchanged in Hebrew');

@@ -1738,3 +1738,25 @@ test('Samsung Android16 R8 signed-in crash cannot recur through notification per
   assert.match(account,/nativePromise\('IrgunPush','checkNotificationPermission'/,
     'Physical Android emulator test must call the precise crash-triggering native plugin method');
 });
+
+test('Android Library swipe covers the lower viewport, preserving Account and other gestures',()=>{
+  const main=readFileSync('src/main.js','utf8');
+  const css=readFileSync('src/style.css','utf8');
+  const tabs=readFileSync('scripts/android-emulator-tabs.mjs','utf8');
+  const account=readFileSync('scripts/android-emulator-account.mjs','utf8');
+  assert.ok(main.includes("state.screen==='account'?' android-account-swipe-surface':''"),
+    'Keep the already-working Account swipe surface untouched');
+  assert.ok(main.includes("state.screen==='library'?' android-library-swipe-surface':''"),
+    'Extend the real Library main element, not an invisible overlay that steals taps');
+  assert.match(css,/\.content\.android-account-swipe-surface,\s*body\.irgun-android \.app-shell > \.content\.android-library-swipe-surface\s*\{\s*min-height:/);
+  assert.match(tabs,/lowerLibraryPoint\?\.librarySurface/);
+  assert.match(tabs,/lower Your Library area goes to Account/);
+  assert.match(tabs,/Lower Account to Library reverse swipe works immediately/);
+  assert.match(account,/Signed-in Library lower viewport must receive real Android swipes/);
+  assert.match(account,/Signed-in lower Library swipe must reach Account/);
+  // The original gesture handler still ignores true horizontal carousels,
+  // players/dialogs, native system Back edges and vertical scrolling.
+  const swipe=readFileSync('src/tabSwipe.js','utf8');
+  assert.match(swipe,/if \(\/\(auto\|scroll\)\//);
+  assert.match(swipe,/touchcancel/);
+});

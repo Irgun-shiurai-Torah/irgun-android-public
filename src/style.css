@@ -2727,10 +2727,13 @@ body.irgun-android .android-swipe-peek {
   backface-visibility:hidden;
   will-change:transform;
 }
-/* Account forms end well above the bottom navigation on tall phones.
-   Keep the harmless empty area INSIDE .content so it receives tab gestures
-   instead of leaving half the screen outside the swipe handler. */
-body.irgun-android .app-shell > .content.android-account-swipe-surface {
+/* Account and Your Library may end well above the bottom navigation on tall
+   phones/tablets, especially an empty Library section. Extend the same real
+   .content hit surface through the lower viewport so horizontal page swipes
+   work over empty space too. Do not block vertical scrolling, change the
+   native swipe handler, or take touch events from player/scrollable strips. */
+body.irgun-android .app-shell > .content.android-account-swipe-surface,
+body.irgun-android .app-shell > .content.android-library-swipe-surface {
   min-height: calc(100vh - 68px);
   min-height: calc(100dvh - 68px);
 }
