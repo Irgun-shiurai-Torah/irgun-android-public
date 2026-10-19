@@ -1692,3 +1692,16 @@ test('Android Audio to Video keeps exactly one lecture-matched Watch overlay',()
   state.watchMode='video';host.querySelector=()=>null;
   assert.equal(context.hasHost(),false,'Without the native video anchor, a fresh Watch can be shown');
 });
+
+test('Samsung Tab S10 regression requires signed-in native page switches and tablet emulator',()=>{
+  const account=readFileSync('scripts/android-emulator-account.mjs','utf8');
+  const matrix=readFileSync('.github/workflows/android-release-regressions.yml','utf8');
+  assert.match(account,/const signedInRoute=\['home','account','shiurim','account','library','account','home','account'\]/);
+  assert.match(account,/pass<3/);
+  assert.match(account,/await tap\(target\)/);
+  assert.match(account,/s\.ready&&s\.loggedIn&&s\.screen===target/);
+  const tablet=matrix.split('  authenticated-account-35:')[1]?.split('  authenticated-account-36:')[0];
+  assert.ok(tablet,'Android API 35 authenticated account job exists');
+  assert.match(tablet,/device: pixel_c/);
+  assert.match(tablet,/script: bash scripts\/android-emulator-account\.sh/);
+});
