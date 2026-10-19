@@ -1,0 +1,141 @@
+name: Android Admin Parity - Signed QA and Internal Testing
+
+# R8 QA branch only. Keep main and Production untouched.
+# Every push creates a downloadable signed APK. Only an explicitly approved
+# commit (with the special publish marker) uploads to Play Internal Testing.
+# Regular future PR edits must NEVER silently replace the internal test track.
+# This explicit release commit is authorized for the 1.0.209 R8 QA upload after
+# the Android 16 permission-reflection fix and signed-in API 35 tablet checks.
+on:
+  push:
+    branches:
+      - feature/android-website-admin-parity-20261019
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irgun-android-admin-parity-download-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  downloadable-r8:
+    name: Signed Admin Parity QA APK + AAB
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Choose version newer than current internal release
+        shell: bash
+        run: |
+          set -euo pipefail
+          CODE=$((212 + GITHUB_RUN_NUMBER))
+          echo "IRGUN_ANDROID_VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+          echo "IRGUN_ANDROID_VERSION_NAME=1.0.${CODE}-adminqa" >> "$GITHUB_ENV"
+          echo "Admin Parity QA build version 1.0.${CODE}-adminqa"
+      - name: Check out admin feature branch
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Install Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -perm -111 | sort -V | tail -n 1)"
+          fi
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - name: Confirm signing configuration
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo "A signed APK is required for this user test. Repository signing secrets are unavailable." >&2
+            exit 1
+          fi
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/irgun-upload-key.jks"
+          test -s "$RUNNER_TEMP/irgun-upload-key.jks"
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Prepare selected launcher icon
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+          bash scripts/prepare_android_icons.sh
+      - name: Build app with native Android Media3 video
+        env:
+          VITE_ANDROID_MEDIA3_VIDEO_BETA: 'true'
+        run: npm run build
+      - name: Sync Capacitor Android project
+        run: npx cap sync android
+      - name: Generate Android launcher resources
+        run: bash scripts/prepare_android_icons.sh
+      - name: Build signed Admin Parity QA release APK and AAB
+        working-directory: android
+        env:
+          IRGUN_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/irgun-upload-key.jks
+          IRGUN_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          IRGUN_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          IRGUN_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon clean :app:assembleRelease :app:bundleRelease
+      - name: Verify signed R8 base and Admin Parity QA APK
+        run: |
+          set -euo pipefail
+          test -s android/app/build/outputs/mapping/release/mapping.txt
+          test -s android/app/build/outputs/apk/release/app-release.apk
+          test -s android/app/build/outputs/bundle/release/app-release.aab
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --verbose android/app/build/outputs/apk/release/app-release.apk
+      - name: Package downloadable signed Admin Parity build
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts
+          cp android/app/build/outputs/apk/release/app-release.apk \
+            "build-artifacts/Irgun-Admin-Parity-QA-${IRGUN_ANDROID_VERSION_NAME}-signed.apk"
+          cp android/app/build/outputs/bundle/release/app-release.aab \
+            "build-artifacts/Irgun-Admin-Parity-QA-${IRGUN_ANDROID_VERSION_NAME}.aab"
+          printf '%s\n' "Admin Parity test build for PR #56 (stacked on unmerged R8 PR #55)" \
+            "Version: ${IRGUN_ANDROID_VERSION_NAME} (code ${IRGUN_ANDROID_VERSION_CODE})" \
+            "Source: ${GITHUB_SHA}" \
+            "Google Play Internal Testing is updated ONLY for a specially approved commit." \
+            "The separate signed APK download is also included for manual QA." \
+            "Internal testing is not a Production release." \
+            > build-artifacts/INSTALL-README.txt
+      - name: Upload Admin Parity test APK and AAB for download
+        uses: actions/upload-artifact@v7
+        with:
+          name: Irgun-Admin-Parity-QA-${{ github.run_number }}-signed
+          path: build-artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish approved Admin Parity QA AAB to Google Play Internal Testing
+        # A normal PR push builds artifacts but never updates Internal Testing.
+        # The exact commit-prefix requirement makes this a one-time opt-in.
+        if: ${{ github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Publish Admin Parity QA to Google Play Internal Testing') }}
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: org.irgunshiuraitorah.app
+          releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed
