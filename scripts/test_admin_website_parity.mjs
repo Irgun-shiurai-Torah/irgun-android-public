@@ -132,3 +132,93 @@ test('Paid buyers and code discounts keep explicit admin authorization and do no
   assert.match(src,/action:'upsert',item/);
   assert.match(src,/state\.adminPaidBuyers = \[\]/,'Buyers must clear on logout');
 });
+
+// Full client-side City Admin upload lifecycle with controlled fake Worker.
+// The test exercises real chunk boundaries, one transient retry, private
+// draft review, and explicit publish without contacting a live account.
+test('City Admin performs resumable chunk upload and publishes only after metadata review', async () => {
+  const {createCityAdminController} = await import('../src/admin-city-panel.js');
+  const originalDocument=globalThis.document;
+  const originalCreateObjectUrl=URL.createObjectURL;
+  const originalRevokeObjectUrl=URL.revokeObjectURL;
+  const registry=new Map();
+  const element=id=>{
+    if(!registry.has(id)){
+      const handlers=new Map();
+      registry.set(id,{
+        id,dataset:{},style:{},hidden:false,disabled:false,value:'',
+        innerHTML:'',textContent:'',files:null,handlers,
+        addEventListener:(event,callback)=>handlers.set(event,callback),
+        querySelectorAll:()=>[],scrollIntoView:()=>{}
+      });
+    }
+    return registry.get(id);
+  };
+  const size=5*256*1024, requests=[],actions=[];
+  const file={size,name:'test-shiur.mp3',type:'audio/mpeg',
+    slice(start,end){return {arrayBuffer:async()=>new Uint8Array(end-start).buffer}}};
+  element('cityAdminCitySelect').value='Lakewood';
+  element('cityUploadMediaKind').value='audio';
+  element('cityUploadFile').files=[file];
+  element('cityAdminUploadForm');
+  element('cityAdminEditorForm');
+  element('cityAdminShiurList');
+  const doc={
+    getElementById:id=>element(id),
+    createElement:()=>{
+      const media={duration:96,preload:'',onloadedmetadata:null,onerror:null,
+        removeAttribute(){}};
+      Object.defineProperty(media,'src',{set(){queueMicrotask(()=>media.onloadedmetadata?.())}});
+      return media;
+    }
+  };
+  globalThis.document=doc;
+  URL.createObjectURL=()=> 'blob:qa-media';
+  URL.revokeObjectURL=()=>{};
+  const controller=createCityAdminController({
+    apiJson:async(path,options={})=>{
+      actions.push({path,method:options.method||'GET'});
+      if(path==='/city-admin/status')return {cities:['Lakewood']};
+      if(path.startsWith('/city-admin/shiurim?'))return {items:[]};
+      if(path==='/city-admin/upload/start')return {uploadId:'qa-test-upload',chunkBytes:512*1024,mimeType:'audio/mpeg'};
+      if(path==='/city-admin/upload/complete')return {
+        publicId:'qa-test-public',mediaKind:'audio',city:'Lakewood',item:{title:'QA Demo Lecture',speaker:'Rav QA'}};
+      if(path==='/city-admin/upload/qa-test-upload/publish')return {mediaKind:'audio'};
+      throw new Error('Unexpected QA endpoint '+path);
+    },
+    apiFetch:async path=>{
+      const url=new URL(path,'https://qa.invalid');
+      const start=Number(url.searchParams.get('start'));
+      const end=Number(url.searchParams.get('end'));
+      requests.push([start,end]);
+      if(requests.length===1)return {ok:false,status:503,json:async()=>({error:'temporary outage'})};
+      return {ok:true,status:200,json:async()=>({
+        uploadedBytes:end,complete:end===size,driveFileId:end===size?'qa-drive-file':undefined
+      })};
+    }
+  });
+  try{
+    assert.equal(await controller.loadCityAdminPanel(true),true);
+    controller.bind();
+    const upload=element('cityAdminUploadForm').handlers.get('submit');
+    assert.equal(typeof upload,'function');
+    await upload({preventDefault(){}});
+    assert.equal(element('cityAdminEditor').hidden,false,
+      'Uploaded file must remain private until Save is explicitly submitted');
+    assert.equal(element('cityEditTitle').value,'QA Demo Lecture');
+    assert.deepEqual(requests,[
+      [0,524288],[0,524288],[524288,1048576],[1048576,1310720]
+    ],'A transient 503 must retry the same range without skipping or duplicating bytes');
+    assert.equal(actions.some(x=>x.path.includes('/publish')),false,
+      'Uploading must never publish automatically');
+    await element('cityAdminEditorForm').handlers.get('submit')({preventDefault(){}});
+    assert.equal(actions.filter(x=>x.path.endsWith('/publish')).length,1);
+    assert.equal(element('cityAdminEditor').hidden,true);
+    assert.equal(element('cityUploadButton').disabled,false);
+  }finally{
+    controller.reset();
+    globalThis.document=originalDocument;
+    URL.createObjectURL=originalCreateObjectUrl;
+    URL.revokeObjectURL=originalRevokeObjectUrl;
+  }
+});
