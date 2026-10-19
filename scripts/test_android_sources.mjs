@@ -485,7 +485,7 @@ test('clicking Login submits once without the form becoming an auth-mode button'
 });
 function hostFixture() {
   class Node {
-    constructor(){this.children=[];this.classList={remove(){},toggle(){}};}
+    constructor(){this.children=[];this.dataset={};this.classList={remove(){},toggle(){}};}
     set textContent(value){assert.equal(value,'');for(const child of this.children)child.parentElement=null;this.children=[];}
     appendChild(child){if(child.parentElement)child.parentElement.children=child.parentElement.children.filter(c=>c!==child);child.parentElement=this;this.children.push(child);}
     querySelector(selector){return selector==='.watch-overlay'?this.children.find(c=>c===overlay)||null:selector==='#watchVimeoFrame'?this.children.includes(overlay)?iframe:null:null;}
@@ -493,7 +493,7 @@ function hostFixture() {
   const mount=new Node(),app=new Node(),overlay=new Node(),iframe={};app.appendChild(overlay);
   const state={watchVideo:{id:'1233236785:585d5d53db'},watchMode:'video'};
   const presentations=[];
-  const context={persistentVideoMount:mount,state,Capacitor:{getPlatform:()=> 'android'},document:{body:new Node(),querySelector:()=>app.children.includes(overlay)?overlay:null},reconcileAndroidNativeWatchOverlay(){},bindPersistentVideoChrome(){},PlaybackController:{setPresentation:async mode=>presentations.push(mode)}};
+  const context={persistentVideoMount:mount,state,videoId:v=>v.id,Capacitor:{getPlatform:()=> 'android'},document:{body:new Node(),querySelector:()=>app.children.includes(overlay)?overlay:null},reconcileAndroidNativeWatchOverlay(){},bindPersistentVideoChrome(){},PlaybackController:{setPresentation:async mode=>presentations.push(mode)}};
   const extract=(name,next)=>mainSource.slice(mainSource.indexOf(`function ${name}(`),mainSource.indexOf(next,mainSource.indexOf(`function ${name}(`)));
   runInNewContext(extract('clearPersistentVideoMount','function refreshPersistentMiniVideoChrome')+extract('hostCurrentWatchOverlay','async function resetWatchVimeoPlayer')+'\nthis.host=hostCurrentWatchOverlay;this.clear=clearPersistentVideoMount;',context);
   return {mount,overlay,state,iframe,presentations,host:context.host,clear:context.clear};
@@ -519,10 +519,16 @@ test('Android Follow uses website-reviewed keys and EXACT title-derived website 
   };
   const state={
     metadata:{lectures:{'reviewed-lecture':{speakerIds:['shmuel-yehuda-brisk']}}},
-    speakerAliasToId:new Map([['שמואל יהודה בריסק','shmuel-yehuda-brisk']]),
-    speakerById:new Map([['shmuel-yehuda-brisk',{
-      id:'shmuel-yehuda-brisk',displayHe:'הרב שמואל יהודה בריסק',displayEn:'Rav Shmuel Yehuda Brisk'
-    }]]),
+    speakerAliasToId:new Map([
+      ['שמואל יהודה בריסק','shmuel-yehuda-brisk'],
+      ['zev smith','zev-smith']
+    ]),
+    speakerById:new Map([
+      ['shmuel-yehuda-brisk',{
+        id:'shmuel-yehuda-brisk',displayHe:'הרב שמואל יהודה בריסק',displayEn:'Rav Shmuel Yehuda Brisk'
+      }],
+      ['zev-smith',{id:'zev-smith',displayHe:'הרב זאב סמיט',displayEn:'Rav Zev Smith'}]
+    ]),
     topicById:new Map(),follows:new Map()
   };
   let language='he';
@@ -550,8 +556,18 @@ test('Android Follow uses website-reviewed keys and EXACT title-derived website 
   state.follows.set('speaker:shmuel-yehuda-brisk',{type:'speaker',key:'shmuel-yehuda-brisk'});
   assert.match(context.renderFollow(reviewed),/עוקבים אחרי הרב שמואל יהודה בריסק/);
   language='en';assert.match(context.renderFollow(reviewed),/Following Rav Shmuel Yehuda Brisk/);
-  // No reviewed speaker: website watch.js uses auto-<slug> from the raw
-  // title, not the unrelated app-only auto-speaker:<normalized name>.
+  // A known speaker in the directory must use its canonical follow key,
+  // even if the lecture has no per-lecture reviewed mapping.
+  const canonicalEnglish={id:'canonical-zev',title:'Rav Zev Smith - The Beginning of Shemone Esrei',
+    _speakerIds:[],_speakerLabel:'Rav Zev Smith'};
+  html=context.renderFollow(canonicalEnglish);
+  assert.match(html,/data-follow-key="zev-smith"/);
+  assert.doesNotMatch(html,/data-follow-key="auto-zev-smith"/);
+  assert.deepEqual(Array.from(canonicalEnglish._speakerIds),['zev-smith']);
+
+  // Genuinely unknown speakers retain the website auto-<slug> key, not the
+  // unrelated app-only auto-speaker:<name> key.
+  state.speakerAliasToId.delete('שמואל יהודה בריסק');
   language='he';
   const unreviewed={id:'unreviewed',title:'הרב שמואל יהודה בריסק - שאלות חדשות',
     _speakerIds:['auto-speaker:שמואל יהודה בריסק'],_speakerLabel:'הרב שמואל יהודה בריסק'};
@@ -563,6 +579,7 @@ test('Android Follow uses website-reviewed keys and EXACT title-derived website 
   state.follows.set('speaker:auto-שמואל-יהודה-בריסק',{type:'speaker',key:'auto-שמואל-יהודה-בריסק'});
   assert.match(context.renderFollow(unreviewed),/עוקבים אחרי/);
   // Fallback is still allowed for a canonical speaker field without a tagged title.
+  state.speakerAliasToId.set('שמואל יהודה בריסק','shmuel-yehuda-brisk');
   const bySpeaker={id:'other',title:'שאלות חדשות',speakerHe:'הרב שמואל יהודה בריסק',_speakerIds:[]};
   assert.match(context.renderFollow(bySpeaker),/data-follow-key="shmuel-yehuda-brisk"/);
   assert.equal(context.renderFollow({id:'unknown',title:'Untitled recording',_speakerIds:[]}), '',
@@ -1670,6 +1687,110 @@ test('Android Library autocomplete floats over results and closes on outside int
   assert.match(mainSource,/librarySearch\.addEventListener\('blur'/);
   assert.match(mainSource,/document\.addEventListener\('pointerdown',event=>\{/);
   assert.match(mainSource,/state\.librarySearchAssistOpen=false;[\s\S]*?runLibrarySearch\(\); refreshSearchAssist\(\);/);
+});
+
+// Android native Video must not duplicate Watch when its bridge identity lags
+// behind the already-hosted same-lecture video, or reuse another lecture's host.
+test('Android Audio to Video keeps exactly one lecture-matched Watch overlay',()=>{
+  const helperStart=mainSource.indexOf('function hasPersistentVideoOverlayForCurrentWatch()');
+  const helperEnd=mainSource.indexOf('\nfunction refreshPersistentMiniVideoChrome()',helperStart);
+  const guardStart=mainSource.indexOf('function reconcileAndroidNativeWatchOverlay()');
+  const guardEnd=mainSource.indexOf('\nfunction hostCurrentWatchOverlay(',guardStart);
+  assert.ok(helperStart>=0&&helperEnd>helperStart&&guardStart>=0&&guardEnd>guardStart);
+  assert.match(mainSource,/!hasPersistentVideoOverlayForCurrentWatch\(\) \? watchHtml\(\) : ''/,
+    'Shell must not create another in-app Watch while a native-hosted Video exists');
+  const host={dataset:{irgunWatchId:'lecture-1'},
+    querySelector:sel=>sel==='.watch-overlay #watchVimeoFrame'?{}:null};
+  const state={watchVideo:{id:'lecture-1'},watchMode:'video',
+    watchHostedExternally:false,watchVimeo:{isIrgunNativeVideoPlayer:false}};
+  let removed=0;
+  const context={state,Capacitor:{getPlatform:()=> 'android'},persistentVideoMount:host,
+    videoId:v=>v.id,document:{querySelectorAll:selector=>{
+      assert.equal(selector,'#app .watch-overlay');
+      return [{remove(){removed++;}}];
+    }}};
+  runInNewContext(mainSource.slice(helperStart,helperEnd)+
+    mainSource.slice(guardStart,guardEnd)+
+    '\nthis.hasHost=hasPersistentVideoOverlayForCurrentWatch;this.clean=reconcileAndroidNativeWatchOverlay;',context);
+  assert.equal(context.hasHost(),true,'The actual video host must not depend on a transient JavaScript player flag');
+  context.clean();
+  assert.equal(removed,1,'Remove only the in-app duplicate, never the native host');
+  assert.equal(state.watchHostedExternally,true);
+  state.watchVideo={id:'lecture-2'};removed=0;state.watchHostedExternally=false;
+  assert.equal(context.hasHost(),false,'A different lecture cannot reuse a stale player host');
+  context.clean();assert.equal(removed,0);assert.equal(state.watchHostedExternally,false);
+  state.watchVideo={id:'lecture-1'};state.watchMode='audio';
+  assert.equal(context.hasHost(),false,'Parked Video must not hide the currently active Audio UI');
+  state.watchMode='video';host.querySelector=()=>null;
+  assert.equal(context.hasHost(),false,'Without the native video anchor, a fresh Watch can be shown');
+});
+
+test('Samsung Tab S10 regression requires signed-in native page switches and tablet emulator',()=>{
+  const account=readFileSync('scripts/android-emulator-account.mjs','utf8');
+  const matrix=readFileSync('.github/workflows/android-release-regressions.yml','utf8');
+  assert.match(account,/const signedInRoute=\['home','account','shiurim','account','library','account','home','account'\]/);
+  assert.match(account,/pass<3/);
+  assert.match(account,/await tap\(target\)/);
+  assert.match(account,/s\.ready&&s\.loggedIn&&s\.screen===target/);
+  const tablet=matrix.split('  authenticated-account-35:')[1]?.split('  authenticated-account-36:')[0];
+  assert.ok(tablet,'Android API 35 authenticated account job exists');
+  assert.match(tablet,/device: pixel_c/);
+  assert.match(tablet,/script: bash scripts\/android-emulator-account\.sh/);
+});
+
+test('Samsung signed-in regression runs a release-style minified app, not only debug',()=>{
+  const gradle=readFileSync('android/app/build.gradle','utf8');
+  const shell=readFileSync('scripts/android-emulator-account.sh','utf8');
+  const matrix=readFileSync('.github/workflows/android-release-regressions.yml','utf8');
+  const tablet=matrix.split('  authenticated-account-35:')[1]?.split('  authenticated-account-36:')[0];
+  assert.match(gradle,/project\.hasProperty\('irgunR8TabletQa'\)/);
+  assert.match(gradle,/signingConfig signingConfigs\.debug/);
+  assert.match(gradle,/minifyEnabled true/);
+  assert.match(shell,/IRGUN_ANDROID_TEST_APK/);
+  assert.match(tablet,/-PirgunR8TabletQa=true :app:assembleRelease/);
+  assert.match(tablet,/outputs\/mapping\/release\/mapping\.txt/);
+  assert.match(tablet,/IRGUN_ANDROID_TEST_APK: android\/app\/build\/outputs\/apk\/release\/app-release\.apk/);
+  assert.match(tablet,/device: pixel_c/);
+});
+
+test('Samsung Android16 R8 signed-in crash cannot recur through notification permission reflection',()=>{
+  const plugin=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPushPlugin.java','utf8');
+  const rules=readFileSync('android/app/proguard-rules.pro','utf8');
+  const account=readFileSync('scripts/android-emulator-account.mjs','utf8');
+  const app=readFileSync('src/main.js','utf8');
+  assert.match(app,/state\.notificationSettings\.pushEnabled = await currentNativePushEnabled\(\)/,
+    'Account hydration is the path that previously hit the crashing native permission plugin');
+  assert.doesNotMatch(plugin,/getPermissionState\(/,
+    'Do not call Capacitor permission-state reflection in Android push permission checks');
+  assert.match(plugin,/ContextCompat\.checkSelfPermission\(context, Manifest\.permission\.POST_NOTIFICATIONS\)/);
+  assert.match(plugin,/Build\.VERSION\.SDK_INT < 33/);
+  assert.match(plugin,/getPluginHandle\(\)\.getPluginAnnotation\(\) == null/);
+  assert.match(rules,/-keep @interface com\.getcapacitor\.annotation\.CapacitorPlugin \{ \*; \}/);
+  assert.match(rules,/-keep @interface com\.getcapacitor\.annotation\.Permission \{ \*; \}/);
+  assert.match(account,/nativePromise\('IrgunPush','checkNotificationPermission'/,
+    'Physical Android emulator test must call the precise crash-triggering native plugin method');
+});
+
+test('Android Library swipe covers the lower viewport, preserving Account and other gestures',()=>{
+  const main=readFileSync('src/main.js','utf8');
+  const css=readFileSync('src/style.css','utf8');
+  const tabs=readFileSync('scripts/android-emulator-tabs.mjs','utf8');
+  const account=readFileSync('scripts/android-emulator-account.mjs','utf8');
+  assert.ok(main.includes("state.screen==='account'?' android-account-swipe-surface':''"),
+    'Keep the already-working Account swipe surface untouched');
+  assert.ok(main.includes("state.screen==='library'?' android-library-swipe-surface':''"),
+    'Extend the real Library main element, not an invisible overlay that steals taps');
+  assert.match(css,/\.content\.android-account-swipe-surface,\s*body\.irgun-android \.app-shell > \.content\.android-library-swipe-surface\s*\{\s*min-height:/);
+  assert.match(tabs,/lowerLibraryPoint\?\.librarySurface/);
+  assert.match(tabs,/lower Your Library area goes to Account/);
+  assert.match(tabs,/Lower Account to Library reverse swipe works immediately/);
+  assert.match(account,/Signed-in Library lower viewport must receive real Android swipes/);
+  assert.match(account,/Signed-in lower Library swipe must reach Account/);
+  // The original gesture handler still ignores true horizontal carousels,
+  // players/dialogs, native system Back edges and vertical scrolling.
+  const swipe=readFileSync('src/tabSwipe.js','utf8');
+  assert.match(swipe,/if \(\/\(auto\|scroll\)\//);
+  assert.match(swipe,/touchcancel/);
 });
 
 test('native Audio mode shows real Watch controls before optional slow Media3 bridge refresh', () => {

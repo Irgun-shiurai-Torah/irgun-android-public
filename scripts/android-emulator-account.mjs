@@ -329,7 +329,78 @@ try{
  assert.equal(String(loggedIn.profileShownName||'').trim(),accountDisplayName,'Profile screen must display the correct account name');
  report.checks.push('Real Android account name displayed on profile');
  assert.equal((await read()).isAdmin,false,'Use a non-admin dedicated account');assert.ok(String((await read()).accountEmail||'').trim().toLowerCase()===email.trim().toLowerCase(),'Refuse to mutate an account other than the dedicated approved account');report.checks.push('Native email/password login and profile');
- await tap('language');await wait(s=>s.lang==='he'&&s.dir==='rtl','Native account page must switch to Hebrew RTL');
+ // Check the exact native method that produced the Play Console Samsung
+ // crash (not just WebView render). This must complete AFTER signing in
+ // without killing the app's Capacitor plugin execution thread.
+ const pushPermission=await readSnapshot(
+   "window.Capacitor.nativePromise('IrgunPush','checkNotificationPermission',{}).then(JSON.stringify)"
+ );
+ assert.equal(typeof pushPermission.granted,'boolean',
+   'Native push permission must return a real boolean after Android login');
+ await wait(s=>s.ready&&s.loggedIn&&s.screen==='account',
+   'Android process disappeared during signed-in native push permission check');
+ report.checks.push('Real signed-in native notification permission check returns without Android R8 crash');
+
+ // A real Samsung Tab S10 crash happened ONLY after sign-in when switching
+ // Home / Account pages. The previous QA suite logged in once but did not
+ // repeatedly stress foreground bottom-tab navigation.
+ const signedInRoute=['home','account','shiurim','account','library','account','home','account'];
+ let checkedRoutes=0;
+ for(let pass=0;pass<3;pass++){
+  for(const target of signedInRoute){
+   await tap(target);
+   await wait(s=>s.ready&&s.loggedIn&&s.screen===target,
+     'Signed-in Android route crashed/stalled on '+target+' pass '+(pass+1),18000);
+   checkedRoutes++;
+  }
+ }
+ report.signedInNavigation={passes:3,routes:checkedRoutes,
+  screens:['home','account','shiurim','library'],retainedSession:true};
+ report.checks.push('24 real signed-in Home/Account/Shiurim/Library tab transitions preserve session');
+ // Samsung Tab S10: an empty Library section can leave the lower viewport
+ // outside <main class="content">. Verify a *physical* signed-in drag begins
+ // in the bottom half of Library and changes to the neighbouring Account tab.
+ await tap('library');
+ await wait(s=>s.screen==='library'&&s.loggedIn,'Native library page unavailable');
+ const lowerLibrary=await readSnapshot(`JSON.stringify((()=>{
+   const surface=document.querySelector('#app .app-shell > .content.android-library-swipe-surface');
+   const nav=document.querySelector('#androidBottomNavigationMount .bottom-nav');
+   if(!surface)return null;
+   const x=innerWidth*.72,endX=innerWidth*.28;
+   const navTop=nav?.getBoundingClientRect().top||innerHeight-92;
+   for(let y=Math.round(innerHeight*.57);y<=Math.min(Math.round(innerHeight*.79),navTop-18);y+=12){
+     const hit=document.elementFromPoint(x,y);
+     if(hit&&surface.contains(hit)&&!hit.closest('select,video,iframe,[role="dialog"]'))
+       return {x,endX,y,width:innerWidth,height:innerHeight,tag:hit.tagName};
+   }
+   return null;
+ })())`);
+ assert.ok(lowerLibrary,'Signed-in Library lower viewport must receive real Android swipes');
+ bounds=await readNativeBounds();
+ const libraryNativeFrom=native(lowerLibrary,lowerLibrary);
+ const libraryNativeTo=native({...lowerLibrary,x:lowerLibrary.endX},lowerLibrary);
+ adb('shell','input','swipe',...libraryNativeFrom.map(String),...libraryNativeTo.map(String),'650');
+ await wait(s=>s.screen==='account'&&s.loggedIn,'Signed-in lower Library swipe must reach Account');
+ // Observe the actual Android swipe transition before tapping a header control.
+ // This is still a real ADB tap; never substitute a synthetic click.
+ const idle=await wait(s=>!s.swipeGateActive&&!!s.controls.language,
+   'Signed-in swipe gate or header Language button never became interactive',10000);
+ report.signedInPostSwipe={gestureIdle:!idle.swipeGateActive,
+   headerAccessible:!!idle.controls.language};
+ report.checks.push('Real signed-in lower Library swipe navigates to Account without losing session');
+ const beforeLanguage=await read();
+ await tap('language');
+ try {
+   await wait(s=>s.lang==='he'&&s.dir==='rtl','Native account page must switch to Hebrew RTL');
+ } catch(error) {
+   const afterLanguage=await read();
+   report.languageFailure={before:{lang:beforeLanguage.lang,dir:beforeLanguage.dir,
+     gestureBusy:beforeLanguage.swipeGateActive,control:beforeLanguage.controls.language||null},
+     after:{lang:afterLanguage.lang,dir:afterLanguage.dir,
+       gestureBusy:afterLanguage.swipeGateActive,control:afterLanguage.controls.language||null},
+     appStillRunning:afterLanguage.loggedIn,screen:afterLanguage.screen};
+   throw error;
+ }
  const hebrewProfile=await read();assert.equal(String(hebrewProfile.name||'').trim(),accountDisplayName,'Account identity must remain unchanged in Hebrew');
  const hebrewLabels=await readSnapshot('JSON.stringify([...document.querySelectorAll("[data-account-section], [data-logout]")].filter(e=>e.getBoundingClientRect().width>0).map(e=>e.textContent.trim()))');
  assert.ok(hebrewLabels.length>=2&&hebrewLabels.every(x=>/[\u0590-\u05ff]/.test(x)),'Native Hebrew account controls must be translated');
@@ -339,7 +410,22 @@ try{
  await tap('shiurim');await tap('open');await wait(s=>!!s.watchId,'Lecture did not open');const id=(await read()).watchId;
  assert.equal(id,playbackFixtureId,'Account UI must open the verified native-video/audio lecture');
  report.accountMutationsStartedAt=new Date().toISOString();const before=await read();await tap('like');await wait(s=>s.likes.includes(id)!==before.likes.includes(id),'Like toggle failed');report.checks.push('Native Like toggle');
- await tap('save');await tap('later');await wait(s=>s.later.includes(id)!==before.later.includes(id),'Save toggle failed');await closeSavePicker();report.checks.push('Native Watch Later toggle and dialog closure');await tap('follow');await wait(s=>JSON.stringify(s.follows)!==JSON.stringify(before.follows),'Follow toggle failed');report.checks.push('Native speaker follow toggle');
+ await tap('save');await tap('later');await wait(s=>s.later.includes(id)!==before.later.includes(id),'Save toggle failed');await closeSavePicker();report.checks.push('Native Watch Later toggle and dialog closure');
+ const followBefore=await read();await tap('follow');
+ try {
+  await wait(s=>JSON.stringify(s.follows)!==JSON.stringify(followBefore.follows),'Follow toggle failed');
+ } catch(error) {
+  const failed=await read();
+  report.followFailure={
+   target:failed.followTarget ? {key:failed.followTarget.key,active:failed.followTarget.active,text:failed.followTarget.text,rendered:failed.followTarget.rendered} : null,
+   beforeCount:followBefore.follows.length,afterCount:failed.follows.length,
+   targetAlreadyInClientState:failed.followTarget ? followBefore.follows.includes('speaker:'+failed.followTarget.key) : null,
+   followsBefore:followBefore.follows,followsAfter:failed.follows,
+   requests:failed.followRequests||[],screen:failed.screen,loggedIn:failed.loggedIn
+  };
+  throw new Error('Follow toggle failed; safe diagnostic: '+JSON.stringify(report.followFailure));
+ }
+ report.checks.push('Native speaker follow toggle');
 
  // Previous test waited for history without ever pressing Play. The physical
  // emulator screenshot showed a paused Audio player at 0:00, so explicitly

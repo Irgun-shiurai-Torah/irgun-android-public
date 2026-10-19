@@ -65,8 +65,10 @@ on:
 permissions:
   contents: read
 
-# Matrix jobs share a single authenticated test account. The whole matrix must
-# be serialized across pushes; newer commits supersede obsolete emulator runs.
+# Every app APK in this matrix is R8-minified, and each job verifies mapping.txt.
+# This specifically exercises login/account/session flows under R8, not only the
+# unminified debug variant. Matrix jobs share one authenticated test account;
+# newer commits supersede obsolete emulator runs.
 # Within one run, max-parallel: 1 executes all four account API levels in turn.
 # A job-level shared concurrency key instead cancels pending matrix children.
 concurrency:
@@ -124,8 +126,11 @@ jobs:
       - name: Add emulator-only native output volume observation
         run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+      - name: Build R8-minified app and QA observer
+        run: ./gradlew --no-daemon -PirgunR8Qa=true :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
+      - name: Verify R8 mapping output
+        run: test -s android/app/build/outputs/mapping/debug/mapping.txt
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -185,8 +190,11 @@ jobs:
       - run: npx cap sync android
       - run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+      - name: Build R8-minified app and QA observer
+        run: ./gradlew --no-daemon -PirgunR8Qa=true :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
+      - name: Verify R8 mapping output
+        run: test -s android/app/build/outputs/mapping/debug/mapping.txt
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -292,8 +300,11 @@ jobs:
       - run: bash scripts/prepare_android_icons.sh
       - run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+      - name: Build R8-minified app and QA observer
+        run: ./gradlew --no-daemon -PirgunR8Qa=true :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
+      - name: Verify R8 mapping output
+        run: test -s android/app/build/outputs/mapping/debug/mapping.txt
       - name: Enable KVM for actual Android emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -367,8 +378,11 @@ jobs:
       - run: bash scripts/prepare_android_icons.sh
       - run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+      - name: Build R8-minified app and QA observer
+        run: ./gradlew --no-daemon -PirgunR8Qa=true :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
+      - name: Verify R8 mapping output
+        run: test -s android/app/build/outputs/mapping/debug/mapping.txt
       - name: Enable KVM for actual Android emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -442,8 +456,13 @@ jobs:
       - run: bash scripts/prepare_android_icons.sh
       - run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+      - name: Build R8 release-equivalent app and QA observer for large-screen tablet
+        run: ./gradlew --no-daemon -PirgunR8TabletQa=true :app:assembleRelease :qa-native-observer:assembleDebug
         working-directory: android
+      - name: Verify actual release R8 mapping
+        run: |
+          test -s android/app/build/outputs/mapping/release/mapping.txt
+          test -s android/app/build/outputs/apk/release/app-release.apk
       - name: Enable KVM for actual Android emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -453,8 +472,13 @@ jobs:
         run: bash scripts/android-emulator-sdk-preflight.sh 35
       - name: Native account and separate logged-in playback, offline restart and history sync
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          IRGUN_ANDROID_TEST_APK: android/app/build/outputs/apk/release/app-release.apk
         with:
           api-level: 35
+          # The Samsung Tab S10 is a tablet. Use a tablet AVD rather than
+          # validating only the default phone layout under R8.
+          device: pixel_c
           target: google_apis
           arch: x86_64
           script: bash scripts/android-emulator-account.sh
@@ -517,8 +541,11 @@ jobs:
       - run: bash scripts/prepare_android_icons.sh
       - run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+      - name: Build R8-minified app and QA observer
+        run: ./gradlew --no-daemon -PirgunR8Qa=true :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
+      - name: Verify R8 mapping output
+        run: test -s android/app/build/outputs/mapping/debug/mapping.txt
       - name: Enable KVM for actual Android emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -587,8 +614,11 @@ jobs:
       - name: Expose native audio volume in emulator only
         run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+      - name: Build R8-minified app and QA observer
+        run: ./gradlew --no-daemon -PirgunR8Qa=true :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
+      - name: Verify R8 mapping output
+        run: test -s android/app/build/outputs/mapping/debug/mapping.txt
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -652,8 +682,11 @@ jobs:
       - run: bash scripts/prepare_android_icons.sh
       - run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+      - name: Build R8-minified app and QA observer
+        run: ./gradlew --no-daemon -PirgunR8Qa=true :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
+      - name: Verify R8 mapping output
+        run: test -s android/app/build/outputs/mapping/debug/mapping.txt
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -715,8 +748,11 @@ jobs:
       - name: Expose native audio volume in emulator only
         run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - run: ./gradlew --no-daemon :app:assembleDebug :qa-native-observer:assembleDebug
+      - name: Build R8-minified app and QA observer
+        run: ./gradlew --no-daemon -PirgunR8Qa=true :app:assembleDebug :qa-native-observer:assembleDebug
         working-directory: android
+      - name: Verify R8 mapping output
+        run: test -s android/app/build/outputs/mapping/debug/mapping.txt
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
