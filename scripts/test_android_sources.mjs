@@ -1700,7 +1700,9 @@ test('Android Audio to Video keeps exactly one lecture-matched Watch overlay',()
   assert.match(mainSource,/!hasPersistentVideoOverlayForCurrentWatch\(\) \? watchHtml\(\) : ''/,
     'Shell must not create another in-app Watch while a native-hosted Video exists');
   const host={dataset:{irgunWatchId:'lecture-1'},
+    className:'persistent-video-mount watch-video-host watch-full-host',
     querySelector:sel=>sel==='.watch-overlay #watchVimeoFrame'?{}:null};
+  host.classList={contains:token=>host.className.split(/\s+/).includes(token)};
   const state={watchVideo:{id:'lecture-1'},watchMode:'video',
     watchHostedExternally:false,watchVimeo:{isIrgunNativeVideoPlayer:false}};
   let removed=0;
@@ -1720,9 +1722,73 @@ test('Android Audio to Video keeps exactly one lecture-matched Watch overlay',()
   assert.equal(context.hasHost(),false,'A different lecture cannot reuse a stale player host');
   context.clean();assert.equal(removed,0);assert.equal(state.watchHostedExternally,false);
   state.watchVideo={id:'lecture-1'};state.watchMode='audio';
+  host.className='persistent-video-mount watch-video-host watch-audio-parked';
   assert.equal(context.hasHost(),false,'Parked Video must not hide the currently active Audio UI');
+  host.className='persistent-video-mount watch-video-host watch-full-host';
+  assert.equal(context.hasHost(),true,'Video host is visible before JavaScript mode commits');
+  context.clean();
+  assert.equal(removed,1,'The stale in-app Audio Watch must be removed before Video mode commits');
   state.watchMode='video';host.querySelector=()=>null;
   assert.equal(context.hasHost(),false,'Without the native video anchor, a fresh Watch can be shown');
+});
+
+test('Android Media3 restore immediately removes the old Audio Watch before async Video mode commits',()=>{
+  const helperStart=mainSource.indexOf('function hasPersistentVideoOverlayForCurrentWatch()');
+  const helperEnd=mainSource.indexOf('\nfunction refreshPersistentMiniVideoChrome()',helperStart);
+  const cleanStart=mainSource.indexOf('function reconcileAndroidNativeWatchOverlay()');
+  const cleanEnd=mainSource.indexOf('\nfunction hostCurrentWatchOverlay(',cleanStart);
+  const parkStart=mainSource.indexOf('function parkHostedVideoForAudio()');
+  const parkEnd=mainSource.indexOf('\nfunction restoreParkedHostedVideo()',parkStart);
+  const restoreStart=mainSource.indexOf('function restoreParkedHostedVideo()');
+  const restoreEnd=mainSource.indexOf('\nasync function switchVideoToAudioSeamlessly(',restoreStart);
+  assert.ok([helperStart,cleanStart,parkStart,restoreStart].every(i=>i>=0));
+  const host={
+    className:'persistent-video-mount watch-video-host watch-audio-parked',
+    dataset:{irgunWatchId:'lecture-1'},
+    querySelector:selector=>
+      selector==='#watchVimeoFrame'||selector==='.watch-overlay #watchVimeoFrame' ? {} : null
+  };
+  host.classList={contains:token=>host.className.split(/\s+/).includes(token)};
+  const state={watchVideo:{id:'lecture-1'},watchVimeo:{isIrgunNativeVideoPlayer:true},
+    watchMode:'audio',watchHostedExternally:false,watchMinimized:false};
+  let removed=0;
+  let inApp=[{remove(){removed++;inApp=[];}}];
+  const context={
+    state,persistentVideoMount:host,Capacitor:{getPlatform:()=> 'android'},
+    videoId:video=>video.id,
+    document:{
+      body:{classList:{remove() {}}},
+      querySelectorAll:selector=>{
+        assert.equal(selector,'#app .watch-overlay');
+        return inApp;
+      }
+    }
+  };
+  runInNewContext([
+    mainSource.slice(helperStart,helperEnd),
+    mainSource.slice(cleanStart,cleanEnd),
+    mainSource.slice(parkStart,parkEnd),
+    mainSource.slice(restoreStart,restoreEnd),
+    'this.restore=restoreParkedHostedVideo;this.park=parkHostedVideoForAudio;',
+    'this.clean=reconcileAndroidNativeWatchOverlay;',
+    'this.hasHost=hasPersistentVideoOverlayForCurrentWatch;'
+  ].join('\n'),context);
+  assert.equal(context.hasHost(),false,'Audio mode starts with Video host parked');
+  assert.equal(context.restore(),true);
+  assert.equal(state.watchMode,'audio','Native Media3 setMode is still pending');
+  assert.equal(host.classList.contains('watch-full-host'),true);
+  assert.equal(removed,1,'Restore removes the in-app Watch synchronously, before native setMode');
+  assert.equal(inApp.length,0);
+  assert.equal(state.watchHostedExternally,true);
+  // A late Audio-era render during the async mode switch must be reconciled too.
+  inApp=[{remove(){removed++;inApp=[];}}];
+  context.clean();
+  assert.equal(removed,2,'No stale Watch may cover native Video during the async handoff');
+  assert.equal(inApp.length,0);
+  context.park(); // Failed native Video must allow the original Audio UI again.
+  assert.equal(host.classList.contains('watch-audio-parked'),true);
+  assert.equal(context.hasHost(),false,'Parking Video must allow an Audio Watch to render');
+  assert.equal(state.watchHostedExternally,false);
 });
 
 test('Samsung Tab S10 regression requires signed-in native page switches and tablet emulator',()=>{
