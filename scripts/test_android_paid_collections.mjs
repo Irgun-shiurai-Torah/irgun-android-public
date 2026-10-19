@@ -351,7 +351,13 @@ test('paid emulator observes actual selected Purchased tab and safely escaped fo
 
 test('paid playback emulator uses valid, single-scoped collection selectors',()=>{
   const qa=readFileSync('scripts/android-emulator-paid-playback.mjs','utf8');
-  assert.ok(qa.includes('tap(`[data-paid-collection-id="${productId}"] [data-paid-expand]`'));
+  assert.match(qa,/async function ensurePurchasedAlbumOpen\(\)/);
+  assert.match(qa,/if\(before\.albumExpanded\)return before/);
+  assert.ok(qa.includes("await tap(selector,{tries:20})"),
+    'Album toggle must be tapped physically only when the actual album is closed');
+  assert.match(qa,/if\(after\.albumExpanded\)return after/);
+  assert.ok(qa.includes('const expanded=await ensurePurchasedAlbumOpen()'),
+    'Paid track lookup must not begin until the real purchased album opens');
   assert.ok(qa.includes("tap(folder.selector,{tries:30})"),
     'Actual folder summaries must be opened with real physical taps');
   assert.ok(qa.includes('tap(track.selector)'),
