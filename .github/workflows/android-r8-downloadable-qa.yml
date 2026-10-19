@@ -1,7 +1,9 @@
 name: Android R8 - Downloadable QA APK
 
-# Build the R8 PR without changing main or updating the Play Internal track.
-# Pushing this workflow to its dedicated branch triggers the first build.
+# R8 QA branch only. Keep main and Production untouched.
+# Every push creates a downloadable signed APK. Only an explicitly approved
+# commit (with the special publish marker) uploads to Play Internal Testing.
+# Regular future PR edits must NEVER silently replace the internal test track.
 on:
   push:
     branches:
@@ -17,7 +19,7 @@ concurrency:
 
 jobs:
   downloadable-r8:
-    name: R8 signed APK + AAB (download only)
+    name: R8 signed APK + AAB (optionally publish to Internal Testing)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -84,7 +86,7 @@ jobs:
         run: npx cap sync android
       - name: Generate Android launcher resources
         run: bash scripts/prepare_android_icons.sh
-      - name: Build signed R8 release APK and AAB (no Play upload)
+      - name: Build signed R8 release APK and AAB
         working-directory: android
         env:
           IRGUN_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/irgun-upload-key.jks
@@ -112,10 +114,9 @@ jobs:
           printf '%s\n' "R8 test build for PR #55" \
             "Version: ${IRGUN_ANDROID_VERSION_NAME} (code ${IRGUN_ANDROID_VERSION_CODE})" \
             "Source: ${GITHUB_SHA}" \
-            "Download only. This workflow does NOT upload to Google Play." \
-            "WARNING: A directly installed APK may not update a Google Play installed app" \
-            "if its Play App Signing certificate differs from the upload certificate." \
-            "Do not uninstall your existing working app just to install this test build." \
+            "Google Play Internal Testing is updated ONLY for a specially approved commit." \
+            "The separate signed APK download is also included for manual QA." \
+            "Internal testing is not a Production release." \
             > build-artifacts/INSTALL-README.txt
       - name: Upload R8 test APK and AAB for download
         uses: actions/upload-artifact@v7
@@ -124,3 +125,15 @@ jobs:
           path: build-artifacts/*
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish approved R8 QA AAB to Google Play Internal Testing
+        # A normal PR push builds artifacts but never updates Internal Testing.
+        # The exact commit-prefix requirement makes this a one-time opt-in.
+        if: ${{ github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Publish R8 QA to Google Play Internal Testing') }}
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: org.irgunshiuraitorah.app
+          releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed
