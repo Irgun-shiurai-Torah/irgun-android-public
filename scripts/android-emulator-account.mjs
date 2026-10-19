@@ -313,6 +313,18 @@ try{
  assert.equal(String(loggedIn.profileShownName||'').trim(),accountDisplayName,'Profile screen must display the correct account name');
  report.checks.push('Real Android account name displayed on profile');
  assert.equal((await read()).isAdmin,false,'Use a non-admin dedicated account');assert.ok(String((await read()).accountEmail||'').trim().toLowerCase()===email.trim().toLowerCase(),'Refuse to mutate an account other than the dedicated approved account');report.checks.push('Native email/password login and profile');
+ // Check the exact native method that produced the Play Console Samsung
+ // crash (not just WebView render). This must complete AFTER signing in
+ // without killing the app's Capacitor plugin execution thread.
+ const pushPermission=await readSnapshot(
+   "window.Capacitor.nativePromise('IrgunPush','checkNotificationPermission',{}).then(JSON.stringify)"
+ );
+ assert.equal(typeof pushPermission.granted,'boolean',
+   'Native push permission must return a real boolean after Android login');
+ await wait(s=>s.ready&&s.loggedIn&&s.screen==='account',
+   'Android process disappeared during signed-in native push permission check');
+ report.checks.push('Real signed-in native notification permission check returns without Android R8 crash');
+
  // A real Samsung Tab S10 crash happened ONLY after sign-in when switching
  // Home / Account pages. The previous QA suite logged in once but did not
  // repeatedly stress foreground bottom-tab navigation.
