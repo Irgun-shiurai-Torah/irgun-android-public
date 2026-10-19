@@ -52,7 +52,14 @@ android {
             }
         }
         release {
-            if (irgunHasReleaseSigning) {
+            if (project.hasProperty('irgunR8TabletQa') &&
+                    project.property('irgunR8TabletQa').toString() == 'true') {
+                // CI-only: run the RELEASE minifier on a tablet but allow the
+                // existing read-only CDP observer. This must not affect Play
+                // release builds unless this explicit opt-in is supplied.
+                signingConfig signingConfigs.debug
+                debuggable true
+            } else if (irgunHasReleaseSigning) {
                 signingConfig signingConfigs.release
             }
             // Optimize/obfuscate DEX code for Google Play. Keep resource
