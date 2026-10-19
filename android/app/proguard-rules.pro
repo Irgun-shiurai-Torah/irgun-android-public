@@ -18,3 +18,11 @@
 # Android components named in AndroidManifest.xml (including the playback
 # service and Firebase messaging service) are kept by the Android Gradle
 # plugin. Dependencies provide their own consumer ProGuard rules.
+
+# Keep the RUNTIME permission metadata and its annotation element methods.
+# Capacitor Bridge.getPermissionStates() assumes getPluginAnnotation() is not
+# null; older R8 builds produced an NPE here on Samsung Android 16. Keeping
+# only plugin entry-point methods is insufficient for permission reflection.
+-keep @interface com.getcapacitor.annotation.CapacitorPlugin { *; }
+-keep @interface com.getcapacitor.annotation.Permission { *; }
+-keep @interface com.getcapacitor.annotation.PermissionCallback { *; }
