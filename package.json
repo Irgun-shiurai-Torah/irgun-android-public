@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "prebuild": "node --test scripts/test_comment_draft.mjs",
+    "prebuild": "node --test scripts/test_comment_draft.mjs scripts/test_admin_website_parity.mjs",
     "test:player": "npm run build && npx cap copy android && node scripts/verify-player-fixes.mjs",
     "preview": "vite preview",
     "cap:sync": "npm run build && npx cap sync",
