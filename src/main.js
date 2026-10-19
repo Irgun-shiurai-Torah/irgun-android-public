@@ -1,5 +1,7 @@
 import './style.css';
 import { createWebsiteAdminParity } from './admin-website-parity.js';
+import { createCityAdminController, cityAdminPanelHtml } from './admin-city-panel.js';
+import './admin-city.css';
 import { clearCommentComposerAfterPost } from './comment-draft.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
 import { createAndroidSwipeMotion } from './android-swipe-motion.js';
@@ -292,6 +294,9 @@ const state = {
   donationSuccess: '',
   isAdmin: false,
   adminChecked: false,
+  isCityAdmin: false,
+  cityAdminChecked: false,
+  cityAdminLoading: false,
   adminMode: localStorage.getItem(ADMIN_MODE_KEY) === '1',
   adminLoading: false,
   adminLoaded: false,
@@ -2244,6 +2249,11 @@ function resetUserState() {
   state.recurringActionBusy = '';
   state.isAdmin = false;
   state.adminChecked = false;
+  state.isCityAdmin = false;
+  state.cityAdminChecked = false;
+  state.cityAdminLoading = false;
+  cityAdminController.reset();
+  websiteAdminParity.reset();
   state.adminLoaded = false;
   state.adminStatus = null;
   state.adminAdmins = [];
@@ -2251,7 +2261,7 @@ function resetUserState() {
   state.adminSponsorships = [];
   state.adminPaidCatalog = [];
   state.adminPaidCatalogLoaded = false;
-  if (state.accountSection === 'admin') state.accountSection = 'profile';
+  if (state.accountSection === 'admin' || state.accountSection === 'city-admin') state.accountSection = 'profile';
 }
 
 
@@ -2759,7 +2769,26 @@ async function checkAdminStatus(force = false) {
   }
   state.adminChecked = true;
   if (!state.isAdmin && state.accountSection === 'admin') state.accountSection = 'profile';
+  if(!state.cityAdminChecked&&!state.cityAdminLoading)void checkCityAdminStatus();
   return state.isAdmin;
+}
+
+async function checkCityAdminStatus(force=false) {
+  if(!state.user){state.isCityAdmin=false;state.cityAdminChecked=true;return false;}
+  if(state.cityAdminLoading||(state.cityAdminChecked&&!force))return state.isCityAdmin;
+  state.cityAdminLoading=true;
+  try{
+    const data=await apiJson('/city-admin/status');
+    state.isCityAdmin=Array.isArray(data.cities)&&data.cities.length>0;
+  }catch(error){
+    state.isCityAdmin=false;
+    if(![401,403].includes(Number(error?.status)))console.warn('City Admin status could not load',error);
+  }finally{
+    state.cityAdminChecked=true;state.cityAdminLoading=false;
+    if(!state.isCityAdmin&&state.accountSection==='city-admin')state.accountSection='profile';
+    if(state.screen==='account')render();
+  }
+  return state.isCityAdmin;
 }
 
 async function refreshLikeCounts() {
@@ -5056,6 +5085,8 @@ function adminDonationCards(){
 // The website uses the same authenticated Worker endpoints. This controller
 // renders additional admin controls *inside* the Android Account screen and
 // delegates authorization to the Worker; user tokens never enter markup.
+const cityAdminController=createCityAdminController({apiJson,apiFetch});
+
 const websiteAdminParity=createWebsiteAdminParity({
   apiJson,esc,
   isAdmin:()=>Boolean(state.user&&state.isAdmin),
@@ -5184,10 +5215,12 @@ function accountHtml() {
     : state.accountSection === 'settings' ? accountSettingsHtml()
     : state.accountSection === 'purchases' ? accountPurchasesHtml()
     : state.accountSection === 'admin' && state.isAdmin ? accountAdminHtml()
+    : state.accountSection === 'city-admin' && state.isCityAdmin ? cityAdminPanelHtml()
     : accountProfileHtml();
+  const cityAdminTab=state.isCityAdmin?`<button data-account-section="city-admin" class="${state.accountSection==='city-admin'?'active':''}">City Admin</button>`:'';
   const adminTab=state.isAdmin?`<button data-account-section="admin" class="${state.accountSection==='admin'?'active':''}">Admin</button>`:'';
   return `<div class="page-title"><h1>My Account</h1><p>Manage your Irgun Shiurai Torah account.</p></div>
-    <div class="segmented account-tabs"><button data-account-section="profile" class="${state.accountSection === 'profile' ? 'active' : ''}">${tr('Profile')}</button><button data-account-section="following" class="${state.accountSection === 'following' ? 'active' : ''}">Following</button><button data-account-section="settings" class="${state.accountSection === 'settings' ? 'active' : ''}">Settings</button><button data-account-section="purchases" class="${state.accountSection === 'purchases' ? 'active' : ''}">Purchased</button>${adminTab}</div>
+    <div class="segmented account-tabs"><button data-account-section="profile" class="${state.accountSection === 'profile' ? 'active' : ''}">${tr('Profile')}</button><button data-account-section="following" class="${state.accountSection === 'following' ? 'active' : ''}">Following</button><button data-account-section="settings" class="${state.accountSection === 'settings' ? 'active' : ''}">Settings</button><button data-account-section="purchases" class="${state.accountSection === 'purchases' ? 'active' : ''}">Purchased</button>${cityAdminTab}${adminTab}</div>
     ${body}`;
 }
 
@@ -7084,6 +7117,7 @@ function render() {
   if ((state.screen === 'paid' || (state.screen === 'library' && state.librarySection === 'purchased') || (state.screen === 'account' && state.accountSection === 'purchases')) && (!state.paidLoaded || state.paidCatalogOwnerKey!==currentPaidCatalogOwnerKey()) && !state.paidLoading && !state.paidError) setTimeout(loadPaidCatalog, 0);
   if (state.screen === 'account' && state.accountSection === 'purchases' && state.user && !state.recurringLoaded && !state.recurringLoading) setTimeout(loadRecurringDonations, 0);
   if (state.screen === 'account' && state.accountSection === 'admin' && state.isAdmin && !state.adminLoaded && !state.adminLoading) setTimeout(loadAdminData, 0);
+  if (state.screen === 'account' && state.user && !state.cityAdminChecked && !state.cityAdminLoading) setTimeout(checkCityAdminStatus,0);
   if (state.screen === 'donate' && !state.sponsorPricesLoaded && !state.sponsorPricesLoading) setTimeout(loadSponsorPrices, 0);
 }
 
@@ -7296,6 +7330,7 @@ function bind() {
 
   document.getElementById('adminModeToggle')?.addEventListener('change', event => { state.adminMode=Boolean(event.target.checked); localStorage.setItem(ADMIN_MODE_KEY,state.adminMode?'1':'0'); setToast(state.adminMode?'Admin Mode enabled.':'Admin Mode hidden.'); render(); });
   websiteAdminParity.bind(document);
+  if(state.screen==='account'&&state.accountSection==='city-admin'&&state.isCityAdmin)cityAdminController.bind();
   document.querySelectorAll('[data-admin-refresh]').forEach(el=>el.addEventListener('click',async()=>{state.adminLoaded=false;await loadAdminData(true);}));
   document.querySelectorAll('[data-admin-live-save]').forEach(el=>el.addEventListener('click',saveAdminLive));
   document.getElementById('adminRibbonForm')?.addEventListener('submit',saveAdminRibbon);
