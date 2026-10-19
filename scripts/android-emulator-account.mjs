@@ -2,7 +2,7 @@ import {execFileSync} from 'node:child_process';
 import {writeFileSync,readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {nativeHierarchy} from './android-native-hierarchy.mjs';
-import {settledNativeTapPoint} from './android-native-tap-point.mjs';
+import {settledNativeTapPoint,waitForNativeWindowFocus} from './android-native-tap-point.mjs';
 import {accountSwipeDirection, watchPlayerReturnGesture, watchCommentsGesture, watchFollowTargetGesture} from './android-account-native-scroll.mjs';
 import {observedAdb} from './android-adb-observer.mjs';
 import {selectAccountPlaybackFixture} from './android-account-playback-fixture.mjs';
@@ -63,8 +63,24 @@ async function closeSavePicker(){if((await read()).playlistPickerOpen)await tap(
 async function wait(test,message,timeoutMs=30000){report.stage=message;let s;const deadline=Date.now()+timeoutMs;while(Date.now()<deadline){s=await read();if(test(s))return s;await delay(300);}throw new Error(message);}
 
 async function readNativeBounds() {
- const window=await readSnapshot("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{}).then(JSON.stringify)");
- assert.equal(window.focused,true,'Irgun must own the actual foreground window before an app tap');
+ // Android can resume its Activity before the WebView regains real focus
+ // after splash, keyboard or rotation. Do not tap an unfocused native window.
+ const observe=()=>readSnapshot("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{}).then(JSON.stringify)");
+ let window;
+ try {
+   window=await waitForNativeWindowFocus({readBounds:observe,delay,samples:50});
+ } catch(error) {
+   // Preserve evidence if Pixel Launcher or an unknown system dialog persists.
+   // Never dismiss a real crash/ANR dialog or invent foreground ownership.
+   try {
+     const last=await observe();
+     report.nativeFocusFailure={focused:!!last?.focused,
+       bounds:[last?.left,last?.top,last?.right,last?.bottom],
+       resumedActivity:adb('shell','dumpsys','activity','activities').split('\n')
+         .filter(line=>/topResumedActivity|ResumedActivity/.test(line)).slice(0,4)};
+   } catch (_) {}
+   throw error;
+ }
  const value=[window.left,window.top,window.right,window.bottom];
  assert.ok(value.every(Number.isFinite)&&value[2]>value[0]&&value[3]>value[1],
    'Fresh native WebView geometry must have a nonzero size');
@@ -329,16 +345,19 @@ try{
  // emulator screenshot showed a paused Audio player at 0:00, so explicitly
  // start playback through a real Android touch before asserting progress.
  if((await read()).watchMode!=='audio')await tap('audioMode');
- await wait(s=>s.watchMode==='audio','Audio mode did not open for real playback history');
+ await wait(s=>s.watchMode==='audio'&&!!s.controls.audioPlay,
+   'Native Audio mode and actual Play control did not become visible after switch',18000);
  const audioStart=await read();
  // A buffering Media3 source may already have accepted Play. Toggling its
  // button as it becomes ready would immediately pause the real playback.
  if(!audioStart.audioPlaying&&!audioStart.audioPlayWhenReady)await tap('audioPlay');
  const playbackObserved=await wait(s=>s.audioPlaying&&s.audioTime>1,'Native Media3 audio must start and advance before history is tested');
- await delay(3500);
- const laterPlayback=await read();
- assert.ok(laterPlayback.audioPlaying&&laterPlayback.audioTime>playbackObserved.audioTime+2,
-   'Actual Media3 audio clock must advance while the account is signed in');
+ // Buffering at a segment boundary may pause the clock briefly. Require the
+ // same real Media3 playback to advance by >2s within 18s, not at exactly 3.5s.
+ // A frozen player still fails and cannot count as successful history sync.
+ const laterPlayback=await wait(s=>s.audioPlaying&&s.audioTime>playbackObserved.audioTime+2,
+   'Actual Media3 audio clock must advance while the account is signed in',18000);
+ report.audioProgressVerification={from:playbackObserved.audioTime,to:laterPlayback.audioTime};
  report.checks.push('Real Android playback started with native Play and advanced');
  
  // Check the real API from a separate authenticated QA session. In-memory

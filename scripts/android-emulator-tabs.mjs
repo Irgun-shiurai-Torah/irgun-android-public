@@ -43,7 +43,9 @@ try {
     counter:document.querySelector('.pro-counter span')?.textContent,
     eyebrow:!!document.querySelector('.hero-eyebrow'),
     loading:!!document.querySelector('#app .loading'),
-    error:!!document.querySelector('.offline-error-card')
+    error:!!document.querySelector('.offline-error-card'),
+    swipeAnimating:!!document.querySelector('.android-swipe-peek')
+      || !!document.querySelector('#app .app-shell > .content')?.style.transform
   })`));
   const wait = async predicate => {
     let state;
@@ -54,7 +56,7 @@ try {
     }
     throw new Error(`UI did not settle: ${JSON.stringify(state)}`);
   };
-  await wait(s => !s.loading && !s.error && s.counter === 'Shiurim played');
+  await wait(s => !s.loading && !s.error && s.counter === 'Shiurim Played');
   assert.equal((await read()).eyebrow, false, 'Home eyebrow must be removed');
   report.checks.push('English Home wording and removed eyebrow');
 
@@ -74,9 +76,19 @@ try {
       const content=document.querySelector('.content'), rect=content.getBoundingClientRect();
       const a=innerWidth*.28,b=innerWidth*.72;
       const excluded='input,textarea,select,[contenteditable],video,iframe,.watch-overlay,.mini-player,.bottom-nav';
+      // Keep horizontal chip/filter carousels scrollable instead of using
+      // their touches for global page navigation. Match production exclusions.
+      const isHorizontalScroller=target=>{
+        for(let node=target;node&&node!==content.parentElement;node=node.parentElement){
+          const style=getComputedStyle(node);
+          if(/(auto|scroll)/.test(style.overflowX)
+            && node.scrollWidth>node.clientWidth+12)return true;
+        }
+        return false;
+      };
       for(let y=Math.max(rect.top+30,100);y<Math.min(rect.bottom-20,innerHeight-150);y+=20){
         const targets=[a,b].map(x=>document.elementFromPoint(x,y));
-        if(targets.every(t=>t?.closest('.content')&&!t.closest(excluded)))
+        if(targets.every(t=>t?.closest('.content')&&!t.closest(excluded)&&!isHorizontalScroller(t)))
           return {x:${dx < 0 ? 'b' : 'a'},endX:${dx < 0 ? 'a' : 'b'},y,width:innerWidth,height:innerHeight};
       }
       return null;
@@ -127,7 +139,7 @@ try {
     }
     assert.ok(adb('shell','pidof','org.irgunshiuraitorah.app'),
       'A horizontal swipe must NEVER destroy the Android application process');
-    const after = await wait(s => s.tab === expected);
+    const after = await wait(s => s.tab === expected && !s.swipeAnimating);
     await delay(650); // also observe the no-wrapping boundary and compatibility click
     assert.equal((await read()).tab, expected);
     report.gestures.push({ lang: from.lang, from: from.tab, expected, actual: after.tab, start, end });

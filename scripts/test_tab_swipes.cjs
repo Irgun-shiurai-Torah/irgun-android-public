@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const binder = import('../src/tabSwipe.js');
 
-async function fixture({ rtl = false, blocked = false, scrollable = false, excluded = false, onGestureState, onNavigate = () => {} } = {}) {
+async function fixture({ rtl = false, blocked = false, scrollable = false, excluded = false, interactive = false, onGestureState, onNavigate = () => {} } = {}) {
   const handlers = new Map(), visits = [];
   let active = 'home', allowed = !blocked;
   const root = {
@@ -24,7 +24,8 @@ async function fixture({ rtl = false, blocked = false, scrollable = false, exclu
   const tabs = ['home','shiurim','live','library','account'];
   (await binder).bindTabSwipes(root, {
     getActiveTab: () => active, getTabs: () => rtl ? [...tabs].reverse() : tabs,
-    canNavigate: () => allowed, onGestureState, navigate: tab => { active = tab; visits.push(tab); onNavigate(tab); }
+    canNavigate: () => allowed, onGestureState, navigate: tab => { active = tab; visits.push(tab); onNavigate(tab); },
+    ...(interactive ? { onDrag: () => {}, onRelease: () => Promise.resolve() } : {})
   });
   function swipe(dx, dy = 0) {
     emit('touchstart', [touch(220, 200)]);
@@ -85,6 +86,21 @@ test('navigation or an opened modal during a gesture cancels it', async () => {
   f.emit('touchstart', [f.touch(220, 200)]); f.block(); f.emit('touchend', [], [f.touch(80, 200)]);
   assert.deepEqual(f.visits, []);
 });
+test('interactive swipe suppresses only its endpoint click, not an immediate tap elsewhere', async () => {
+  const f = await fixture({ interactive: true });
+  f.swipe(-130);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.visits, ['shiurim']);
+  const ghost = f.emit('click', [], [], { detail: 1, clientX: 90, clientY: 200 });
+  assert.equal(ghost.prevented, true, 'the swipe endpoint compatibility click must be suppressed');
+  assert.equal(ghost.stopped, true);
+  const immediateHeaderTap = f.emit('click', [], [], { detail: 1, clientX: 170, clientY: 35 });
+  assert.equal(immediateHeaderTap.prevented, false, 'a separate tap on the header must work immediately');
+  assert.equal(immediateHeaderTap.stopped, false);
+  const keyboard = f.emit('click', [], [], { detail: 0, clientX: 90, clientY: 200 });
+  assert.equal(keyboard.prevented, false, 'keyboard activation must remain available');
+});
+
 test('committed swipe suppresses its compatibility click, preserving keyboard activation', async () => {
   const f = await fixture(); f.emit('touchstart', [f.touch(220, 200)]);
   assert.equal(f.emit('touchmove', [f.touch(80, 200)]).prevented, true);
