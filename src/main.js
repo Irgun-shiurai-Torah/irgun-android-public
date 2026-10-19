@@ -3082,11 +3082,30 @@ async function toggleFollow(type, key, label) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type, key, labelEn: label, labelHe: label })
     });
-    const identity = `${type}:${key}`;
-    if (result.following) state.follows.set(identity, result.item || { type, key, labelEn: label, labelHe: label });
-    else state.follows.delete(identity);
+    const requestedIdentity = `${type}:${key}`;
+    const savedItem = result?.item?.type && result?.item?.key
+      ? result.item : { type, key, labelEn: label, labelHe: label };
+    const savedIdentity = `${savedItem.type}:${savedItem.key}`;
+    // The Worker can canonicalize a lecture's Follow identity. Do not keep an
+    // optimistic key that differs from the entry returned after a real restart.
+    state.follows.delete(requestedIdentity);
+    if (result.following) state.follows.set(savedIdentity, savedItem);
+    else state.follows.delete(savedIdentity);
     if (!state.watchVideo && state.screen === 'library' && state.librarySection === 'following') render();
     else refreshInteractiveUi();
+    // Replace the optimistic snapshot with the authenticated server truth,
+    // using a fresh GET. A temporary read failure must not undo a POST that
+    // already succeeded or leave Follow unusable.
+    try {
+      const verified = await apiJson('/follows', { cache:'no-store' });
+      if (Array.isArray(verified?.items)) {
+        state.follows = new Map(verified.items
+          .filter(item => item && item.type && item.key)
+          .map(item => [`${item.type}:${item.key}`, item]));
+        if (!state.watchVideo && state.screen === 'library' && state.librarySection === 'following') render();
+        else refreshInteractiveUi();
+      }
+    } catch (error) { console.warn('Could not refresh saved follows', error); }
   } catch (error) {
     alert(error.message || 'Could not update follow.');
   }
@@ -3961,9 +3980,33 @@ function syncAndroidMiniDialogVisibility() {
   document.body.classList.toggle('irgun-mini-modal-open',modal);
 }
 
+function bindFollowButtons(root = document) {
+  root.querySelectorAll('[data-follow-type]').forEach(el => {
+    // The Video Watch overlay can move outside #app, or survive other renders.
+    // Attach at most one listener to the REAL button and keep it across moves.
+    if (el.dataset.followBound === '1') return;
+    el.dataset.followBound = '1';
+    el.addEventListener('click', async event => {
+      event.stopPropagation();
+      if (el.dataset.followBusy === '1') return;
+      el.dataset.followBusy = '1';
+      const type = el.dataset.followType;
+      const key = el.dataset.followKey;
+      const label = el.dataset.followLabel;
+      try {
+        await preserveWatchTime();
+        await toggleFollow(type, key, label);
+      } finally {
+        delete el.dataset.followBusy;
+      }
+    });
+  });
+}
+
 function bindPersistentVideoChrome() {
   if (!persistentVideoMount) return;
   bindAndroidWatchDetailsSwipeToMini(persistentVideoMount.querySelector('.watch-overlay'));
+  bindFollowButtons(persistentVideoMount);
   persistentVideoMount.querySelectorAll('[data-expand-watch]').forEach(expand => {
     if (expand.dataset.bound) return;
     expand.dataset.bound = '1';
@@ -7604,23 +7647,7 @@ function bind() {
     toggleWatchLater(el.dataset.save);
   }));
 
-  document.querySelectorAll('[data-follow-type]').forEach(el => {
-    // The persistent watch video lives outside #app. Renders for Save/Watch
-    // Later must not rebind this same DOM element and POST twice to /follows.
-    if (el.dataset.followBound === '1') return;
-    el.dataset.followBound = '1';
-    el.addEventListener('click', async event => {
-      event.stopPropagation();
-      if (el.dataset.followBusy === '1') return;
-      el.dataset.followBusy = '1';
-      try {
-        await preserveWatchTime();
-        await toggleFollow(el.dataset.followType, el.dataset.followKey, el.dataset.followLabel);
-      } finally {
-        delete el.dataset.followBusy;
-      }
-    });
-  });
+  bindFollowButtons(document);
 
   document.querySelectorAll('[data-share-kind]').forEach(el => el.addEventListener('click', () => shareItem(el.dataset.shareKind, el.dataset.shareId)));
   document.querySelectorAll('[data-download-kind]').forEach(el => el.addEventListener('click', () => downloadItem(el.dataset.downloadKind, el.dataset.downloadId)));
