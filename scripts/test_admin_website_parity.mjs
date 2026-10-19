@@ -86,3 +86,49 @@ test('main app integrates the admin panel without weakening Worker authorization
   assert.doesNotMatch(mod,/localStorage\.(setItem|getItem)/,'No admin data cached in localStorage');
   assert.doesNotMatch(mod,/Authorization.*Bearer/,'Never assemble or expose an account token in admin panel HTML');
 });
+
+
+test('City Admin upload and edit are protected and reuse the Android authenticated API',async()=>{
+  const {createCityAdminController,cityAdminPanelHtml}=await import('../src/admin-city-panel.js');
+  const markup=cityAdminPanelHtml();
+  for(const id of ['cityAdminCitySelect','cityUploadMediaKind','cityUploadFile',
+    'cityAdminUploadForm','cityAdminEditorForm','cityAdminShiurList','cityEditTitle',
+    'cityEditLectureDate','cityEditShiurCode'])
+    assert.ok(markup.includes('id="'+id+'"'), 'Missing city upload/edit control '+id);
+  const controller=createCityAdminController({apiJson:async()=>({}),apiFetch:async()=>({ok:true})});
+  assert.equal(typeof controller.bind,'function');
+  assert.equal(typeof controller.loadCityAdminPanel,'function');
+  controller.reset();
+  const src=readFileSync('src/admin-city-panel.js','utf8');
+  assert.match(src,/apiJson\(path,\{\.\.\.options,headers\}\)/);
+  assert.match(src,/apiFetch\(endpoint,\s*\{/);
+  assert.match(src,/city-admin\/upload\/start/);
+  assert.match(src,/city-admin\/upload\/complete/);
+  assert.match(src,/city-admin\/upload\/.*\/publish/);
+  assert.match(src,/city-admin\/shiurim\?city=/);
+  assert.match(src,/city-admin\/shiur\/.*DELETE/);
+  assert.doesNotMatch(src,/window\.API/,'Do not bypass the native Bearer auth bridge');
+  const main=readFileSync('src/main.js','utf8');
+  assert.match(main,/apiJson\('\/city-admin\/status'\)/);
+  assert.match(main,/state\.isCityAdmin=Array\.isArray\(data\.cities\)&&data\.cities\.length>0/);
+  assert.match(main,/state\.accountSection === 'city-admin' && state\.isCityAdmin/);
+  assert.match(main,/cityAdminController\.bind\(\)/);
+  assert.match(main,/cityAdminController\.reset\(\)/);
+});
+
+test('Paid buyers and code discounts keep explicit admin authorization and do not remove untouched promos',()=>{
+  const src=readFileSync('src/main.js','utf8');
+  assert.match(src,/if\(!state\.isAdmin\|\|state\.adminPaidBuyersLoading\)return/);
+  assert.match(src,/apiJson\('\/admin\/paid-purchases'\)/);
+  assert.match(src,/data-admin-buyers-refresh/);
+  assert.match(src,/adminPaidPromoCode/);
+  assert.match(src,/adminPaidPromoType/);
+  assert.match(src,/adminPaidPromoMaxUses/);
+  assert.match(src,/adminPaidPromoOnePerUser/);
+  assert.match(src,/adminPaidPromoDelete/);
+  assert.match(src,/if\(state\.adminPaidPromoDirty\)/);
+  assert.match(src,/body\.promo=\{/);
+  assert.match(src,/previousCode:String\(previous\?\.code\|\|''\)/);
+  assert.match(src,/action:'upsert',item/);
+  assert.match(src,/state\.adminPaidBuyers = \[\]/,'Buyers must clear on logout');
+});
