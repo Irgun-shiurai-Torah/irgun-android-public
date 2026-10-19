@@ -16,7 +16,7 @@ const isoDate=(value)=>{
   return !Number.isNaN(date.getTime())&&date.toISOString().slice(0,10)===v;
 };
 const normalizeTitle=(v)=>text(v).toLowerCase().normalize('NFKC')
-  .replace(/[\u2018\u2019\u201C\u201D'"`.,!?;:()\[\]{}\\/_-]+/g,' ').replace(/\s+/g,' ').trim();
+  .replace(/[^\p{L}\p{N}]+/gu,' ').replace(/\s+/g,' ').trim();
 
 export function parseAdminScheduleJson(value){
   const trimmed=text(value).trim();
