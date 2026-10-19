@@ -1155,7 +1155,7 @@ test('Follow binding must not double-submit after a persistent video overlay sur
     preserveWatchTime: async () => {},
     toggleFollow: () => new Promise(resolve => { followCalls++; resolvers.push(resolve); })
   };
-  runInNewContext(binding+'\\nthis.bindFollowButtons = bindFollowButtons;', context);
+  runInNewContext(binding+'\nthis.bindFollowButtons = bindFollowButtons;', context);
   context.bindFollowButtons(root); // Persistent video host moves outside #app.
   context.bindFollowButtons(root); // Playlist modal re-renders the app.
   context.bindFollowButtons(root); // Back to Watch, same physical button.
@@ -1190,7 +1190,7 @@ test('Follow success adopts the server canonical identity, persists after refres
     },
     refreshInteractiveUi:()=>{},render:()=>{},requireLogin:()=>{}
   };
-  runInNewContext(mainSource.slice(start,end)+'\\nthis.toggleFollow=toggleFollow;',context);
+  runInNewContext(mainSource.slice(start,end)+'\nthis.toggleFollow=toggleFollow;',context);
   await context.toggleFollow('speaker','legacy-rav','Test Speaker');
   assert.deepEqual([...state.follows.keys()],['speaker:reviewed-rav']);
   assert.equal(getCalls,1);
