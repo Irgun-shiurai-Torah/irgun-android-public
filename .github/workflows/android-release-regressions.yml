@@ -455,11 +455,13 @@ jobs:
       - run: bash scripts/prepare_android_icons.sh
       - run: python3 scripts/android-emulator-prepare.py --with-hierarchy-observer
       - run: chmod +x android/gradlew
-      - name: Build R8-minified app and QA observer
-        run: ./gradlew --no-daemon -PirgunR8Qa=true :app:assembleDebug :qa-native-observer:assembleDebug
+      - name: Build R8 release-equivalent app and QA observer for large-screen tablet
+        run: ./gradlew --no-daemon -PirgunR8TabletQa=true :app:assembleRelease :qa-native-observer:assembleDebug
         working-directory: android
-      - name: Verify R8 mapping output
-        run: test -s android/app/build/outputs/mapping/debug/mapping.txt
+      - name: Verify actual release R8 mapping
+        run: |
+          test -s android/app/build/outputs/mapping/release/mapping.txt
+          test -s android/app/build/outputs/apk/release/app-release.apk
       - name: Enable KVM for actual Android emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -469,6 +471,8 @@ jobs:
         run: bash scripts/android-emulator-sdk-preflight.sh 35
       - name: Native account and separate logged-in playback, offline restart and history sync
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          IRGUN_ANDROID_TEST_APK: android/app/build/outputs/apk/release/app-release.apk
         with:
           api-level: 35
           # The Samsung Tab S10 is a tablet. Use a tablet AVD rather than
