@@ -131,7 +131,7 @@ test('native Media3 Watch is unique after returning from Audio, including later 
   const stale=[{removed:false,remove(){this.removed=true;}},{removed:false,remove(){this.removed=true;}}];
   const player={isIrgunNativeVideoPlayer:true,identity:815};
   const persistentVideoMount={dataset:{irgunWatchId:'fixed'},className:'persistent-video-mount watch-video-host watch-full-host',
-    classList:{contains(token){return this.owner.className.split(/\\s+/).includes(token);}},
+    classList:{contains(token){return this.owner.className.split(/\s+/).includes(token);}},
     querySelector:selector=>selector==='.watch-overlay #watchVimeoFrame'?{}:null};
   persistentVideoMount.classList.owner=persistentVideoMount;
   const state={watchVideo:{id:'fixed'},watchMode:'video',watchVimeo:player,watchHostedExternally:false};
