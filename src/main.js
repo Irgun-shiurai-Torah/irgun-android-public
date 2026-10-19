@@ -1,4 +1,5 @@
 import './style.css';
+import { createWebsiteAdminParity } from './admin-website-parity.js';
 import { clearCommentComposerAfterPost } from './comment-draft.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
 import { createAndroidSwipeMotion } from './android-swipe-motion.js';
@@ -5052,10 +5053,24 @@ function adminDonationCards(){
   return items.map(item=>{const amount=(Number(item.amountCents||0)/100).toLocaleString('en-US',{style:'currency',currency:String(item.currency||'USD').toUpperCase()});const note=String(item.note||'').trim();return `<article class="admin-donation-card"><div class="admin-sponsor-head"><div><strong>${esc(item.donorName||'Donor')} · ${esc(amount)}</strong><span>${esc(item.donorEmail||'')}${item.donorPhone?` · ${esc(item.donorPhone)}`:''}</span></div><b>${esc(item.status||'')}</b></div><p>${esc(item.frequency||'one_time')} • ${esc(item.destination||'')} • ${esc(item.paidAt||item.createdAt||'')}</p>${note?`<div class="admin-donation-note"><strong>Note / Description</strong><div>${esc(note).replace(/\n/g,'<br>')}</div></div>`:''}</article>`;}).join('');
 }
 
+// The website uses the same authenticated Worker endpoints. This controller
+// renders additional admin controls *inside* the Android Account screen and
+// delegates authorization to the Worker; user tokens never enter markup.
+const websiteAdminParity=createWebsiteAdminParity({
+  apiJson,esc,
+  isAdmin:()=>Boolean(state.user&&state.isAdmin),
+  isAdminMode:()=>Boolean(state.adminMode),
+  userKey:()=>String(state.user?.id||state.user?.email||''),
+  render:()=>render(),
+  toast:message=>setToast(message),
+  ask:message=>window.confirm(message)
+});
+
 function accountAdminHtml(){
   const editSponsor=state.adminEditingSponsorshipId?state.adminSponsorships.find(x=>String(x.id)===String(state.adminEditingSponsorshipId)):null;
   const p=state.adminSponsorPrices||{};const r=state.adminRibbon||{};const live=state.adminLive||{};
   return `<div class="admin-account-wrap">${adminStatusText()}<section class="admin-panel-card admin-mode-card"><div><span class="section-kicker">PROTECTED</span><h2>Admin Mode</h2><p>Only accounts authorized by the Worker can see this section. Turn Admin Mode on to show edit controls on Schedule, Shiurim and Paid Shiurim.</p></div><label class="admin-toggle"><input id="adminModeToggle" type="checkbox" ${state.adminMode?'checked':''}><span></span></label></section>
+  ${websiteAdminParity.html()}
   <section class="admin-panel-card admin-schedule-ads-card"><div class="section-head admin-schedule-ads-head"><div><h2>Schedule &amp; Ads</h2><p>Review schedule extraction or manage the Dropbox ad source.</p></div><select id="adminScheduleAdsView"><option value="review" ${state.adminScheduleAdsView==='review'?'selected':''}>Schedule Review</option><option value="dropbox" ${state.adminScheduleAdsView==='dropbox'?'selected':''}>Dropbox Ads</option></select></div>${state.adminScheduleAdsView==='review'?`<div class="admin-schedule-ads-subhead"><strong>Schedule Review</strong><button data-admin-refresh="1">Refresh</button></div>${adminReviewCards()}`:adminDropboxAdsHtml()}</section>
   <section class="admin-panel-card"><div class="section-head"><div><h2>Stripe Donations</h2><p>Recent donations and donor notes/descriptions.</p></div><button data-admin-donations-refresh="1">Refresh</button></div><div class="admin-sponsorship-list">${adminDonationCards()}</div></section>
   <section class="admin-panel-card"><h2>Live Stream Override</h2><p>Show a live player even when no schedule row is live.</p><div class="admin-check-row"><label><input id="adminLiveBoro" type="checkbox" ${live['Boro Park']?'checked':''}> Boro Park</label><label><input id="adminLiveFlatbush" type="checkbox" ${live.Flatbush?'checked':''}> Flatbush</label></div><button class="admin-save" data-admin-live-save="1">Save Live Settings</button></section>
@@ -7280,6 +7295,7 @@ function bind() {
   document.querySelectorAll('[data-paid-retry]').forEach(el=>el.addEventListener('click',()=>{state.paidLoaded=false;state.paidError='';loadPaidCatalog(true);}));
 
   document.getElementById('adminModeToggle')?.addEventListener('change', event => { state.adminMode=Boolean(event.target.checked); localStorage.setItem(ADMIN_MODE_KEY,state.adminMode?'1':'0'); setToast(state.adminMode?'Admin Mode enabled.':'Admin Mode hidden.'); render(); });
+  websiteAdminParity.bind(document);
   document.querySelectorAll('[data-admin-refresh]').forEach(el=>el.addEventListener('click',async()=>{state.adminLoaded=false;await loadAdminData(true);}));
   document.querySelectorAll('[data-admin-live-save]').forEach(el=>el.addEventListener('click',saveAdminLive));
   document.getElementById('adminRibbonForm')?.addEventListener('submit',saveAdminRibbon);
