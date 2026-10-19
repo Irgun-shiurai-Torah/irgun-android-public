@@ -1760,3 +1760,15 @@ test('Android Library swipe covers the lower viewport, preserving Account and ot
   assert.match(swipe,/if \(\/\(auto\|scroll\)\//);
   assert.match(swipe,/touchcancel/);
 });
+
+test('native Audio mode shows real Watch controls before optional slow Media3 bridge refresh', () => {
+  const start=mainSource.indexOf('async function performWatchModeSwitch(mode) {');
+  assert.ok(start>=0);
+  const end=mainSource.indexOf('\n  if (mode === \'audio\') {',start);
+  assert.ok(end>start);
+  const switching=mainSource.slice(start,end);
+  const ui=switching.indexOf("if(mode==='audio') render();");
+  const bridge=switching.indexOf('await PlaybackController.refreshFromNative().catch');
+  assert.ok(ui>0 && bridge>ui,
+    'Confirmed native Audio mode must show Play controls before waiting for bridge snapshots');
+});

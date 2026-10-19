@@ -9651,6 +9651,10 @@ async function performWatchModeSwitch(mode) {
         : { ...baseAudio, networkUrl, offline:false };
       setNativePipEligibility(false);
     }
+    // The Media3 mode switch above is committed. Render Audio's real Play
+    // control before a potentially slow native bridge refresh, then reconcile
+    // again afterward. This preserves the SAME ExoPlayer and playback clock.
+    if(mode==='audio') render();
     await PlaybackController.refreshFromNative().catch(()=>{});
     if(mode==='video') reconcileAndroidNativeWatchOverlay();
     render();
