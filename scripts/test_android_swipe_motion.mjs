@@ -277,10 +277,11 @@ test('native range/file/date/select controls keep touch ownership',async()=>{
   }
 });
 
-test('Android Account content remains a swipe surface across the entire viewport',()=>{
+test('Android Account and Your Library keep full-viewport swipe surfaces without stealing scroll',()=>{
   const main=readFileSync('src/main.js','utf8');
   const css=readFileSync('src/style.css','utf8');
   assert.match(main,/state\.screen==='account'\?' android-account-swipe-surface'/);
-  assert.match(css,/\.content\.android-account-swipe-surface\s*\{\s*min-height:\s*calc\(100vh - 68px\);/);
+  assert.match(main,/state\.screen==='library'\?' android-library-swipe-surface'/);
+  assert.match(css,/\.content\.android-account-swipe-surface,\s*body\.irgun-android \.app-shell > \.content\.android-library-swipe-surface\s*\{\s*min-height:\s*calc\(100vh - 68px\);/);
   assert.match(css,/min-height:\s*calc\(100dvh - 68px\);/);
 });
