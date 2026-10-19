@@ -1720,3 +1720,21 @@ test('Samsung signed-in regression runs a release-style minified app, not only d
   assert.match(tablet,/IRGUN_ANDROID_TEST_APK: android\/app\/build\/outputs\/apk\/release\/app-release\.apk/);
   assert.match(tablet,/device: pixel_c/);
 });
+
+test('Samsung Android16 R8 signed-in crash cannot recur through notification permission reflection',()=>{
+  const plugin=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPushPlugin.java','utf8');
+  const rules=readFileSync('android/app/proguard-rules.pro','utf8');
+  const account=readFileSync('scripts/android-emulator-account.mjs','utf8');
+  const app=readFileSync('src/main.js','utf8');
+  assert.match(app,/state\.notificationSettings\.pushEnabled = await currentNativePushEnabled\(\)/,
+    'Account hydration is the path that previously hit the crashing native permission plugin');
+  assert.doesNotMatch(plugin,/getPermissionState\(/,
+    'Do not call Capacitor permission-state reflection in Android push permission checks');
+  assert.match(plugin,/ContextCompat\.checkSelfPermission\(context, Manifest\.permission\.POST_NOTIFICATIONS\)/);
+  assert.match(plugin,/Build\.VERSION\.SDK_INT < 33/);
+  assert.match(plugin,/getPluginHandle\(\)\.getPluginAnnotation\(\) == null/);
+  assert.match(rules,/-keep @interface com\.getcapacitor\.annotation\.CapacitorPlugin \{ \*; \}/);
+  assert.match(rules,/-keep @interface com\.getcapacitor\.annotation\.Permission \{ \*; \}/);
+  assert.match(account,/nativePromise\('IrgunPush','checkNotificationPermission'/,
+    'Physical Android emulator test must call the precise crash-triggering native plugin method');
+});
