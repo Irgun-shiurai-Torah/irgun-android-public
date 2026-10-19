@@ -365,9 +365,26 @@ try{
  const libraryNativeTo=native({...lowerLibrary,x:lowerLibrary.endX},lowerLibrary);
  adb('shell','input','swipe',...libraryNativeFrom.map(String),...libraryNativeTo.map(String),'650');
  await wait(s=>s.screen==='account'&&s.loggedIn,'Signed-in lower Library swipe must reach Account');
+ // Observe the actual Android swipe transition before tapping a header control.
+ // This is still a real ADB tap; never substitute a synthetic click.
+ const idle=await wait(s=>!s.swipeGateActive&&!!s.controls.language,
+   'Signed-in swipe gate or header Language button never became interactive',10000);
+ report.signedInPostSwipe={gestureIdle:!idle.swipeGateActive,
+   headerAccessible:!!idle.controls.language};
  report.checks.push('Real signed-in lower Library swipe navigates to Account without losing session');
-
- await tap('language');await wait(s=>s.lang==='he'&&s.dir==='rtl','Native account page must switch to Hebrew RTL');
+ const beforeLanguage=await read();
+ await tap('language');
+ try {
+   await wait(s=>s.lang==='he'&&s.dir==='rtl','Native account page must switch to Hebrew RTL');
+ } catch(error) {
+   const afterLanguage=await read();
+   report.languageFailure={before:{lang:beforeLanguage.lang,dir:beforeLanguage.dir,
+     gestureBusy:beforeLanguage.swipeGateActive,control:beforeLanguage.controls.language||null},
+     after:{lang:afterLanguage.lang,dir:afterLanguage.dir,
+       gestureBusy:afterLanguage.swipeGateActive,control:afterLanguage.controls.language||null},
+     appStillRunning:afterLanguage.loggedIn,screen:afterLanguage.screen};
+   throw error;
+ }
  const hebrewProfile=await read();assert.equal(String(hebrewProfile.name||'').trim(),accountDisplayName,'Account identity must remain unchanged in Hebrew');
  const hebrewLabels=await readSnapshot('JSON.stringify([...document.querySelectorAll("[data-account-section], [data-logout]")].filter(e=>e.getBoundingClientRect().width>0).map(e=>e.textContent.trim()))');
  assert.ok(hebrewLabels.length>=2&&hebrewLabels.every(x=>/[\u0590-\u05ff]/.test(x)),'Native Hebrew account controls must be translated');
