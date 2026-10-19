@@ -345,7 +345,8 @@ try{
  // emulator screenshot showed a paused Audio player at 0:00, so explicitly
  // start playback through a real Android touch before asserting progress.
  if((await read()).watchMode!=='audio')await tap('audioMode');
- await wait(s=>s.watchMode==='audio','Audio mode did not open for real playback history');
+ await wait(s=>s.watchMode==='audio'&&!!s.controls.audioPlay,
+   'Native Audio mode and actual Play control did not become visible after switch',18000);
  const audioStart=await read();
  // A buffering Media3 source may already have accepted Play. Toggling its
  // button as it becomes ready would immediately pause the real playback.
