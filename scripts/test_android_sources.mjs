@@ -1138,38 +1138,70 @@ test('failed preparation restarts Audio if muted WebView playback took its focus
 });
 
 test('Follow binding must not double-submit after a persistent video overlay survives renders', async () => {
-  const start = mainSource.indexOf("  document.querySelectorAll('[data-follow-type]').forEach(el => {");
-  const end = mainSource.indexOf("  document.querySelectorAll('[data-share-kind]')", start);
-  assert.ok(start >= 0 && end > start, 'Follow event binding block must be present');
+  const start = mainSource.indexOf('function bindFollowButtons(root = document) {');
+  const end = mainSource.indexOf('function bindPersistentVideoChrome()', start);
+  assert.ok(start >= 0 && end > start, 'Persistent Follow binding helper must be present');
   const binding = mainSource.slice(start, end);
   const handlers = [];
   const element = {
-    dataset: { followType: 'speaker', followKey: 'rav-qa', followLabel: 'Test Speaker' },
+    dataset: { followType:'speaker', followKey:'rav-qa', followLabel:'Test Speaker' },
     addEventListener(type, handler) { assert.equal(type, 'click'); handlers.push(handler); }
   };
   let followCalls = 0;
   const resolvers = [];
+  const root = { querySelectorAll: selector => selector === '[data-follow-type]' ? [element] : [] };
   const context = {
-    document: { querySelectorAll: selector => selector === '[data-follow-type]' ? [element] : [] },
+    document:root,
     preserveWatchTime: async () => {},
     toggleFollow: () => new Promise(resolve => { followCalls++; resolvers.push(resolve); })
   };
-  runInNewContext(binding, context); // Initial video render.
-  runInNewContext(binding, context); // Save/Watch Later dialog render.
-  runInNewContext(binding, context); // Closing dialog / re-render.
+  runInNewContext(binding+'\\nthis.bindFollowButtons = bindFollowButtons;', context);
+  context.bindFollowButtons(root); // Persistent video host moves outside #app.
+  context.bindFollowButtons(root); // Playlist modal re-renders the app.
+  context.bindFollowButtons(root); // Back to Watch, same physical button.
   assert.equal(handlers.length, 1, 'A persistent Follow button must have only one click handler');
   const evt = { stopPropagation() {} };
-  const first = handlers[0](evt), second = handlers[0](evt); // Two fast taps.
+  const first = handlers[0](evt), second = handlers[0](evt);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(followCalls, 1, 'A second tap while waiting must not issue a second request');
   resolvers.shift()();
   await Promise.all([first, second]);
   const third = handlers[0](evt);
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(followCalls, 2, 'The Follow button must work again once the request resolves');
+  assert.equal(followCalls, 2, 'Follow must work again once the request resolves');
   resolvers.shift()();
   await third;
 });
+
+test('Follow success adopts the server canonical identity, persists after refresh, and handles a transient GET failure', async () => {
+  const start = mainSource.indexOf('async function toggleFollow(type, key, label) {');
+  const end = mainSource.indexOf('function historyIdFor(', start);
+  assert.ok(start >= 0 && end > start, 'Follow handler must be present');
+  const alerts = [];
+  let getCalls = 0;
+  const state = {user:{id:'test'},follows:new Map(),watchVideo:{id:'test'},screen:'home',librarySection:'following'};
+  const canonical = {type:'speaker',key:'reviewed-rav',labelEn:'Test Speaker'};
+  const context = {
+    state, alert:message=>alerts.push(message), console:{warn(){}},
+    apiJson: async (path,options) => {
+      if(path==='/follows/toggle')return {following:true,item:canonical};
+      if(path==='/follows'){getCalls++;assert.equal(options.cache,'no-store');return {items:[canonical]};}
+      throw new Error('Unexpected API call '+path);
+    },
+    refreshInteractiveUi:()=>{},render:()=>{},requireLogin:()=>{}
+  };
+  runInNewContext(mainSource.slice(start,end)+'\\nthis.toggleFollow=toggleFollow;',context);
+  await context.toggleFollow('speaker','legacy-rav','Test Speaker');
+  assert.deepEqual([...state.follows.keys()],['speaker:reviewed-rav']);
+  assert.equal(getCalls,1);
+  assert.equal(alerts.length,0);
+  context.apiJson=async path=>path==='/follows/toggle'?
+    {following:false,item:canonical}:(()=>{throw new Error('Offline follows refresh');})();
+  await context.toggleFollow('speaker','reviewed-rav','Test Speaker');
+  assert.equal(state.follows.size,0, 'Successful un-follow must not reverse on a refresh failure');
+  assert.equal(alerts.length,0);
+});
+
 
 test('audio downloads use the validated audio stream and preserve unlisted source identity', () => {
   assert.equal(audioDownloadPath('1233236785:585d5d53db'),'/audio/1233236785%3A585d5d53db');
