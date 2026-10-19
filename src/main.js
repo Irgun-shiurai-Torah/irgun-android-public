@@ -5185,7 +5185,7 @@ async function saveAdminPaid(event){
     category:document.getElementById('adminPaidCategory')?.value||'',
     catalogDetails:document.getElementById('adminPaidDetails')?.value||'',
     featured:Boolean(document.getElementById('adminPaidFeatured')?.checked),
-    driveAliases:String(document.getElementById('adminPaidAliases')?.value||'').split(/[\\n,]/).map(x=>x.trim()).filter(Boolean)
+    driveAliases:String(document.getElementById('adminPaidAliases')?.value||'').split(/[\n,]/).map(x=>x.trim()).filter(Boolean)
   };
   const body={action:'upsert',item};
   if(state.adminPaidPromoDirty){
