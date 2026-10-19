@@ -3373,6 +3373,29 @@ body.irgun-android.android-narrow-viewport #androidBottomNavigationMount .bottom
   line-height:11px!important;
 }
 
+/* Android-only homepage typography polish; preserve every button's outer dimensions. */
+body.irgun-android .topbar .app-language-button,
+body.irgun-android .topbar .top-account { overflow:hidden; }
+body.irgun-android .topbar .top-button-label {
+  display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; font-weight:800; transform:scale(1.1);
+  transform-origin:center; 
+}
+body.irgun-android .pro-hero .hero-actions .hero-btn-label {
+  display:inline-block; white-space:nowrap; font-weight:850;
+  transform:scale(1.09); transform-origin:center;
+}
+body.irgun-android .pro-counter span {
+  font-size:clamp(12px,1.6vw,15px); line-height:1.3;
+  font-weight:650; letter-spacing:0; text-align:center;
+}
+body.irgun-android .home-shortcut-copy { display:flex;align-items:center;min-width:0; }
+body.irgun-android .home-shortcuts strong { line-height:1.25; }
+@media (max-width:390px) {
+  body.irgun-android .topbar .top-button-label {transform:scale(1.06);}
+  body.irgun-android .pro-hero .hero-actions .hero-btn-label {transform:scale(1.05);}
+}
+
 /* In-app website admin management, protected by Worker + admin session. */
 .admin-website-hub{margin:16px 0}
 .admin-parity-menu{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:7px;margin:12px 0}

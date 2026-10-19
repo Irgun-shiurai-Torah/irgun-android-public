@@ -3,7 +3,7 @@
 
   const he = {
     "Torah, wherever you are.": "תורה, בכל מקום שבו אתם נמצאים.",
-    "Live shiurim, thousands of recordings, powerful search, schedules and your personal Torah library — in one app.": "שיעורים חיים, אלפי הקלטות, חיפוש מתקדם, לוחות זמנים והספרייה האישית שלכם — הכל באפליקציה אחת.",
+    "Live shiurim, thousands of recordings, and your personal Torah library—all in one app.": "שיעורים בשידור חי, אלפי הקלטות וספריית התורה האישית שלכם — הכל באפליקציה אחת.",
     "Browse Shiurim": "לעיון בשיעורים",
     "Watch Live": "צפייה בשידור חי",
     "Schedule": "לוח שיעורים",

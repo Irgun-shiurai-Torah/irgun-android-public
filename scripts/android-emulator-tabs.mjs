@@ -54,7 +54,7 @@ try {
     }
     throw new Error(`UI did not settle: ${JSON.stringify(state)}`);
   };
-  await wait(s => !s.loading && !s.error && s.counter === 'Shiurim played');
+  await wait(s => !s.loading && !s.error && s.counter === 'Shiurim Played');
   assert.equal((await read()).eyebrow, false, 'Home eyebrow must be removed');
   report.checks.push('English Home wording and removed eyebrow');
 

@@ -3121,11 +3121,30 @@ async function toggleFollow(type, key, label) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type, key, labelEn: label, labelHe: label })
     });
-    const identity = `${type}:${key}`;
-    if (result.following) state.follows.set(identity, result.item || { type, key, labelEn: label, labelHe: label });
-    else state.follows.delete(identity);
+    const requestedIdentity = `${type}:${key}`;
+    const savedItem = result?.item?.type && result?.item?.key
+      ? result.item : { type, key, labelEn: label, labelHe: label };
+    const savedIdentity = `${savedItem.type}:${savedItem.key}`;
+    // The Worker can canonicalize a lecture's Follow identity. Do not keep an
+    // optimistic key that differs from the entry returned after a real restart.
+    state.follows.delete(requestedIdentity);
+    if (result.following) state.follows.set(savedIdentity, savedItem);
+    else state.follows.delete(savedIdentity);
     if (!state.watchVideo && state.screen === 'library' && state.librarySection === 'following') render();
     else refreshInteractiveUi();
+    // Replace the optimistic snapshot with the authenticated server truth,
+    // using a fresh GET. A temporary read failure must not undo a POST that
+    // already succeeded or leave Follow unusable.
+    try {
+      const verified = await apiJson('/follows', { cache:'no-store' });
+      if (Array.isArray(verified?.items)) {
+        state.follows = new Map(verified.items
+          .filter(item => item && item.type && item.key)
+          .map(item => [`${item.type}:${item.key}`, item]));
+        if (!state.watchVideo && state.screen === 'library' && state.librarySection === 'following') render();
+        else refreshInteractiveUi();
+      }
+    } catch (error) { console.warn('Could not refresh saved follows', error); }
   } catch (error) {
     alert(error.message || 'Could not update follow.');
   }
@@ -3888,8 +3907,8 @@ function shell(content) {
         <div class="top-actions">
           <button class="top-store" data-nav="paid" aria-label="Purchase" title="Purchase">${svgIcon('store')}</button>
           <button class="top-contact" data-nav="contact" aria-label="Contact" title="Contact">${svgIcon('mail')}</button>
-          <button class="app-language-button" data-language-toggle="1">${currentLanguage() === 'he' ? 'English' : 'עברית'}</button>
-          <button class="top-account" data-nav="account">${state.user ? esc(state.user.name || 'Account') : tr('Sign In')}</button>
+          <button class="app-language-button" data-language-toggle="1"><span class="top-button-label">${currentLanguage() === 'he' ? 'English' : 'עברית'}</span></button>
+          <button class="top-account" data-nav="account"><span class="top-button-label">${state.user ? esc(state.user.name || 'Account') : tr('Sign In')}</span></button>
         </div>
       </div>
     </header>
@@ -4000,9 +4019,33 @@ function syncAndroidMiniDialogVisibility() {
   document.body.classList.toggle('irgun-mini-modal-open',modal);
 }
 
+function bindFollowButtons(root = document) {
+  root.querySelectorAll('[data-follow-type]').forEach(el => {
+    // The Video Watch overlay can move outside #app, or survive other renders.
+    // Attach at most one listener to the REAL button and keep it across moves.
+    if (el.dataset.followBound === '1') return;
+    el.dataset.followBound = '1';
+    el.addEventListener('click', async event => {
+      event.stopPropagation();
+      if (el.dataset.followBusy === '1') return;
+      el.dataset.followBusy = '1';
+      const type = el.dataset.followType;
+      const key = el.dataset.followKey;
+      const label = el.dataset.followLabel;
+      try {
+        await preserveWatchTime();
+        await toggleFollow(type, key, label);
+      } finally {
+        delete el.dataset.followBusy;
+      }
+    });
+  });
+}
+
 function bindPersistentVideoChrome() {
   if (!persistentVideoMount) return;
   bindAndroidWatchDetailsSwipeToMini(persistentVideoMount.querySelector('.watch-overlay'));
+  bindFollowButtons(persistentVideoMount);
   persistentVideoMount.querySelectorAll('[data-expand-watch]').forEach(expand => {
     if (expand.dataset.bound) return;
     expand.dataset.bound = '1';
@@ -4180,17 +4223,17 @@ function homeHtml() {
       <div class="hero-overlay" aria-hidden="true"></div>
       <div class="hero-content">
         <h1>Torah, wherever you are.</h1>
-        <p>Live shiurim, thousands of recordings, powerful search, schedules and your personal Torah library — in one app.</p>
-        <div class="hero-actions"><button class="hero-btn primary" data-nav="shiurim">${svgIcon('play')} Browse Shiurim</button><button class="hero-btn glass" data-nav="live">${svgIcon('live')} Watch Live</button></div>
-        <div class="counter-card pro-counter"><strong>${state.counter.toLocaleString()}</strong><span>Shiurim played</span></div>
+        <p>Live shiurim, thousands of recordings, and your personal Torah library—all in one app.</p>
+        <div class="hero-actions"><button class="hero-btn primary" data-nav="shiurim">${svgIcon('play')} <span class="hero-btn-label">Browse Shiurim</span></button><button class="hero-btn glass" data-nav="live">${svgIcon('live')} <span class="hero-btn-label">Watch Live</span></button></div>
+        <div class="counter-card pro-counter"><strong>${state.counter.toLocaleString()}</strong><span>Shiurim Played</span></div>
       </div>
     </section>
 
     <section class="home-shortcuts" aria-label="Quick access">
-      <button class="home-shortcut" data-nav="schedule"><span>${svgIcon('calendar')}</span><div class="home-shortcut-copy"><strong>Schedule</strong><small>Upcoming Shiurim</small></div></button>
-      <button class="home-shortcut" data-nav="paid"><span>${svgIcon('store')}</span><div class="home-shortcut-copy"><strong>Purchase</strong><small>Premium collections</small></div></button>
-      <button class="home-shortcut" data-nav="donate"><span>${svgIcon('donate')}</span><div class="home-shortcut-copy"><strong>Sponsor Torah</strong><small>Donate or dedicate</small></div></button>
-      <button class="home-shortcut" data-nav="library"><span>${svgIcon('library')}</span><div class="home-shortcut-copy"><strong>Your Library</strong><small>Likes &amp; history</small></div></button>
+      <button class="home-shortcut" data-nav="schedule"><span>${svgIcon('calendar')}</span><div class="home-shortcut-copy"><strong>Schedule</strong></div></button>
+      <button class="home-shortcut" data-nav="paid"><span>${svgIcon('store')}</span><div class="home-shortcut-copy"><strong>Purchase</strong></div></button>
+      <button class="home-shortcut" data-nav="donate"><span>${svgIcon('donate')}</span><div class="home-shortcut-copy"><strong>Sponsor Torah</strong></div></button>
+      <button class="home-shortcut" data-nav="library"><span>${svgIcon('library')}</span><div class="home-shortcut-copy"><strong>Your Library</strong></div></button>
     </section>
 
     ${homeDiscoveryHtml()}
@@ -7766,23 +7809,7 @@ function bind() {
     toggleWatchLater(el.dataset.save);
   }));
 
-  document.querySelectorAll('[data-follow-type]').forEach(el => {
-    // The persistent watch video lives outside #app. Renders for Save/Watch
-    // Later must not rebind this same DOM element and POST twice to /follows.
-    if (el.dataset.followBound === '1') return;
-    el.dataset.followBound = '1';
-    el.addEventListener('click', async event => {
-      event.stopPropagation();
-      if (el.dataset.followBusy === '1') return;
-      el.dataset.followBusy = '1';
-      try {
-        await preserveWatchTime();
-        await toggleFollow(el.dataset.followType, el.dataset.followKey, el.dataset.followLabel);
-      } finally {
-        delete el.dataset.followBusy;
-      }
-    });
-  });
+  bindFollowButtons(document);
 
   document.querySelectorAll('[data-share-kind]').forEach(el => el.addEventListener('click', () => shareItem(el.dataset.shareKind, el.dataset.shareId)));
   document.querySelectorAll('[data-download-kind]').forEach(el => el.addEventListener('click', () => downloadItem(el.dataset.downloadKind, el.dataset.downloadId)));
