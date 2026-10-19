@@ -127,25 +127,40 @@ const paidView=()=>observe(`JSON.stringify((()=>{
     listen:!!item?.querySelector('[data-paid-expand]'),
     lockedPreviewExists:!!preview,lockedPreviewHidden:!preview || (!!panel?.hidden&&panel.contains(preview)),
     lockedPanelId:panel?.dataset.paidDescriptionPanel||'',
-    tracks:item?.querySelectorAll('[data-paid-track]').length||0};
+    tracks:item?.querySelectorAll('[data-paid-track]').length||0,
+    folderNodes:item?.querySelectorAll('.paid-folder-node').length||0,
+    albumExpanded:!!item?.querySelector('.paid-album:not([hidden])')};
 })())`);
-const nextUnopened=()=>observe(`JSON.stringify((()=>{
- const item=document.querySelector('[data-paid-collection-id="${productId}"]');
- for(const details of item?.querySelectorAll('.paid-folder-node:not([open])')||[]){
-   if(!details.parentElement.closest('details:not([open])')) {
-     return '[data-paid-folder-key="'+CSS.escape(details.dataset.paidFolderKey)+'"] > summary';
-   }
- }
- return null;
+
+const firstTrackPath=()=>observe(`JSON.stringify((()=>{
+  // Inspect the already-authorized card DOM, including collapsed descendants.
+  // Open only the actual first track's ancestor folders via native taps; DOM
+  // inspection NEVER clicks controls or extracts signed URLs or credentials.
+  const item=document.querySelector('[data-paid-collection-id="${productId}"]');
+  const track=item?.querySelector('.paid-album:not([hidden]) [data-paid-track]');
+  if(!track)return null;
+  const folders=[];
+  for(let parent=track.parentElement;parent&&parent!==item;parent=parent.parentElement){
+    if(parent.matches('details.paid-folder-node')){
+      const key=parent.dataset.paidFolderKey;
+      folders.push({key,selector:'[data-paid-collection-id="${productId}"] [data-paid-folder-key="'+CSS.escape(key)+'"] > summary'});
+    }
+  }
+  return {id:track.dataset.paidTrack,selector:'[data-paid-collection-id="${productId}"] [data-paid-track="'+CSS.escape(track.dataset.paidTrack)+'"]',folders:folders.reverse()};
+})())`);
+const isFolderOpen=selector=>observe(`JSON.stringify((()=>{
+  const el=document.querySelector(${JSON.stringify(selector)});
+  return !!el?.closest('details.paid-folder-node')?.open;
 })())`);
 const firstVisibleTrack=()=>observe(`JSON.stringify((()=>{
  const item=document.querySelector('[data-paid-collection-id="${productId}"]');
- for(const e of item?.querySelectorAll('[data-paid-track]')||[]){
+ for(const e of item?.querySelectorAll('.paid-album:not([hidden]) [data-paid-track]')||[]){
    if(!e.closest('details:not([open])'))
-     return {selector:'[data-paid-track="'+CSS.escape(e.dataset.paidTrack)+'"]',id:e.dataset.paidTrack};
+     return {selector:'[data-paid-collection-id="${productId}"] [data-paid-track="'+CSS.escape(e.dataset.paidTrack)+'"]',id:e.dataset.paidTrack};
  }
  return null;
 })())`);
+
 try{
   await connect();startSocket();
   const initial=await snapshot();
@@ -185,16 +200,42 @@ try{
         'Belsky product was not verified in the authenticated Purchased Library');
       assert.ok(await tap(`[data-paid-collection-id="${productId}"] [data-paid-expand]`,{tries:28}),
         'The real owned Listen button is not accessible in Purchased Library');
-      let track=null;
-      for(let i=0;i<10;i++){
-        track=await firstVisibleTrack();
-        if(track)break;
-        const summary=await nextUnopened();
-        if(!summary)break;
-        assert.ok(await tap(`[data-paid-collection-id="${productId}"] ${summary}`),
-          'The real nested paid folder could not be expanded');
+      // Owned cards can appear before the nested tracks finish loading.
+      // Don't mistake that intermediate state for a broken R8 entitlement.
+      let target=await firstTrackPath();
+      for(let i=0;i<65&&!target;i++){
+        await delay(450);
+        target=await firstTrackPath();
       }
-      assert.ok(track?.id,'No playable Belsky track reachable through native folder taps');
+      if(!target){
+        const page=await paidView();
+        report.folderFailure={stage:'tracks-not-rendered',tracks:page.tracks,
+          folderNodes:page.folderNodes,albumExpanded:page.albumExpanded,owned:page.owned};
+      }
+      assert.ok(target?.id,'Purchased Belsky album is expanded but contains no playable tracks');
+      report.folderPathLength=target.folders.length;
+      // Avoid traversing arbitrary sibling albums; the exact track is already
+      // present in the rendered DOM even when its parents are collapsed.
+      for(const folder of target.folders){
+        let open=await isFolderOpen(folder.selector);
+        for(let attempt=0;attempt<3&&!open;attempt++){
+          assert.ok(await tap(folder.selector,{tries:30}),
+            'Cannot physically open the purchased Belsky track parent folder');
+          for(let i=0;i<12&&!open;i++){
+            await delay(250);
+            open=await isFolderOpen(folder.selector);
+          }
+        }
+        assert.ok(open,'Purchased Belsky folder did not stay open after native tap');
+      }
+      const track=await firstVisibleTrack();
+      if(!track){
+        const page=await paidView();
+        report.folderFailure={stage:'path-opened-no-visible-track',tracks:page.tracks,
+          folderNodes:page.folderNodes,albumExpanded:page.albumExpanded,owned:page.owned,
+          ancestorFolders:target.folders.length};
+      }
+      assert.ok(track?.id,'No playable Belsky track visible after its parent folders opened');
       report.trackId=String(track.id);
       assert.ok(await tap(`[data-paid-collection-id="${productId}"] ${track.selector}`),
         'Cannot physically tap the purchased Belsky track');
