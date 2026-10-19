@@ -1705,3 +1705,18 @@ test('Samsung Tab S10 regression requires signed-in native page switches and tab
   assert.match(tablet,/device: pixel_c/);
   assert.match(tablet,/script: bash scripts\/android-emulator-account\.sh/);
 });
+
+test('Samsung signed-in regression runs a release-style minified app, not only debug',()=>{
+  const gradle=readFileSync('android/app/build.gradle','utf8');
+  const shell=readFileSync('scripts/android-emulator-account.sh','utf8');
+  const matrix=readFileSync('.github/workflows/android-release-regressions.yml','utf8');
+  const tablet=matrix.split('  authenticated-account-35:')[1]?.split('  authenticated-account-36:')[0];
+  assert.match(gradle,/project\.hasProperty\('irgunR8TabletQa'\)/);
+  assert.match(gradle,/signingConfig signingConfigs\.debug/);
+  assert.match(gradle,/minifyEnabled true/);
+  assert.match(shell,/IRGUN_ANDROID_TEST_APK/);
+  assert.match(tablet,/-PirgunR8TabletQa=true :app:assembleRelease/);
+  assert.match(tablet,/outputs\/mapping\/release\/mapping\.txt/);
+  assert.match(tablet,/IRGUN_ANDROID_TEST_APK: android\/app\/build\/outputs\/apk\/release\/app-release\.apk/);
+  assert.match(tablet,/device: pixel_c/);
+});
