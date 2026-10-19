@@ -82,9 +82,20 @@ export function createCityAdminController({apiJson,apiFetch}) {
     return new Promise(resolve => {
       const el = document.createElement(file.type?.startsWith('video/') ? 'video' : 'audio');
       const url = URL.createObjectURL(file);
-      const done = value => { URL.revokeObjectURL(url); el.removeAttribute('src'); resolve(Number.isFinite(value) ? value : 0); };
-      el.preload = 'metadata'; el.onloadedmetadata = () => done(el.duration); el.onerror = () => done(0); el.src = url;
-      setTimeout(() => done(0), 6000);
+      let settled = false, timeout = null;
+      const done = value => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        URL.revokeObjectURL(url);
+        el.removeAttribute('src');
+        resolve(Number.isFinite(value) ? value : 0);
+      };
+      el.preload = 'metadata';
+      el.onloadedmetadata = () => done(el.duration);
+      el.onerror = () => done(0);
+      timeout = setTimeout(() => done(0), 6000);
+      el.src = url;
     });
   }
 
@@ -219,6 +230,7 @@ export function createCityAdminController({apiJson,apiFetch}) {
     const city = currentCity(), kind = String($('cityUploadMediaKind')?.value || 'audio'), file = $('cityUploadFile')?.files?.[0];
     if (!city) return setStatus('cityAdminStatus','No assigned city is available.','error');
     if (!file) return setStatus('cityAdminStatus','Choose a file first.','error');
+    if (!Number.isSafeInteger(file.size) || file.size <= 0) return setStatus('cityAdminStatus','Choose a non-empty audio or video file.','error');
     const wrap = $('cityUploadProgressWrap'); if (wrap) wrap.hidden = false;
     const bar = $('cityUploadProgressBar'); if (bar) bar.style.width = '0%';
     const button = $('cityUploadButton'); if (button) button.disabled = true;
