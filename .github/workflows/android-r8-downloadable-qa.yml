@@ -20,11 +20,15 @@ jobs:
     name: R8 signed APK + AAB (download only)
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      # The installed Play Internal version is 1.0.193. Keep QA monotonic.
-      IRGUN_ANDROID_VERSION_CODE: ${{ 193 + github.run_number }}
-      IRGUN_ANDROID_VERSION_NAME: 1.0.${{ 193 + github.run_number }}-r8qa
     steps:
+      - name: Choose version newer than current internal release
+        shell: bash
+        run: |
+          set -euo pipefail
+          CODE=$((193 + GITHUB_RUN_NUMBER))
+          echo "IRGUN_ANDROID_VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+          echo "IRGUN_ANDROID_VERSION_NAME=1.0.${CODE}-r8qa" >> "$GITHUB_ENV"
+          echo "R8 QA build version 1.0.${CODE}-r8qa"
       - name: Check out R8 QA branch
         uses: actions/checkout@v7
       - name: Set up Node.js
