@@ -1,0 +1,125 @@
+name: Samsung R8 Physical Device Verification APK
+
+# This branch produces a signed, R8-minified APK for physical Samsung QA.
+# It NEVER uploads to Google Play or merges R8 into the stable app.
+on:
+  push:
+    branches:
+      - qa/android-r8-samsung-signed-20261019
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irgun-android-r8-download-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  downloadable-r8:
+    name: R8 signed APK + AAB for physical Samsung verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Choose version newer than current internal release
+        shell: bash
+        run: |
+          set -euo pipefail
+          CODE=$((220 + GITHUB_RUN_NUMBER))
+          echo "IRGUN_ANDROID_VERSION_CODE=$CODE" >> "$GITHUB_ENV"
+          echo "IRGUN_ANDROID_VERSION_NAME=1.0.${CODE}-r8qa" >> "$GITHUB_ENV"
+          echo "R8 QA build version 1.0.${CODE}-r8qa"
+      - name: Check out R8 QA branch
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Install Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -perm -111 | sort -V | tail -n 1)"
+          fi
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - name: Confirm signing configuration
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo "A signed APK is required for this user test. Repository signing secrets are unavailable." >&2
+            exit 1
+          fi
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/irgun-upload-key.jks"
+          test -s "$RUNNER_TEMP/irgun-upload-key.jks"
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Prepare selected launcher icon
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+          bash scripts/prepare_android_icons.sh
+      - name: Build app with native Android Media3 video
+        env:
+          VITE_ANDROID_MEDIA3_VIDEO_BETA: 'true'
+        run: npm run build
+      - name: Sync Capacitor Android project
+        run: npx cap sync android
+      - name: Generate Android launcher resources
+        run: bash scripts/prepare_android_icons.sh
+      - name: Build signed R8 release APK and AAB
+        working-directory: android
+        env:
+          IRGUN_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/irgun-upload-key.jks
+          IRGUN_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          IRGUN_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          IRGUN_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon clean :app:assembleRelease :app:bundleRelease
+      - name: Verify R8 mapping and signed APK
+        run: |
+          set -euo pipefail
+          test -s android/app/build/outputs/mapping/release/mapping.txt
+          test -s android/app/build/outputs/apk/release/app-release.apk
+          test -s android/app/build/outputs/bundle/release/app-release.aab
+          "$ANDROID_SDK_ROOT/build-tools/36.0.0/apksigner" verify --verbose android/app/build/outputs/apk/release/app-release.apk
+      - name: Package downloadable signed build
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts
+          cp android/app/build/outputs/apk/release/app-release.apk \
+            "build-artifacts/Irgun-R8-QA-${IRGUN_ANDROID_VERSION_NAME}-signed.apk"
+          cp android/app/build/outputs/bundle/release/app-release.aab \
+            "build-artifacts/Irgun-R8-QA-${IRGUN_ANDROID_VERSION_NAME}.aab"
+          printf '%s\n' "Latest R8 signed physical-device verification build from draft PR #55" \
+            "Version: ${IRGUN_ANDROID_VERSION_NAME} (code ${IRGUN_ANDROID_VERSION_CODE})" \
+            "Source: ${GITHUB_SHA}" \
+            "This verification workflow NEVER uploads to Google Play." \
+            "Install on the Samsung tablet and check signed-in navigation; includes R8." \
+            "Internal testing is not a Production release." \
+            > build-artifacts/INSTALL-README.txt
+      - name: Upload R8 test APK and AAB for download
+        uses: actions/upload-artifact@v7
+        with:
+          name: Irgun-R8-QA-${{ github.run_number }}-signed
+          path: build-artifacts/*
+          if-no-files-found: error
+          retention-days: 30
