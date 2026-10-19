@@ -116,7 +116,10 @@ test('native Media3 Watch is unique after returning from Audio, including later 
   const helper=between(latest,'function reconcileAndroidNativeWatchOverlay() {',"function hostCurrentWatchOverlay(mode = 'full') {");
   const restored=between(latest,'function restoreParkedHostedVideo() {','async function switchVideoToAudioSeamlessly(');
   const hosted=between(latest,"function hostCurrentWatchOverlay(mode = 'full') {",'async function resetWatchVimeoPlayer() {');
-  assert.match(hostCheck,/state\.watchMode==='video'/,'Only native Video may own the permanent host');
+  assert.match(hostCheck,/classList\?\.contains\('watch-full-host'\)/,
+    'The visible native Video host must be recognized before the async mode flag commits');
+  assert.match(hostCheck,/classList\?\.contains\('watch-mini-host'\)/,
+    'A visible native mini-player host must also remain authoritative');
   assert.match(hostCheck,/dataset\.irgunWatchId===String\(videoId\(state\.watchVideo\)\)/,
     'Match the actual hosted lecture rather than an asynchronously updated player flag');
   assert.match(helper,/document\.querySelectorAll\('#app \.watch-overlay'\)\.forEach/);
@@ -127,8 +130,10 @@ test('native Media3 Watch is unique after returning from Audio, including later 
     'A permanent host prevents an extra Watch from a later shell render');
   const stale=[{removed:false,remove(){this.removed=true;}},{removed:false,remove(){this.removed=true;}}];
   const player={isIrgunNativeVideoPlayer:true,identity:815};
-  const persistentVideoMount={dataset:{irgunWatchId:'fixed'},querySelector:selector=>
-    selector==='.watch-overlay #watchVimeoFrame'?{}:null};
+  const persistentVideoMount={dataset:{irgunWatchId:'fixed'},className:'persistent-video-mount watch-video-host watch-full-host',
+    classList:{contains(token){return this.owner.className.split(/\\s+/).includes(token);}},
+    querySelector:selector=>selector==='.watch-overlay #watchVimeoFrame'?{}:null};
+  persistentVideoMount.classList.owner=persistentVideoMount;
   const state={watchVideo:{id:'fixed'},watchMode:'video',watchVimeo:player,watchHostedExternally:false};
   const document={querySelectorAll:selector=>selector==='#app .watch-overlay'?stale:[]};
   const ctx=new Function('Capacitor','state','persistentVideoMount','document','videoId',
@@ -139,9 +144,15 @@ test('native Media3 Watch is unique after returning from Audio, including later 
   assert.ok(stale.every(x=>x.removed),'all competing in-app Watch overlays must be removed');
   assert.equal(state.watchHostedExternally,true);
   assert.equal(state.watchVimeo,player,'must never create a second native Media3 player');
-  state.watchMode='audio';stale.forEach(x=>x.removed=false);
+  state.watchMode='audio';persistentVideoMount.className='persistent-video-mount watch-video-host watch-audio-parked';
+  stale.forEach(x=>x.removed=false);
   ctx.reconcileAndroidNativeWatchOverlay();
-  assert.ok(stale.every(x=>!x.removed),'Audio must keep its own valid Watch controls');
+  assert.ok(stale.every(x=>!x.removed),'Parked Video must not remove the active Audio Watch controls');
+  persistentVideoMount.className='persistent-video-mount watch-video-host watch-full-host';
+  state.watchMode='audio';
+  ctx.reconcileAndroidNativeWatchOverlay();
+  assert.ok(stale.every(x=>x.removed),'Visible restored Video host must remove stale Audio chrome before the mode flag commits');
+  stale.forEach(x=>x.removed=false);
   state.watchMode='video';state.watchVideo={id:'other'};
   ctx.reconcileAndroidNativeWatchOverlay();
   assert.ok(stale.every(x=>!x.removed),'A stale Video host cannot cover another lecture');
@@ -156,8 +167,9 @@ test('native Watch guard removes a late duplicate after an Audio to Video return
   assert.match(guard,/hasPersistentVideoOverlayForCurrentWatch\(\)/,
     'Observer must check the authoritative mounted video host, not a lagging player flag');
   assert.match(guard,/reconcileAndroidNativeWatchOverlay\(\)/);
-  assert.match(hostCheck,/state\.watchMode==='video'/,
-    'Audio mode must not delete its in-app player chrome');
+  assert.match(hostCheck,/classList\?\.contains\('watch-full-host'\)/,
+    'Only a physically restored full/mini Video host may authorize duplicate cleanup');
+  assert.match(hostCheck,/classList\?\.contains\('watch-mini-host'\)/);
   assert.match(hostCheck,/dataset\.irgunWatchId===String\(videoId\(state\.watchVideo\)\)/);
   const rendered=between(latest,'function render() {','function syncOpenFilterChecks(');
   assert.match(rendered,/reconcileAndroidNativeWatchOverlay\(\);[\s\S]*?if \(tabSwipeRenderGate\.shouldDefer\(\)\) return;/);
