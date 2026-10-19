@@ -1,0 +1,181 @@
+name: Android Samsung S10 - Internal Recovery (R8 Off)
+
+# Recover the previously working Android code without changing main or
+# the R8 investigation branch. Only publishes to Google Play Internal Testing.
+on:
+  push:
+    branches:
+      - fix/android-samsung-s10-internal-recovery-20261019
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irgun-android-samsung-recovery-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PACKAGE_NAME: org.irgunshiuraitorah.app
+  # Play Internal currently has versionCode 196 (R8). A recovery must be newer.
+  ANDROID_BASE_VERSION_CODE: "196"
+
+jobs:
+  build:
+    name: APK + AAB
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Install Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -perm -111 | sort -V | tail -n 1)"
+          fi
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "Could not locate sdkmanager under $SDK_ROOT" >&2
+            exit 2
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set automatic Android version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_CODE=$((ANDROID_BASE_VERSION_CODE + GITHUB_RUN_NUMBER))
+          VERSION_NAME="1.0.${VERSION_CODE}"
+          echo "IRGUN_ANDROID_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "IRGUN_ANDROID_VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "Resolved Android version: $VERSION_NAME (versionCode $VERSION_CODE)"
+
+      - name: Check signing and Play credentials
+        id: credentials
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ] && [ -n "$ANDROID_KEY_PASSWORD" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/irgun-upload-key.jks"
+            echo "signing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signing=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ -n "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "play=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "play=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Prepare selected launcher icon
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+          bash scripts/prepare_android_icons.sh
+
+      # Internal Play testing build only. The app's native Media3 Video switch
+      # remains opt-in in source; this specific automatic test build enables it
+      # so real devices can exercise Video <-> Audio without WebView handoffs.
+      # Do not promote this beta build to Production until regression and
+      # physical-device testing is complete.
+      - name: Build web app with native Media3 Video beta
+        env:
+          VITE_ANDROID_MEDIA3_VIDEO_BETA: 'true'
+        run: npm run build
+
+      - name: Sync Capacitor Android project
+        run: npx cap sync android
+
+      - name: Generate Android launcher resources
+        run: bash scripts/prepare_android_icons.sh
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x android/gradlew
+
+      - name: Verify recovery explicitly disables R8
+        run: |
+          grep -Fq 'minifyEnabled false' android/app/build.gradle
+          if grep -Fq 'minifyEnabled true' android/app/build.gradle; then
+            echo "Recovery would enable R8; refusing to build." >&2
+            exit 1
+          fi
+      - name: Build signed Release APK and AAB
+        if: ${{ steps.credentials.outputs.signing == 'true' }}
+        working-directory: android
+        env:
+          IRGUN_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/irgun-upload-key.jks
+          IRGUN_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          IRGUN_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          IRGUN_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon clean assembleRelease bundleRelease
+
+      - name: Build Debug APK until signing is configured
+        if: ${{ steps.credentials.outputs.signing != 'true' }}
+        working-directory: android
+        run: ./gradlew --no-daemon clean assembleDebug
+
+      - name: Stage downloadable build files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts
+          if [ "${{ steps.credentials.outputs.signing }}" = "true" ]; then
+            cp android/app/build/outputs/apk/release/app-release.apk \
+              "build-artifacts/IrgunApp-${IRGUN_ANDROID_VERSION_NAME}-vc${IRGUN_ANDROID_VERSION_CODE}-signed.apk"
+            cp android/app/build/outputs/bundle/release/app-release.aab \
+              "build-artifacts/IrgunApp-${IRGUN_ANDROID_VERSION_NAME}-vc${IRGUN_ANDROID_VERSION_CODE}.aab"
+          else
+            cp android/app/build/outputs/apk/debug/app-debug.apk \
+              "build-artifacts/IrgunApp-${IRGUN_ANDROID_VERSION_NAME}-vc${IRGUN_ANDROID_VERSION_CODE}-debug.apk"
+          fi
+
+      - name: Upload Android build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: Irgun-Android-${{ steps.version.outputs.version_name }}-vc${{ steps.version.outputs.version_code }}
+          path: build-artifacts/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Restore stable Android AAB to Google Play Internal testing
+        if: ${{ steps.credentials.outputs.signing == 'true' && steps.credentials.outputs.play == 'true' }}
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: ${{ env.PACKAGE_NAME }}
+          releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed
+
