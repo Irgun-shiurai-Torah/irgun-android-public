@@ -237,7 +237,10 @@ try{
       }
       assert.ok(track?.id,'No playable Belsky track visible after its parent folders opened');
       report.trackId=String(track.id);
-      assert.ok(await tap(`[data-paid-collection-id="${productId}"] ${track.selector}`),
+      // firstVisibleTrack() already returns a collection-scoped CSS selector.
+      // Adding the same collection prefix again made the target impossible to
+      // find on *every* Android API, despite the tracks being present.
+      assert.ok(await tap(track.selector),
         'Cannot physically tap the purchased Belsky track');
       let observedPlaying=false,advancing=false,startedAt=0,lastAt=0,selectedSeen=false;
       const samples=[];
