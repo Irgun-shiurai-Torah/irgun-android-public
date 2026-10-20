@@ -257,11 +257,16 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     ready:async()=>{
       for(let i=0;i<90&&!destroyed;i++){
         const s=await refresh();
+        // Audio can be selected while initial Video is still buffering. That
+        // is a successful cancellation of the Video-ready wait, not a video
+        // failure; the same ExoPlayer remains the Audio owner.
+        if(mode!=='video')return false;
         // A moving decoder is mandatory. Media3 READY alone is not enough.
         if(s.active&&s.videoSelected&&s.firstFrame&&s.frames>=2&&s.width>0)return true;
         if(s.error)throw new Error('Native Media3 video error: '+s.error);
         await delay(300);
       }
+      if(mode!=='video')return false;
       throw new Error('Native Media3 did not render actual frames');
     },
     destroy:async()=>{
