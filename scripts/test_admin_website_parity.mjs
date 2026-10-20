@@ -226,12 +226,29 @@ test('City Admin performs resumable chunk upload and publishes only after metada
 test('Admin exposes separate WEBSITE and APP Vimeo-only visibility controls',()=>{
   const admin=readFileSync(new URL('../src/admin-website-parity.js',import.meta.url),'utf8');
   const main=readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
+  assert.match(admin,/data-hub-form="vimeo-website"/);
+  assert.match(admin,/data-hub-form="vimeo-app"/);
   assert.match(admin,/name="showVimeoOnlyWebsite"/);
   assert.match(admin,/name="showVimeoOnlyApp"/);
-  assert.match(admin,/showVimeoOnlyWebsite:text\(values\.get\('showVimeoOnlyWebsite'\)\)==='true'/);
-  assert.match(admin,/showVimeoOnlyApp:text\(values\.get\('showVimeoOnlyApp'\)\)==='true'/);
+  assert.match(admin,/formName==='vimeo-website'/);
+  assert.match(admin,/formName==='vimeo-app'/);
+  assert.match(admin,/json\('\\/admin\\/playback-routing',\{showVimeoOnlyWebsite\}\)/);
+  assert.match(admin,/json\('\\/admin\\/playback-routing',\{showVimeoOnlyApp\}\)/);
   assert.match(admin,/onAppVimeoVisibilityChanged/);
   assert.match(main,/visibleAndroidVideoCatalog\(videos,state\.showVimeoOnlyApp\)/);
   assert.match(main,/loadAppVimeoOnlyVisibility\(\)/);
   assert.match(main,/!state\.showVimeoOnlyApp && isAndroidVimeoOnlyVideo\(video\)/);
+});
+
+test('A visibility save sends only the targeted setting and preserves website playback routing',()=>{
+  const admin=readFileSync(new URL('../src/admin-website-parity.js',import.meta.url),'utf8');
+  const website=admin.slice(admin.indexOf("formName==='vimeo-website'"),admin.indexOf("formName==='vimeo-app'"));
+  const app=admin.slice(admin.indexOf("formName==='vimeo-app'"),admin.indexOf("formName==='routing'"));
+  const routing=admin.slice(admin.indexOf("formName==='routing'"),admin.indexOf("formName==='city-add'"));
+  assert.match(website,/json\('\/admin\/playback-routing',\{showVimeoOnlyWebsite\}\)/);
+  assert.doesNotMatch(website,/showVimeoOnlyApp|videoMode/);
+  assert.match(app,/json\('\/admin\/playback-routing',\{showVimeoOnlyApp\}\)/);
+  assert.doesNotMatch(app,/showVimeoOnlyWebsite|videoMode/);
+  assert.match(routing,/vimeoFallbackEnabled/);
+  assert.doesNotMatch(routing,/showVimeoOnlyWebsite|showVimeoOnlyApp/);
 });
