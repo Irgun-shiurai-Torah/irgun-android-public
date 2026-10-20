@@ -128,8 +128,11 @@ test('Android Audio tap waits for pending native Media3 adapter instead of racin
   assert.match(guard,/watchVimeoInitFlight/);
   assert.match(guard,/void initWatchVimeo\(true\)/);
   assert.match(guard,/await new Promise\(resolve=>setTimeout\(resolve,100\)\)/);
-  assert.match(guard,/if \(!state\.watchVimeo\?\.isIrgunNativeVideoPlayer[\s\S]*?return false;/,
-    'Do not enter the legacy Audio handoff if native Video is still initializing');
+  assert.match(guard,/const tellNativeStillStarting=\(\)=>\{[\s\S]*?return false;/);
+  assert.match(guard,/if \(state\.watchVimeo\) return tellNativeStillStarting\(\)/,
+    'Do not layer Audio over an unexpected non-native player');
+  assert.match(guard,/if \(!state\.watchVimeo\?\.isIrgunNativeVideoPlayer &&[\s\S]*?return tellNativeStillStarting\(\);/,
+    'Do not enter the legacy Audio handoff while native Video initialization is pending');
 });
 
 test('native Video readiness cancels cleanly when a fast Audio switch takes ownership',()=>{
