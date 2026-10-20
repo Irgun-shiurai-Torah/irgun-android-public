@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'android/app/build.gradle'
+      - 'scripts/verify_android_native_symbols.sh'
+      - 'scripts/test_android_native_symbols.sh'
       - '.github/workflows/android-automatic.yml'
       - '.github/workflows/android-native-debug-symbols.yml'
   workflow_dispatch:
@@ -59,6 +61,9 @@ jobs:
         run: npx cap sync android
       - name: Generate launcher resources
         run: bash scripts/prepare_android_icons.sh
+      - name: Test native-symbol verification cases
+        run: bash scripts/test_android_native_symbols.sh
+
       - name: Build release AAB without publishing
         working-directory: android
         run: |
@@ -66,23 +71,8 @@ jobs:
           ./gradlew --no-daemon --info clean :app:bundleRelease
       - name: Verify native debug metadata and R8 mapping
         shell: bash
-        run: |
-          set -euo pipefail
-          AAB=android/app/build/outputs/bundle/release/app-release.aab
-          MAPPING=android/app/build/outputs/mapping/release/mapping.txt
-          mkdir -p symbol-report
-          test -s "$AAB"
-          test -s "$MAPPING"
-          unzip -Z1 "$AAB" > symbol-report/aab-entries.txt
-          if grep -Eq '^base/lib/[^/]+/[^/]+[.]so$' symbol-report/aab-entries.txt; then
-            if ! grep -q '^BUNDLE-METADATA/com[.]android[.]tools[.]build[.]debugsymbols/' symbol-report/aab-entries.txt; then
-              echo "::error::Release AAB contains native .so libraries but is missing native debug metadata"
-              exit 1
-            fi
-          else
-            echo "::notice::Release AAB has no native .so libraries to symbolicate"
-          fi
-          echo "Native debug symbols and R8 mapping check passed"
+        run: bash scripts/verify_android_native_symbols.sh android/app/build/outputs/bundle/release/app-release.aab android/app/build/outputs/mapping/release/mapping.txt symbol-report strict
+
       - name: Upload symbol verification listing
         if: always()
         uses: actions/upload-artifact@v7
