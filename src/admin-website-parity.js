@@ -85,12 +85,12 @@ export function planAdminDateChanges(csv,videos){
   return {items,counts};
 }
 
-export function createWebsiteAdminParity({apiJson,esc,isAdmin,isAdminMode,userKey,render,toast,ask}){
+export function createWebsiteAdminParity({apiJson,esc,isAdmin,isAdminMode,userKey,render,toast,ask,onAppVimeoVisibilityChanged=()=>{}}){
   const initial=()=>({
     panel:'',error:'',success:'',busy:false,busyAction:'',
     loaded:{},contact:{items:[],counts:{},q:'',status:'all'},
     comments:{items:[],page:1,total:0,hasMore:false,q:'',videoId:''},
-    routing:{videoMode:'direct',vimeoFallbackEnabled:true},
+    routing:{videoMode:'direct',vimeoFallbackEnabled:true,showVimeoOnlyWebsite:true,showVimeoOnlyApp:true},
     cityAdmins:{items:[],cities:[]},cityNames:[],
     analytics:{live:{},history:{}},
     scheduleText:'',schedulePlan:null,datePlan:null,dateFileName:''
@@ -138,7 +138,12 @@ export function createWebsiteAdminParity({apiJson,esc,isAdmin,isAdminMode,userKe
   }
   function routingHtml(){
     const m=model.routing, option=(value,label,selected)=>'<option value="'+value+'" '+(selected?'selected':'')+'>'+label+'</option>';
-    return card('routing','<p>Sets playback behaviour for regular <strong>website</strong> videos; does not change native Media3 settings.</p><form data-hub-form="routing" class="admin-form-grid"><label>Video mode<select name="videoMode">'+option('direct','HLS → MP4',m.videoMode!=='vimeo')+option('vimeo','Vimeo only',m.videoMode==='vimeo')+'</select></label><label>Fallback<select name="vimeoFallbackEnabled">'+option('true','Vimeo fallback ON',m.vimeoFallbackEnabled!==false)+option('false','Vimeo fallback OFF (NetFree-safe)',m.vimeoFallbackEnabled===false)+'</select></label><p>Audio: Drive MP3 (fixed)</p>'+submit('Save website routing')+'</form>');
+    return card('routing','<p>Two <strong>independent</strong> Vimeo-only lecture switches. Hiding them removes Vimeo-only lectures from that platform\'s library and watch pages. Drive-backed lectures remain available. The website playback mode and fallback settings below are separate.</p><form data-hub-form="routing" class="admin-form-grid">'+
+      '<label>Vimeo-only lectures on WEBSITE<select name="showVimeoOnlyWebsite">'+option('true','Show on website (ON)',m.showVimeoOnlyWebsite!==false)+option('false','Hide from website (OFF)',m.showVimeoOnlyWebsite===false)+'</select></label>'+
+      '<label>Vimeo-only lectures in APP<select name="showVimeoOnlyApp">'+option('true','Show in app (ON)',m.showVimeoOnlyApp!==false)+option('false','Hide from app (OFF)',m.showVimeoOnlyApp===false)+'</select></label>'+
+      '<label>Website video mode<select name="videoMode">'+option('direct','HLS → MP4',m.videoMode!=='vimeo')+option('vimeo','Vimeo only',m.videoMode==='vimeo')+'</select></label>'+
+      '<label>Website fallback<select name="vimeoFallbackEnabled">'+option('true','Vimeo fallback ON',m.vimeoFallbackEnabled!==false)+option('false','Vimeo fallback OFF (NetFree-safe)',m.vimeoFallbackEnabled===false)+'</select></label>'+
+      '<p>Audio: Drive MP3 (fixed). Changing website visibility will not change app visibility, or vice versa.</p>'+submit('Save Vimeo visibility and website routing')+'</form>');
   }
   function scheduleHtml(){
     const plan=model.schedulePlan;
@@ -373,9 +378,16 @@ export function createWebsiteAdminParity({apiJson,esc,isAdmin,isAdminMode,userKe
         model.comments.page=1;model.loaded.comments=false;void loadOpened(true);
       }else if(formName==='routing'){
         const next={videoMode:text(values.get('videoMode')),
-          vimeoFallbackEnabled:text(values.get('vimeoFallbackEnabled'))==='true'};
-        void write(async()=>{model.routing=await json('/admin/playback-routing',next);
-          notify('Website playback routing saved.')});
+          vimeoFallbackEnabled:text(values.get('vimeoFallbackEnabled'))==='true',
+          showVimeoOnlyWebsite:text(values.get('showVimeoOnlyWebsite'))==='true',
+          showVimeoOnlyApp:text(values.get('showVimeoOnlyApp'))==='true'};
+        void write(async()=>{
+          const previousApp=model.routing.showVimeoOnlyApp!==false;
+          model.routing=await json('/admin/playback-routing',next);
+          if(previousApp!==(model.routing.showVimeoOnlyApp!==false))
+            onAppVimeoVisibilityChanged(model.routing.showVimeoOnlyApp!==false);
+          notify('Vimeo-only visibility saved independently for website and app.');
+        });
       }else if(formName==='city-add'){
         const email=text(values.get('email')).trim(),city=text(values.get('city')).trim();
         if(!email||!city){model.error='Choose a city and enter an email.';return present()}
