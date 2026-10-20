@@ -7299,47 +7299,57 @@ function syncOpenFilterChecks(key, values) {
 }
 
 function bindPlayerSwipeToClose(sheet) {
-  let startY = 0;
-  let startX = 0;
-  let startAt = 0;
-  let dragging = false;
-  let distance = 0;
+  // A previous swipe that began while settings were scrolled MUST NOT become
+  // a dismiss gesture when the native player or an async render resets scroll.
+  // In particular, physical taps on 1.25x/1.5x/2x must never close the sheet.
+  let gesture = null;
   const reset = () => {
     sheet.classList.remove('dragging');
     sheet.style.transform = '';
   };
   sheet.addEventListener('touchstart', event => {
-    if (event.touches.length !== 1 || sheet.scrollTop > 0) return;
+    gesture = null;
+    reset();
+    if (event.touches.length !== 1) return;
     const touch = event.touches[0];
-    startY = touch.clientY;
-    startX = touch.clientX;
-    startAt = performance.now();
-    distance = 0;
-    dragging = false;
-  }, { passive: true });
+    const control = event.target?.closest?.('button, input, select, textarea, a, [role="button"]');
+    gesture = {
+      allowed: sheet.scrollTop <= 0 && !control,
+      startY:touch.clientY, startX:touch.clientX,
+      startAt:performance.now(), distance:0, dragging:false
+    };
+  }, { passive:true });
   sheet.addEventListener('touchmove', event => {
-    if (event.touches.length !== 1 || sheet.scrollTop > 0) return reset();
+    if (!gesture || !gesture.allowed || event.touches.length !== 1) return;
+    if (sheet.scrollTop > 0) {
+      gesture.allowed = false;
+      return reset();
+    }
     const touch = event.touches[0];
-    const dy = touch.clientY - startY;
-    const dx = Math.abs(touch.clientX - startX);
+    const dy = touch.clientY - gesture.startY;
+    const dx = Math.abs(touch.clientX - gesture.startX);
     if (dy <= 0 || dy < dx) return;
-    if (dy > 10) dragging = true;
-    if (!dragging) return;
-    distance = dy;
+    if (dy > 10) gesture.dragging = true;
+    if (!gesture.dragging) return;
+    gesture.distance = dy;
     sheet.classList.add('dragging');
     sheet.style.transform = `translateY(${Math.min(dy, window.innerHeight * 0.7)}px)`;
     event.preventDefault();
-  }, { passive: false });
+  }, { passive:false });
   sheet.addEventListener('touchend', () => {
-    if (!dragging) return reset();
-    const elapsed = Math.max(1, performance.now() - startAt);
-    const velocity = distance / elapsed;
-    if (distance > 105 || velocity > 0.65) {
+    const ended = gesture;
+    gesture = null;
+    if (!ended?.allowed || !ended.dragging || sheet.scrollTop > 0) return reset();
+    const elapsed = Math.max(1, performance.now() - ended.startAt);
+    if (ended.distance > 105 || ended.distance / elapsed > 0.65) {
       state.playerOpen = false;
       render();
     } else reset();
-  }, { passive: true });
-  sheet.addEventListener('touchcancel', reset, { passive: true });
+  }, { passive:true });
+  sheet.addEventListener('touchcancel', () => {
+    gesture = null;
+    reset();
+  }, { passive:true });
 }
 
 function refreshDonationProviderPanelFast() {
