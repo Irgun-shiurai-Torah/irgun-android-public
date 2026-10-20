@@ -3,6 +3,7 @@
 // Native Audio/Video are two track presentations of ONE ExoPlayer MediaItem.
 import {registerPlugin} from '@capacitor/core';
 import {getAndroidHlsSource} from './android-media-source.js';
+import {shouldRefreshNativeVideoSource} from './android-native-video-recovery.js';
 
 const native = registerPlugin('IrgunNativeVideo');
 const delay = ms => new Promise(resolve => setTimeout(resolve,ms));
@@ -27,6 +28,24 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
   let ticking=false,layoutRequested=false,observedFrame=null;
   let framePlacedOnScreen=false;
   let reportedError='',failedFrames=0;
+  let lastFrames=0,lastFrameAtMs=0,stalledSinceMs=0,lastRefreshAtMs=0,refreshAttempts=0,refreshingSource=false;
+  const reconnect=async()=>{
+    if(destroyed||refreshingSource||mode!=='video')return false;
+    const initial=await refresh();
+    if(!initial.active||!initial.videoSelected||!initial.playWhenReady)return false;
+    refreshingSource=true;
+    try{
+      const fresh=await getAndroidHlsSource(String(apiBase).replace(/\/$/,''),String(videoId));
+      if(destroyed||mode!=='video')return false;
+      const latest=await refresh();
+      if(!latest.active||!latest.videoSelected||!latest.playWhenReady)return false;
+      await native.refreshSource({lectureId:String(videoId),hlsUrl:String(fresh.hls||''),mp4Url:String(fresh.mp4||'')});
+      lastRefreshAtMs=Date.now();
+      refreshAttempts++;
+      stalledSinceMs=Date.now();
+      return true;
+    } finally {refreshingSource=false;}
+  };
   const viewportFrame=()=>{
     // Query ALL matching nodes: during Audio -> Video the old persistent
     // iframe can still be connected while transformed 12,000px off-screen.
@@ -125,6 +144,17 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     try{
       const s=await refresh();
       if(!s.active)return;
+      const now=Date.now();
+      if(s.frames>lastFrames) {
+        lastFrames=s.frames;lastFrameAtMs=now;stalledSinceMs=0;
+        refreshAttempts=0;reportedError='';failedFrames=0;
+      } else if(mode==='video'&&s.videoSelected&&s.playWhenReady) {
+        if(!stalledSinceMs)stalledSinceMs=now;
+      } else stalledSinceMs=0;
+      if(!refreshingSource && shouldRefreshNativeVideoSource({
+        snapshot:s,foreground:!document.hidden,surfaceVisible:framePlacedOnScreen,
+        nowMs:now,lastFrameAtMs,stalledSinceMs,lastRefreshAtMs,refreshAttempts
+      })) void reconnect().catch(error=>console.warn('[Media3] resumed source refresh failed',error));
       // A native root can resize/rotate after the WebView has laid out. The
       // DOM placeholder may look visible while Android's REAL PlayerView is
       // still offscreen. Keep remeasuring until native visibility recovers.
@@ -203,6 +233,7 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     },
     updateFrame:trackFrame,
     refresh,
+    reconnect:async()=>reconnect(),
     ready:async()=>{
       for(let i=0;i<90&&!destroyed;i++){
         const s=await refresh();
