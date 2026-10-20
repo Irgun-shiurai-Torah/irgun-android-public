@@ -10337,7 +10337,15 @@ async function initWatchVimeoOnce(userInitiated = false) {
     // performing a second network seek. Queue play immediately as well.
     if (userInitiated && !audioToVideoHandoff && !player.isIrgunNativeVideoPlayer) player.play().catch(() => {});
 
-    await player.ready();
+    const playerReady = await player.ready();
+    if (player.isIrgunNativeVideoPlayer && playerReady === false) {
+      // The user switched to Audio while the initial native Video frame was
+      // still buffering. Dispose only the Video adapter, retaining its native
+      // Media3 Audio session, and do not show a false Video error over Audio.
+      if (state.watchVimeo === player) state.watchVimeo = null;
+      try { await player.destroy?.(); } catch (_) {}
+      return;
+    }
     if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video' || !state.watchVideo || videoId(state.watchVideo) !== videoKey || state.watchVimeo !== player) {
       try { await player.destroy(); } catch (_) {}
       return;
