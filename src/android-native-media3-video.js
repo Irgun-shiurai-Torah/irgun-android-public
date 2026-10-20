@@ -41,6 +41,7 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
       if(!latest.active||!latest.videoSelected||!latest.playWhenReady)return false;
       await native.refreshSource({lectureId:String(videoId),hlsUrl:String(fresh.hls||''),mp4Url:String(fresh.mp4||'')});
       lastRefreshAtMs=Date.now();
+      lastFrames=0;
       refreshAttempts++;
       stalledSinceMs=Date.now();
       return true;
