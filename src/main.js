@@ -194,7 +194,9 @@ const state = {
   screen: 'home',
   videos: [],
   // Native APP visibility is independent of the WEBSITE Admin setting.
-  showVimeoOnlyApp: localStorage.getItem(APP_VIMEO_VISIBLE_KEY)!=='0',
+  showVimeoOnlyApp: localStorage.getItem(APP_VIMEO_MODE_KEY)
+    ? localStorage.getItem(APP_VIMEO_MODE_KEY)!=='off'
+    : localStorage.getItem(APP_VIMEO_VISIBLE_KEY)!=='0',
   vimeoOnlyAppMode: ['off','vimeo','our-player'].includes(localStorage.getItem(APP_VIMEO_MODE_KEY))
     ? localStorage.getItem(APP_VIMEO_MODE_KEY)
     : localStorage.getItem(APP_VIMEO_VISIBLE_KEY)==='0'?'off':'vimeo',
@@ -2610,10 +2612,10 @@ function refreshAppVimeoVisibilityOnReturn() {
   lastForegroundVimeoVisibilityAt=Date.now();
   const previous=state.vimeoOnlyAppMode;
   foregroundVimeoVisibilityCheck=loadAppVimeoOnlyVisibility()
-    .then(enabled=>{
+    .then(mode=>{
       // A change made in Website Admin must also update an already-open app
       // when it returns to the foreground, including restoring a hidden list.
-      if(enabled!==previous && !bootstrapInFlight)
+      if(mode!==previous && !bootstrapInFlight)
         return bootstrap({background:true});
     })
     .catch(error=>console.warn('Could not refresh Vimeo-only app visibility',error))
