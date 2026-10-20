@@ -164,3 +164,10 @@ test('separate visible-task section cannot misattribute an unrelated actual rece
  assert.equal(hasIrgunRecentTask(other+visible),false);
  assert.equal(topRecentTaskIsIrgun(other+visible),false);
 });
+
+
+test('Recents dismissal retries use distinct in-card flings with stronger upward travel',()=>{
+ const node='<node content-desc="Screenshot of Irgun Shiurai Torah" resource-id="com.google.android.apps.nexuslauncher:id/snapshot" visible="true" bounds="[48,79][272,510]">';
+ assert.deepEqual(recentsDismissGesture(node,{width:320,height:640,attempt:1}),[160,432,160,6]);
+ assert.deepEqual(recentsDismissGesture(node,{width:320,height:640,attempt:2}),[111,359,111,6]);
+});
