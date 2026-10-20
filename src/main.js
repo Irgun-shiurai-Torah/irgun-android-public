@@ -2276,28 +2276,43 @@ function resetUserState() {
 
 async function loadMetadata() {
   let loaded=null;
-  // Prefer the copy actually bundled into the native app. Early WebView
-  // startup can temporarily fail its first local asset request; Android
-  // retries that local source rather than immediately depending on the web.
-  const attempts = Capacitor.getPlatform()==='android' ? 2 : 1;
+  const isAndroid = Capacitor.getPlatform()==='android';
+  // Prefer the copy actually bundled into the native app. Android's first
+  // WebView asset request can hang (not merely reject) while its local network
+  // stack is starting. Bound each request so bootstrap always reaches either
+  // the real library or its normal offline/error UI instead of a white screen.
+  const attempts = isAndroid ? 2 : 1;
   for (let attempt=0;attempt<attempts;attempt++) {
     try {
-      const response=await fetch('/library-metadata.json');
-      if (!response.ok) throw new Error('Bundled library metadata HTTP '+response.status);
-      const metadata=await response.json();
-      if (Capacitor.getPlatform()==='android' && (!Array.isArray(metadata?.speakers)||!Array.isArray(metadata?.topics)))
+      let metadata;
+      if (isAndroid) {
+        metadata = await fetchJsonWithTimeout('/library-metadata.json', {}, 5000);
+      } else {
+        const response=await fetch('/library-metadata.json');
+        if (!response.ok) throw new Error('Bundled library metadata HTTP '+response.status);
+        metadata=await response.json();
+      }
+      if (isAndroid && (!Array.isArray(metadata?.speakers)||!Array.isArray(metadata?.topics)))
         throw new Error('Incomplete bundled library metadata');
       loaded=metadata;
       break;
     } catch (error) {
       if(attempt+1<attempts)
         await new Promise(resolve=>setTimeout(resolve,300));
+      else if (isAndroid)
+        console.warn('Bundled library metadata unavailable after bounded retries', String(error?.message||error).slice(0,180));
     }
   }
   if(!loaded) {
-    const response=await fetch(`${WEBSITE}library-metadata.json`);
-    if(Capacitor.getPlatform()==='android'&&!response.ok)throw new Error('Website metadata HTTP '+response.status);
-    loaded=await response.json();
+    if (isAndroid) {
+      loaded = await fetchJsonWithTimeout(`${WEBSITE}library-metadata.json`, {}, 10000);
+      if (!Array.isArray(loaded?.speakers)||!Array.isArray(loaded?.topics))
+        throw new Error('Incomplete website library metadata');
+    } else {
+      const response=await fetch(`${WEBSITE}library-metadata.json`);
+      if (!response.ok) throw new Error('Website metadata HTTP '+response.status);
+      loaded=await response.json();
+    }
   }
   state.metadata=loaded;
 
