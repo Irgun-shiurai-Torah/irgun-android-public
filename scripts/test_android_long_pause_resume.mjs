@@ -39,15 +39,11 @@ test('restored bookmark with no first frame refreshes after a generous startup w
 test('native network recovery keeps the same MediaItem and takes priority over source renewal',()=>{
   assert.equal(shouldRefreshNativeVideoSource({
     ...args,snapshot:{...ready,networkRecoveryPending:true},stalledSinceMs:now-90000
-  }),false);
+  }),false,'The native retry must keep the same MediaItem while transport recovers');
   assert.equal(shouldRefreshNativeVideoSource({
     ...args,snapshot:{...ready,networkRecoveryPending:false},stalledSinceMs:now-33000,
     lastFrameAtMs:now-10000
-  }),false,'recent frames still get the ordinary native watchdog');
-  assert.equal(shouldRefreshNativeVideoSource({
-    ...args,snapshot:{...ready,networkRecoveryPending:false},stalledSinceMs:now-33000,
-    lastFrameAtMs:now-10000
-  }),true);
+  }),true,'A genuine stall can renew its source after native transport recovery ends');
 });
 
 test('normal transient buffers get the native watchdog before source replacement',()=>{
