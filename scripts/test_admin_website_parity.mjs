@@ -223,32 +223,35 @@ test('City Admin performs resumable chunk upload and publishes only after metada
   }
 });
 
-test('Admin exposes separate WEBSITE and APP Vimeo-only visibility controls',()=>{
+test('Admin exposes separate WEBSITE and APP three-choice Vimeo-only playback controls',()=>{
   const admin=readFileSync(new URL('../src/admin-website-parity.js',import.meta.url),'utf8');
   const main=readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
   assert.match(admin,/data-hub-form="vimeo-website"/);
   assert.match(admin,/data-hub-form="vimeo-app"/);
-  assert.match(admin,/name="showVimeoOnlyWebsite"/);
-  assert.match(admin,/name="showVimeoOnlyApp"/);
+  assert.match(admin,/name="vimeoOnlyWebsiteMode"/);
+  assert.match(admin,/name="vimeoOnlyAppMode"/);
+  for(const value of ["off","vimeo","our-player"])
+    assert.ok(admin.includes("option('"+value+"'"),"Missing Vimeo mode "+value);
   assert.match(admin,/formName==='vimeo-website'/);
   assert.match(admin,/formName==='vimeo-app'/);
-  assert.ok(admin.includes("json('/admin/playback-routing',{showVimeoOnlyWebsite})"));
-  assert.ok(admin.includes("json('/admin/playback-routing',{showVimeoOnlyApp})"));
-  assert.match(admin,/onAppVimeoVisibilityChanged/);
+  assert.ok(admin.includes("json('/admin/playback-routing',{vimeoOnlyWebsiteMode})"));
+  assert.ok(admin.includes("json('/admin/playback-routing',{vimeoOnlyAppMode})"));
   assert.match(main,/visibleAndroidVideoCatalog\(videos,state\.showVimeoOnlyApp\)/);
   assert.match(main,/loadAppVimeoOnlyVisibility\(\)/);
   assert.match(main,/!state\.showVimeoOnlyApp && isAndroidVimeoOnlyVideo\(video\)/);
+  assert.ok(main.includes("state.vimeoOnlyAppMode!=='our-player'"),
+    "Our Player must route Vimeo-only recordings through native Media3");
 });
 
-test('A visibility save sends only the targeted setting and preserves website playback routing',()=>{
+test('Saving each platform mode never overwrites the other mode or website video routing',()=>{
   const admin=readFileSync(new URL('../src/admin-website-parity.js',import.meta.url),'utf8');
   const website=admin.slice(admin.indexOf("formName==='vimeo-website'"),admin.indexOf("formName==='vimeo-app'"));
   const app=admin.slice(admin.indexOf("formName==='vimeo-app'"),admin.indexOf("formName==='routing'"));
   const routing=admin.slice(admin.indexOf("formName==='routing'"),admin.indexOf("formName==='city-add'"));
-  assert.ok(website.includes("json('/admin/playback-routing',{showVimeoOnlyWebsite})"));
-  assert.doesNotMatch(website,/showVimeoOnlyApp|videoMode/);
-  assert.ok(app.includes("json('/admin/playback-routing',{showVimeoOnlyApp})"));
-  assert.doesNotMatch(app,/showVimeoOnlyWebsite|videoMode/);
+  assert.ok(website.includes("json('/admin/playback-routing',{vimeoOnlyWebsiteMode})"));
+  assert.doesNotMatch(website,/showVimeoOnlyApp|vimeoOnlyAppMode|videoMode/);
+  assert.ok(app.includes("json('/admin/playback-routing',{vimeoOnlyAppMode})"));
+  assert.doesNotMatch(app,/showVimeoOnlyWebsite|vimeoOnlyWebsiteMode|videoMode/);
   assert.match(routing,/vimeoFallbackEnabled/);
-  assert.doesNotMatch(routing,/showVimeoOnlyWebsite|showVimeoOnlyApp/);
+  assert.doesNotMatch(routing,/vimeoOnlyWebsiteMode|vimeoOnlyAppMode/);
 });
