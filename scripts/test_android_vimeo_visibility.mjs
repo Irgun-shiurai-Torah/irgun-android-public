@@ -1,0 +1,28 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {visibleAndroidVideoCatalog} from '../src/android-vimeo-visibility.js';
+
+const vimeoOnly={id:'1235511026',vimeoId:'1235511026',hasDriveVideo:false};
+const driveCopy={id:'1232214252',vimeoId:'1232214252',hasDriveVideo:true};
+const driveLibrary={id:'drivev-123',sourceType:'drive-library',hasDriveVideo:true};
+const all=[vimeoOnly,driveCopy,driveLibrary];
+
+test('Android app ON shows Vimeo-only lecture and Drive copies',()=>{
+  assert.deepEqual(visibleAndroidVideoCatalog(all,true),all);
+  assert.deepEqual(visibleAndroidVideoCatalog(all),all);
+});
+test('Android app OFF hides only Vimeo-only item (not Drive source)',()=>{
+  assert.deepEqual(visibleAndroidVideoCatalog(all,false),[driveCopy,driveLibrary]);
+  assert.equal(all.length,3,'Filter must not mutate original catalog');
+});
+test('Turning app ON restores Vimeo-only items from freshly fetched catalog',()=>{
+  assert.equal(visibleAndroidVideoCatalog(all,false).some(x=>x.id===vimeoOnly.id),false);
+  assert.equal(visibleAndroidVideoCatalog(all,true).some(x=>x.id===vimeoOnly.id),true);
+});
+test('Website preference does not change Android visibility',()=>{
+  const settings={showVimeoOnlyWebsite:false,showVimeoOnlyApp:true};
+  assert.deepEqual(visibleAndroidVideoCatalog(all,settings.showVimeoOnlyApp),all);
+  settings.showVimeoOnlyWebsite=true;
+  settings.showVimeoOnlyApp=false;
+  assert.deepEqual(visibleAndroidVideoCatalog(all,settings.showVimeoOnlyApp),[driveCopy,driveLibrary]);
+});
