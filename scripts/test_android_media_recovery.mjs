@@ -60,21 +60,49 @@ test('Android still reports a real catalog outage when both attempts fail, and f
   assert.doesNotMatch(ios.requests[0].url,/attempt=/,'iOS catalog request URL must retain its original shape');
 });
 
-test('Android retries the bundled speaker metadata without changing its canonical speaker IDs',async()=>{
-  const calls=[],state={},meta={speakers:[{id:'s123',nameHe:'הרב אברהם יפה'}],topics:[{id:'t1',name:'Torah'}],lectures:{}};
+test('Android retries bounded bundled metadata fetches without changing canonical speaker IDs',async()=>{
+  const calls=[],timeouts=[],state={},meta={speakers:[{id:'s123',nameHe:'הרב אברהם יפה'}],topics:[{id:'t1',name:'Torah'}],lectures:{}};
   const args={state,Capacitor:{getPlatform:()=> 'android'},
     WEBSITE:'https://irgunshiuraitorah.com/',
-    fetch:async url=>{calls.push(url);if(calls.length===1)throw Error('WebView local asset not ready');
-      return {ok:true,json:async()=>meta};},
+    fetchJsonWithTimeout:async(url,_options,timeout)=>{calls.push(url);timeouts.push(timeout);
+      if(calls.length===1)throw Error('AbortError: local asset request timed out');
+      return meta;},
     learnSpeakerNameDictionary:()=>{},
-    normalizeText:v=>String(v||'').trim().toLowerCase(),setTimeout};
+    normalizeText:v=>String(v||'').trim().toLowerCase(),setTimeout,console:{warn(){} }};
   const f=new Function(...Object.keys(args),loadMeta+'return loadMetadata;')(...Object.values(args));
   await f();
   assert.deepEqual(calls,['/library-metadata.json','/library-metadata.json'],
     'Android should retry its bundled data without requiring the public internet');
+  assert.deepEqual(timeouts,[5000,5000],'Each local metadata attempt must be bounded');
   assert.equal(state.speakerById.get('s123').nameHe,'הרב אברהם יפה');
   assert.equal(state.topicById.get('t1').name,'Torah');
   assert.equal(state.speakerAliasToId.get('הרב אברהם יפה'),'s123');
+});
+
+test('Android metadata startup falls back after bounded local failures and bounds the website request',async()=>{
+  const calls=[],timeouts=[],state={};
+  const args={state,Capacitor:{getPlatform:()=> 'android'},
+    WEBSITE:'https://irgunshiuraitorah.com/',
+    fetchJsonWithTimeout:async(url,_options,timeout)=>{calls.push(url);timeouts.push(timeout);
+      throw Error('AbortError: request timed out');},
+    learnSpeakerNameDictionary:()=>{},normalizeText:v=>String(v||'').trim().toLowerCase(),
+    setTimeout,console:{warn(){}}};
+  const f=new Function(...Object.keys(args),loadMeta+'return loadMetadata;')(...Object.values(args));
+  await assert.rejects(f(),/request timed out/);
+  assert.deepEqual(calls,['/library-metadata.json','/library-metadata.json',
+    'https://irgunshiuraitorah.com/library-metadata.json']);
+  assert.deepEqual(timeouts,[5000,5000,10000],
+    'A cold Android startup must not wait forever on either local or remote metadata');
+});
+
+test('non-Android metadata loading keeps its existing local-first behavior',async()=>{
+  const calls=[],state={},meta={speakers:[],topics:[],lectures:{}};
+  const args={state,Capacitor:{getPlatform:()=> 'ios'},WEBSITE:'https://irgunshiuraitorah.com/',
+    fetch:async url=>{calls.push(url);return {ok:true,json:async()=>meta};},
+    fetchJsonWithTimeout:()=>{throw Error('iOS should retain its existing fetch path');},
+    learnSpeakerNameDictionary:()=>{},normalizeText:v=>String(v||'').trim().toLowerCase(),setTimeout};
+  const f=new Function(...Object.keys(args),loadMeta+'return loadMetadata;')(...Object.values(args));
+  await f();assert.deepEqual(calls,['/library-metadata.json']);
 });
 
 

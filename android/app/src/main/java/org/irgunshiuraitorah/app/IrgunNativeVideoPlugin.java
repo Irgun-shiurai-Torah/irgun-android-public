@@ -1031,6 +1031,21 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void refreshSource(PluginCall call) {
+        String id = call.getString("lectureId", "");
+        String hls = call.getString("hlsUrl", "");
+        String mp4 = call.getString("mp4Url", "");
+        if (id.isEmpty() || (!hls.isEmpty() && !permitted(hls)) ||
+            (!mp4.isEmpty() && !permitted(mp4)) || (hls.isEmpty() && mp4.isEmpty())) {
+            call.reject("Approved lecture ID and native media source required");
+            return;
+        }
+        IrgunPlaybackService.refreshNativeVideoSource(id, hls, mp4,
+            Boolean.TRUE.equals(call.getBoolean("userRequested", false)));
+        call.resolve();
+    }
+
+    @PluginMethod
     public void playback(PluginCall call) {
         String operation = call.getString("operation", "");
         switch (operation) {
@@ -1063,6 +1078,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("videoSelected", state.videoSelected);
             response.put("playing", state.isPlaying);
             response.put("playWhenReady", state.playWhenReady);
+            response.put("networkRecoveryPending", state.networkRecoveryPending);
             response.put("firstFrame", state.firstFrame);
             response.put("frames", state.frameCount);
             response.put("positionMs", state.positionMs);

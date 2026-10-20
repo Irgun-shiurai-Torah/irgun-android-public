@@ -19,7 +19,7 @@ const fakeAdb=({changedPid=false,permanent=false}={})=>{
   };
   return {run,calls,get count(){return observeCount}};
 };
-test('retry one offline read-only hierarchy observation only when Irgun PID is unchanged',()=>{
+test('retry offline read-only hierarchy observations only when Irgun PID is unchanged',()=>{
   const a=fakeAdb();
   assert.match(nativeHierarchy(null,{run:a.run,allWindows:true}),/<node/);
   assert.equal(a.count,2);
@@ -31,10 +31,10 @@ test('native observer never hides a changed app PID',()=>{
   assert.throws(()=>nativeHierarchy(null,{run:a.run}),/Irgun process changed/);
   assert.equal(a.count,1);
 });
-test('permanently offline observer fails after one retry',()=>{
+test('permanently offline observer fails after three bounded attempts',()=>{
   const a=fakeAdb({permanent:true});
   assert.throws(()=>nativeHierarchy(null,{run:a.run}),/device offline/);
-  assert.equal(a.count,2);
+  assert.equal(a.count,3);
 });
 test('non-transport observation failures must not retry',()=>{
   let count=0;const run=(_binary,args)=>{
