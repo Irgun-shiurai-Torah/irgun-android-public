@@ -89,6 +89,24 @@ async function tap(selector,{tries=18}={}){
     scroll:await observe('JSON.stringify({y:window.scrollY,body:document.body.scrollHeight,viewport:innerHeight})')}; }catch(_){}
   return false;
 }
+async function closeFullPlayerIfOpen(){
+  // Account QA can leave the full-player settings sheet open after a playback
+  // failure. It overlays Library and makes Listen visible in DOM but untappable.
+  // Close it with the actual user-facing button before testing purchases.
+  const before=await placement('[data-close-player]');
+  if(!before.found)return false;
+  assert.ok(await tap('[data-close-player]',{tries:12}),
+    'Could not physically close the full-player settings sheet before purchase QA');
+  for(let attempt=0;attempt<16;attempt++){
+    const after=await placement('[data-close-player]');
+    if(!after.found){
+      report.checks.push('Closed any lingering full-player settings overlay before purchase navigation');
+      return true;
+    }
+    await delay(250);
+  }
+  throw new Error('Full-player settings overlay remained open and blocked purchase navigation');
+}
 async function openPurchasedLibrary(){
   assert.ok(await tap('.bottom-nav [data-nav="library"]',{tries:5}),
     'Cannot reach Library through the actual Android bottom navigation');
@@ -123,6 +141,8 @@ const paidView=()=>observe(`JSON.stringify((()=>{
   const panel=locked?.querySelector('[data-paid-description-panel]');
   const preview=locked?.querySelector('.paid-folder-overview');
   return {screen:window.ISTAccountTest.snapshot().screen,
+    playerSheetOpen:!!document.querySelector('[data-player-sheet]'),
+    closePlayerFound:!!document.querySelector('[data-close-player]'),
     productVisible:!!item,owned:!!item?.classList.contains('owned'),
     listen:!!item?.querySelector('[data-paid-expand]'),
     lockedPreviewExists:!!preview,lockedPreviewHidden:!preview || (!!panel?.hidden&&panel.contains(preview)),
@@ -187,9 +207,11 @@ const firstVisibleTrack=()=>observe(`JSON.stringify((()=>{
 
 try{
   await connect();startSocket();
-  const initial=await snapshot();
+  let initial=await snapshot();
   assert.equal(initial.loggedIn,true,'The paid QA requires the verified signed-in emulator session');
   report.checks.push('Reused real signed-in non-admin test account');
+  await closeFullPlayerIfOpen();
+  initial=await snapshot();
   if(initial.screen!=='paid'){
     assert.ok(await tap('[data-nav="paid"]'),'Cannot reach Android Purchases via a physical tap');
     for(let n=0;n<32;n++){if((await paidView()).screen==='paid')break;await delay(350);}
