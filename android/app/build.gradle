@@ -1,8 +1,8 @@
 apply plugin: 'com.android.application'
 
 // GitHub Actions can override these values without editing the source for every build.
-def irgunVersionCode = (System.getenv('IRGUN_ANDROID_VERSION_CODE') ?: '94').toInteger()
-def irgunVersionName = System.getenv('IRGUN_ANDROID_VERSION_NAME') ?: '1.0.94'
+def irgunVersionCode = (System.getenv('IRGUN_ANDROID_VERSION_CODE') ?: '202').toInteger()
+def irgunVersionName = System.getenv('IRGUN_ANDROID_VERSION_NAME') ?: '1.0.202'
 def irgunKeystorePath = System.getenv('IRGUN_ANDROID_KEYSTORE_PATH')
 def irgunKeystorePassword = System.getenv('IRGUN_ANDROID_KEYSTORE_PASSWORD')
 def irgunKeyAlias = System.getenv('IRGUN_ANDROID_KEY_ALIAS')
