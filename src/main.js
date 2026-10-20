@@ -10066,7 +10066,11 @@ function showAndroidNativeVideoError(frame, detail) {
   retry.addEventListener('click', () => {
     notice.remove();
     state.watchNativeVideoFailedId = '';
-    void initWatchVimeo(true);
+    if (state.watchVimeo?.isIrgunNativeVideoPlayer) {
+      void state.watchVimeo.reconnect().then(ok=>{
+        if(!ok) void initWatchVimeo(true);
+      }).catch(()=>void initWatchVimeo(true));
+    } else void initWatchVimeo(true);
   });
   notice.append(message,retry);
   container.append(notice);
