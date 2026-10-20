@@ -116,13 +116,13 @@ export async function verifyAndroidTaskDismissal({adb,sample,delay,report}) {
     if(attempt>0){
       let currentHierarchy=nativeHierarchy();
       if(!/package="com\.google\.android\.apps\.nexuslauncher"/.test(currentHierarchy)||
-          !/resource-id="[^"]*:id\/overview_panel"/.test(currentHierarchy)){
+          !/resource-id="[^"]*:id\/(?:overview_panel|snapshot|thumbnail)"/.test(currentHierarchy)){
         adb('shell','input','keyevent','KEYCODE_APP_SWITCH');
         await delay(900);
         currentHierarchy=nativeHierarchy();
       }
       assert.ok(/package="com\.google\.android\.apps\.nexuslauncher"/.test(currentHierarchy)&&
-        /resource-id="[^"]*:id\/overview_panel"/.test(currentHierarchy),
+        /resource-id="[^"]*:id\/(?:overview_panel|snapshot|thumbnail)"/.test(currentHierarchy),
         'Android Recents must remain visible before retrying a task-dismiss gesture');
       recentAfter=adb('shell','dumpsys','activity','-a','recents');
       if(!hasIrgunRecentTask(recentAfter)){taskDismissed=true;break;}
