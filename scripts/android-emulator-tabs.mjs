@@ -199,6 +199,36 @@ try {
     'Lower Account swipe must not kill the Android app');
   await wait(s => s.tab === 'library');
   report.checks.push({label:'Native swipe starting in the lower Account form goes to Library',at:lowerAccountPoint});
+  // Library's empty space must be swipeable too: unlike a long lecture list,
+  // the signed-out Library has only a short sign-in card. Previously the real
+  // .content ended there and the lower part of the screen swallowed swipes.
+  const lowerLibraryPoint=JSON.parse(await evaluate(`JSON.stringify((()=>{
+    const library=document.querySelector('#app .app-shell > .content');
+    const x=innerWidth*.72,endX=innerWidth*.28;
+    const nav=document.querySelector('#androidBottomNavigationMount .bottom-nav');
+    const navTop=nav?.getBoundingClientRect().top||innerHeight-92;
+    const lo=Math.round(innerHeight*.57);
+    const hi=Math.min(Math.round(innerHeight*.79),Math.round(navTop-18));
+    for(let y=lo;y<=hi;y+=12){
+      const target=document.elementFromPoint(x,y);
+      if(target?.closest('.content')===library&&!target.closest('select,video,iframe,[role="dialog"]'))
+        return {x,endX,y,width:innerWidth,height:innerHeight,tag:target.tagName,
+          librarySurface:library.classList.contains('android-library-swipe-surface')};
+    }
+    return null;
+  })())`));
+  assert.ok(lowerLibraryPoint?.librarySurface,'Library lower viewport must be inside swipeable content');
+  adb('shell','input','swipe',...nativePoint(lowerLibraryPoint).map(String),
+      ...nativePoint({...lowerLibraryPoint,x:lowerLibraryPoint.endX}).map(String),'600');
+  assert.ok(adb('shell','pidof','org.irgunshiuraitorah.app'),'Lower Library swipe must not kill Android');
+  await wait(s=>s.tab==='account');
+  report.checks.push({label:'Native swipe starting in the lower Your Library area goes to Account',at:lowerLibraryPoint});
+  // Immediately swipe back across the same lower viewport: both directions
+  // must work while Account and Library keep their own UI and state.
+  adb('shell','input','swipe',...nativePoint({...lowerLibraryPoint,x:lowerLibraryPoint.endX}).map(String),
+      ...nativePoint(lowerLibraryPoint).map(String),'600');
+  await wait(s=>s.tab==='library');
+  report.checks.push('Lower Account to Library reverse swipe works immediately');
   const homeButton=JSON.parse(await evaluate(tabPoint('home')));
   assert.ok(homeButton,'Native Home tab button must exist');
   adb('shell','input','tap',...nativePoint(homeButton).map(String));

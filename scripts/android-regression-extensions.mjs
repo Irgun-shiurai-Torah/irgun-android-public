@@ -175,9 +175,10 @@ async function tap(selector){
   adb('shell','input','tap',String(xy[0]),String(xy[1]));
   await delay(500);
   if(speedScroll>0){
-    const after=Number(await evaluate('document.querySelector("[data-player-sheet]")?.scrollTop'));
-    assert.ok(after>=speedScroll-2,'Actual Android speed selection must preserve the settings sheet scroll');
-    report.speedSettingScrolls??=[];report.speedSettingScrolls.push({selector,before:speedScroll,after});
+    const sheetState=JSON.parse(await evaluate('JSON.stringify((()=>{const s=document.querySelector("[data-player-sheet]");return {exists:!!s,scrollTop:Number(s?.scrollTop||0),playerOpen:!!window.ISTSimulator?.snapshot?.().playerOpen,watchId:String(window.ISTSimulator?.snapshot?.().watchId||""),screen:String(window.ISTSimulator?.snapshot?.().screen||"")};})())'));
+    const after=sheetState.scrollTop;
+    assert.ok(after>=speedScroll-2,'Actual Android speed selection must preserve the settings sheet scroll; '+JSON.stringify({selector,before:speedScroll,...sheetState}));
+    report.speedSettingScrolls??=[];report.speedSettingScrolls.push({selector,before:speedScroll,after,...sheetState});
   }
   return xy;
 }

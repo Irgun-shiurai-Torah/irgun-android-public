@@ -17,7 +17,10 @@ capture() {
 trap capture EXIT
 
 adb install -r android/qa-native-observer/build/outputs/apk/debug/qa-native-observer-debug.apk
-adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+# Default to the ordinary minified debug variant. The Samsung tablet QA
+# explicitly installs the R8-optimised release variant with a QA-only
+# debuggable flag; normal Play Store APKs remain non-debuggable.
+adb install -r "${IRGUN_ANDROID_TEST_APK:-android/app/build/outputs/apk/debug/app-debug.apk}"
 adb logcat -c
 # Avoid console/HTTP dumps in the credential-bearing account run.
 adb logcat -v threadtime -s 'IrgunPlayback:V' 'AndroidRuntime:E' 'IrgunQAAudioFocus:I' '*:S' > emulator-report/android-playback.log &

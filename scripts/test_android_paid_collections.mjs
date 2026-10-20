@@ -343,16 +343,29 @@ test('paid emulator observes actual selected Purchased tab and safely escaped fo
   const qa=readFileSync('scripts/android-emulator-paid-playback.mjs','utf8');
   assert.match(qa,/el\.dataset\.librarySection==="purchased"&&el\.classList\.contains\("active"\)/);
   assert.doesNotMatch(qa,/JSON\.stringify\(\{section:state\.librarySection/);
-  assert.match(qa,/CSS\.escape\(details\.dataset\.paidFolderKey\)/);
+  assert.match(qa,/CSS\.escape\(key\)/);
   assert.match(qa,/CSS\.escape\(e\.dataset\.paidTrack\)/);
+  assert.match(qa,/CSS\.escape\(track\.dataset\.paidTrack\)/);
   assert.match(qa,/openPurchasedLibrary\(\)/);
 });
 
-test('paid playback emulator uses interpolated owned collection selectors',()=>{
+test('paid playback emulator uses valid, single-scoped collection selectors',()=>{
   const qa=readFileSync('scripts/android-emulator-paid-playback.mjs','utf8');
-  assert.ok(qa.includes('tap(`[data-paid-collection-id="${productId}"] [data-paid-expand]`'));
-  assert.ok(qa.includes('tap(`[data-paid-collection-id="${productId}"] ${summary}`'));
-  assert.ok(qa.includes('tap(`[data-paid-collection-id="${productId}"] ${track.selector}`'));
+  assert.match(qa,/async function ensurePurchasedAlbumOpen\(\)/);
+  assert.match(qa,/if\(before\.albumExpanded\)return before/);
+  assert.ok(qa.includes("await tap(selector,{tries:20})"),
+    'Album toggle must be tapped physically only when the actual album is closed');
+  assert.match(qa,/if\(after\.albumExpanded\)return after/);
+  assert.ok(qa.includes('const expanded=await ensurePurchasedAlbumOpen()'),
+    'Paid track lookup must not begin until the real purchased album opens');
+  assert.ok(qa.includes("tap(folder.selector,{tries:30})"),
+    'Actual folder summaries must be opened with real physical taps');
+  assert.ok(qa.includes('tap(track.selector)'),
+    'A scoped track selector must not be prefixed by the product ID a second time');
+  assert.ok(qa.includes('return {selector:\'[data-paid-collection-id="${productId}"] [data-paid-track="\''),
+    'The track selector must be scoped to the current purchased product');
+  assert.ok(!qa.includes('tap(`[data-paid-collection-id="${productId}"] ${track.selector}`'),
+    'Twice-prefixed CSS selectors never match the purchased track');
   assert.ok(!qa.includes("tap('[data-paid-collection-id="),
     'Single-quoted template placeholders never substitute the product ID in actual ADB taps');
 });

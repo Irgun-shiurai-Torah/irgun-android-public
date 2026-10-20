@@ -2,9 +2,10 @@ package org.irgunshiuraitorah.app;
 
 import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Build;
+import androidx.core.content.ContextCompat;
 import com.getcapacitor.JSObject;
-import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
@@ -19,26 +20,53 @@ import com.google.firebase.messaging.FirebaseMessaging;
     permissions = { @Permission(alias = "notifications", strings = { Manifest.permission.POST_NOTIFICATIONS }) }
 )
 public class IrgunPushPlugin extends Plugin {
+    // Android 13+ permission is a platform permission. Do not look it up via
+    // Capacitor's reflective permission-state lookup: on R8-optimized builds
+    // that path saw missing plugin annotation metadata and threw NPE in
+    // Bridge.getPermissionStates() on the native plugin HandlerThread.
+    // That fatal exception happened after account sign-in (while hydrating
+    // user-specific notification settings) on Samsung Android 16.
+    private boolean isNotificationPermissionGranted() {
+        if (Build.VERSION.SDK_INT < 33) return true;
+        android.content.Context context = getContext();
+        return context != null
+            && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
     @PluginMethod
     public void checkNotificationPermission(PluginCall call) {
         JSObject ret = new JSObject();
-        boolean granted = Build.VERSION.SDK_INT < 33 || getPermissionState("notifications") == PermissionState.GRANTED;
-        ret.put("granted", granted);
+        ret.put("granted", isNotificationPermissionGranted());
         call.resolve(ret);
     }
 
     @PluginMethod
     public void requestNotificationPermission(PluginCall call) {
-        if (Build.VERSION.SDK_INT < 33 || getPermissionState("notifications") == PermissionState.GRANTED) {
-            JSObject ret = new JSObject(); ret.put("granted", true); call.resolve(ret); return;
+        if (isNotificationPermissionGranted()) {
+            JSObject ret = new JSObject();
+            ret.put("granted", true);
+            call.resolve(ret);
+            return;
         }
-        requestPermissionForAlias("notifications", call, "notificationPermissionCallback");
+        try {
+            // Capacitor's alias request still needs the reflected metadata.
+            // Reject gracefully instead of letting a missing annotation
+            // bring down the entire Android process.
+            if (getPluginHandle() == null || getPluginHandle().getPluginAnnotation() == null) {
+                call.reject("Notification permission metadata is unavailable.");
+                return;
+            }
+            requestPermissionForAlias("notifications", call, "notificationPermissionCallback");
+        } catch (RuntimeException error) {
+            call.reject("Could not request notification permission.", error);
+        }
     }
 
     @PermissionCallback
     private void notificationPermissionCallback(PluginCall call) {
         JSObject ret = new JSObject();
-        ret.put("granted", getPermissionState("notifications") == PermissionState.GRANTED);
+        ret.put("granted", isNotificationPermissionGranted());
         call.resolve(ret);
     }
 

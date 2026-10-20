@@ -82,7 +82,7 @@ test('Audio-to-Video restores parked host before enabling native tracks and roll
   assert.ok(switcher.indexOf('const videoHostPrepared = mode')<
     switcher.indexOf('await player.setMode(mode,{offlineUri})'),
     'Host must be on-screen BEFORE enabling the Video track');
-  assert.match(switcher,/if\(videoHostPrepared\) parkHostedVideoForAudio\(\)/);
+  assert.match(switcher,/if\(videoHostPrepared\)\s*\{\s*parkHostedVideoForAudio\(\);[\s\S]*?render\(\);\s*\}/, 'Failed native Video activation must park the host and restore Audio UI');
   assert.match(switcher,/if\(mode==='video'\)\{\s*clearCurrentAudioStateForVideo\(\)/);
   assert.doesNotMatch(switcher,/new ExoPlayer\(|new MediaItem\(/);
 });
