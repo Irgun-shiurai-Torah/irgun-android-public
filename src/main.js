@@ -10067,7 +10067,7 @@ function showAndroidNativeVideoError(frame, detail) {
     notice.remove();
     state.watchNativeVideoFailedId = '';
     if (state.watchVimeo?.isIrgunNativeVideoPlayer) {
-      void state.watchVimeo.reconnect().then(ok=>{
+      void state.watchVimeo.reconnect({userInitiated:true}).then(ok=>{
         if(!ok) void initWatchVimeo(true);
       }).catch(()=>void initWatchVimeo(true));
     } else void initWatchVimeo(true);
