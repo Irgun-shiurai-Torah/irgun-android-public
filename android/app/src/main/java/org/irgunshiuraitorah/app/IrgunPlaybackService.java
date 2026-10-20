@@ -1609,6 +1609,39 @@ public class IrgunPlaybackService extends MediaSessionService {
         });
     }
 
+    private void refreshNativeVideoSourceInternal(String expectedLectureId, String hls, String mp4) {
+        if (player == null || !nativeVideoSourceActive || !nativeVideoSelected ||
+            !lectureId.equals(cleanStatic(expectedLectureId)) || !player.getPlayWhenReady()) return;
+        String nextHls = cleanStatic(hls);
+        String nextMp4 = cleanStatic(mp4);
+        String source = !nextHls.isEmpty() ? nextHls : nextMp4;
+        if (source.isEmpty()) return;
+        long position = Math.max(0L, player.getCurrentPosition());
+        float speed = player.getPlaybackParameters().speed;
+        cancelNetworkRecovery();
+        cancelNativeVideoStallWatch();
+        nativeVideoStallRestarts = 0;
+        nativeVideoHlsUrl = nextHls;
+        nativeVideoMp4Url = nextMp4;
+        nativeVideoUsingHls = !nextHls.isEmpty();
+        nativeVideoMp4FallbackAttempted = false;
+        nativeVideoFirstFrameRendered = false;
+        nativeVideoRenderedFrames = 0L;
+        player.setMediaItem(nativeVideoMediaItem(source, nativeVideoUsingHls), position);
+        player.prepare();
+        player.setPlaybackSpeed(speed);
+        player.setPlayWhenReady(true);
+        publishNativeState();
+        refreshMediaNotification();
+    }
+
+    public static void refreshNativeVideoSource(String lectureId, String hls, String mp4) {
+        onMain(() -> {
+            IrgunPlaybackService service = active();
+            if (service != null) service.refreshNativeVideoSourceInternal(lectureId, hls, mp4);
+        });
+    }
+
     private void recoverNativeVideoSourceInternal(PlaybackException error) {
         if (!nativeVideoSourceActive || player == null) return;
         cancelNativeVideoStallWatch();
