@@ -131,3 +131,13 @@ test('Android Audio tap waits for pending native Media3 adapter instead of racin
   assert.match(guard,/if \(!state\.watchVimeo\?\.isIrgunNativeVideoPlayer\)[\s\S]*?return false;/,
     'Do not enter the legacy Audio handoff if native Video is still initializing');
 });
+
+test('native Video readiness cancels cleanly when a fast Audio switch takes ownership',()=>{
+  const ready=adapter.slice(adapter.indexOf('    ready:async()=>{'),
+    adapter.indexOf('    destroy:async()=>{',adapter.indexOf('    ready:async()=>{')));
+  assert.match(ready,/if\(mode!=='video'\)return false/);
+  const init=js.slice(js.indexOf('async function initWatchVimeoOnce('),
+    js.indexOf('\nasync function loadComments()',js.indexOf('async function initWatchVimeoOnce(')));
+  assert.match(init,/const playerReady = await player\.ready\(\);[\s\S]*?playerReady === false[\s\S]*?await player\.destroy\?\.\(\);[\s\S]*?return;/,
+    'Audio selection during Video startup must retain Audio and skip the false Video error path');
+});
