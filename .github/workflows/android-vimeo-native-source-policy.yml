@@ -1,0 +1,46 @@
+name: Android Vimeo Native Media3 URL policy
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'android/app/src/main/java/org/irgunshiuraitorah/app/NativeVideoSourcePolicy.java'
+      - 'android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java'
+      - 'scripts/fixtures/NativeVideoSourcePolicyTest.java'
+      - 'scripts/test_android_native_media3_beta.mjs'
+      - '.github/workflows/android-vimeo-native-source-policy.yml'
+  push:
+    branches: [fix/android-native-vimeo-recorded-hosts-20261021, main]
+    paths:
+      - 'android/app/src/main/java/org/irgunshiuraitorah/app/NativeVideoSourcePolicy.java'
+      - 'android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java'
+      - 'scripts/fixtures/NativeVideoSourcePolicyTest.java'
+      - 'scripts/test_android_native_media3_beta.mjs'
+      - '.github/workflows/android-vimeo-native-source-policy.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-signed-source-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Compile and execute actual native URI security policy
+        shell: bash
+        run: |
+          mkdir -p /tmp/irgun-vimeo-policy-test
+          javac -d /tmp/irgun-vimeo-policy-test \
+            android/app/src/main/java/org/irgunshiuraitorah/app/NativeVideoSourcePolicy.java \
+            scripts/fixtures/NativeVideoSourcePolicyTest.java
+          java -cp /tmp/irgun-vimeo-policy-test org.irgunshiuraitorah.app.NativeVideoSourcePolicyTest
+      - name: Assert Media3 native bridge uses the policy and existing player features
+        run: node --test scripts/test_android_native_media3_beta.mjs scripts/test_android_media_source.mjs
