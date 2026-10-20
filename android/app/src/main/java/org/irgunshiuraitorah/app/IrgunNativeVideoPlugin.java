@@ -1078,6 +1078,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             response.put("videoSelected", state.videoSelected);
             response.put("playing", state.isPlaying);
             response.put("playWhenReady", state.playWhenReady);
+            response.put("networkRecoveryPending", state.networkRecoveryPending);
             response.put("firstFrame", state.firstFrame);
             response.put("frames", state.frameCount);
             response.put("positionMs", state.positionMs);
