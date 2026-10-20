@@ -116,3 +116,18 @@ test('native Media3 adapter prepositions the old PlayerView without replacing or
   await assert.rejects(failing.setMode('video'),/mode error/);
   assert.equal(failing.getMode(),'audio','The adapter must roll back its mode after a native rejection');
 });
+
+
+test('Android Audio tap waits for pending native Media3 adapter instead of racing a second player handoff',()=>{
+  const switcher=js.slice(js.indexOf('async function performWatchModeSwitch(mode) {'),
+    js.indexOf('async function switchWatchMode(mode) {'));
+  const guard=switcher.slice(0,switcher.indexOf('if (state.watchVimeo?.isIrgunNativeVideoPlayer) {'));
+  assert.match(guard,/nativeAndroidExpected/);
+  assert.match(guard,/!isAndroidVimeoOnlyVideo\(video\)/,
+    'Vimeo-only playback keeps its existing dedicated route');
+  assert.match(guard,/watchVimeoInitFlight/);
+  assert.match(guard,/void initWatchVimeo\(true\)/);
+  assert.match(guard,/await new Promise\(resolve=>setTimeout\(resolve,100\)\)/);
+  assert.match(guard,/if \(!state\.watchVimeo\?\.isIrgunNativeVideoPlayer\)[\s\S]*?return false;/,
+    'Do not enter the legacy Audio handoff if native Video is still initializing');
+});
