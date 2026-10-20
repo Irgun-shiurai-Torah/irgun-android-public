@@ -185,7 +185,7 @@ test('real task-dismissal flow initializes the first physical fling and verifies
   const report={gestures:[],checks:[]};
   const xml='<hierarchy><node package="com.google.android.apps.nexuslauncher" visible="true" resource-id="com.google.android.apps.nexuslauncher:id/overview_panel"/>'+
     '<node visible="true" content-desc="Screenshot of Irgun Shiurai Torah" resource-id="com.google.android.apps.nexuslauncher:id/snapshot" bounds="[30,180][290,550]"/></hierarchy>';
-  const recent='Recent tasks:\\n  * Recent #0: Task{abc #12 type=standard}\\n    realActivity=org.irgunshiuraitorah.app/.SplashActivity';
+  const recent='Recent tasks:\n  * Recent #0: Task{abc #12 type=standard}\n    realActivity=org.irgunshiuraitorah.app/.SplashActivity';
   let dismissed=false,snapshots=0,flings=0;
   const adb=(...argv)=>{
     const command=argv.join(' ');
@@ -202,7 +202,7 @@ test('real task-dismissal flow initializes the first physical fling and verifies
     pkg:'org.irgunshiuraitorah.app',writeFileSync:()=>{},
     execFileSync:()=>Buffer.from('png'),nativeHierarchy:()=>xml
   };
-  runInNewContext(flow+'\\nthis.dismiss=verifyAndroidTaskDismissal;',fake);
+  runInNewContext(flow+'\nthis.dismiss=verifyAndroidTaskDismissal;',fake);
   await fake.dismiss({adb,
     sample:async()=>({media3:{active:true,playing:true,playerIdentity:'same-player',
       positionMs:++snapshots*2000}}),
