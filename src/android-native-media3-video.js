@@ -3,6 +3,7 @@
 // Native Audio/Video are two track presentations of ONE ExoPlayer MediaItem.
 import {registerPlugin} from '@capacitor/core';
 import {getAndroidHlsSource} from './android-media-source.js';
+import {shouldRefreshNativeVideoSource, MAX_NATIVE_RESUME_REFRESHES} from './android-native-video-recovery.js';
 
 const native = registerPlugin('IrgunNativeVideo');
 const delay = ms => new Promise(resolve => setTimeout(resolve,ms));
@@ -27,6 +28,34 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
   let ticking=false,layoutRequested=false,observedFrame=null;
   let framePlacedOnScreen=false;
   let reportedError='',failedFrames=0;
+  let lastFrames=0,lastFrameAtMs=0,stalledSinceMs=0,lastRefreshAtMs=0,refreshAttempts=0,refreshingSource=false,nativeStartedAtMs=0;
+  const reconnect=async({userInitiated=false}={})=>{
+    if(destroyed||refreshingSource||mode!=='video'||
+        (!userInitiated&&refreshAttempts>=MAX_NATIVE_RESUME_REFRESHES))return false;
+    const initial=await refresh();
+    if(!initial.active||!initial.videoSelected||(!initial.playWhenReady&&!userInitiated))return false;
+    refreshingSource=true;
+    // Count failed lookups too; a lost connection must never cause repeated
+    // descriptor requests every half-second. The user may explicitly retry.
+    lastRefreshAtMs=Date.now();
+    refreshAttempts++;
+    try{
+      const fresh=await getAndroidHlsSource(String(apiBase).replace(/\/$/,''),String(videoId));
+      if(destroyed||mode!=='video')return false;
+      const latest=await refresh();
+      if(!latest.active||!latest.videoSelected||(!latest.playWhenReady&&!userInitiated))return false;
+      await native.refreshSource({
+        lectureId:String(videoId),hlsUrl:String(fresh.hls||''),mp4Url:String(fresh.mp4||''),
+        userRequested:userInitiated
+      });
+      // Native frame counters restart with the new MediaItem. The earlier
+      // error notice clears only after new decoded frames and real Play.
+      failedFrames=0;
+      lastFrames=0;
+      stalledSinceMs=Date.now();
+      return true;
+    } finally {refreshingSource=false;}
+  };
   const viewportFrame=()=>{
     // Query ALL matching nodes: during Audio -> Video the old persistent
     // iframe can still be connected while transformed 12,000px off-screen.
@@ -119,12 +148,33 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     cleanups.push(()=>window.removeEventListener(event,trackFrame,true));
   }
   const refresh=async()=>{last=await native.snapshot();return last;};
+  // Keep resume source monitoring separate from the legacy error-UI observer:
+  // one new frame is not proof that an earlier reported error has recovered.
+  const observeResumedStall=s=>{
+    const now=Date.now();
+    if(s.frames>lastFrames) {
+      lastFrames=s.frames;
+      lastFrameAtMs=now;
+      stalledSinceMs=0;
+      refreshAttempts=0;
+    } else if(mode==='video'&&s.videoSelected&&s.playWhenReady&&!document.hidden) {
+      if(!stalledSinceMs)stalledSinceMs=now;
+    } else stalledSinceMs=0;
+    if(!refreshingSource && shouldRefreshNativeVideoSource({
+      snapshot:s,foreground:!document.hidden,surfaceVisible:framePlacedOnScreen,
+      nowMs:now,lastFrameAtMs,stalledSinceMs,lastRefreshAtMs,refreshAttempts,
+      nativeStartedAtMs,resumedAtPosition:Number(resumeSeconds)>0
+    })) void reconnect().catch(error=>console.warn('[Media3] resumed source refresh failed',error));
+  };
   const tick=async()=>{
     if(destroyed||ticking)return;
     ticking=true;
     try{
       const s=await refresh();
       if(!s.active)return;
+      // Legacy unit tests evaluate tick independently; production closure supplies
+      // the additional monitor and remains governed by the same error UI rules.
+      if(typeof observeResumedStall==='function')observeResumedStall(s);
       // A native root can resize/rotate after the WebView has laid out. The
       // DOM placeholder may look visible while Android's REAL PlayerView is
       // still offscreen. Keep remeasuring until native visibility recovers.
@@ -203,14 +253,20 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     },
     updateFrame:trackFrame,
     refresh,
+    reconnect:options=>reconnect(options),
     ready:async()=>{
       for(let i=0;i<90&&!destroyed;i++){
         const s=await refresh();
+        // Audio can be selected while initial Video is still buffering. That
+        // is a successful cancellation of the Video-ready wait, not a video
+        // failure; the same ExoPlayer remains the Audio owner.
+        if(mode!=='video')return false;
         // A moving decoder is mandatory. Media3 READY alone is not enough.
         if(s.active&&s.videoSelected&&s.firstFrame&&s.frames>=2&&s.width>0)return true;
         if(s.error)throw new Error('Native Media3 video error: '+s.error);
         await delay(300);
       }
+      if(mode!=='video')return false;
       throw new Error('Native Media3 did not render actual frames');
     },
     destroy:async()=>{
@@ -226,6 +282,7 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     hlsUrl:String(source.hls||''),mp4Url:String(source.mp4||''),
     positionMs:Math.max(0,Math.round(Number(resumeSeconds||0)*1000)),
     speed:Number(speed)||1,playing:true});
+  nativeStartedAtMs=Date.now();
   trackFrame();
   await positionFrame();
   void tick();

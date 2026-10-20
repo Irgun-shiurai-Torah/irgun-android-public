@@ -2292,28 +2292,43 @@ function resetUserState() {
 
 async function loadMetadata() {
   let loaded=null;
-  // Prefer the copy actually bundled into the native app. Early WebView
-  // startup can temporarily fail its first local asset request; Android
-  // retries that local source rather than immediately depending on the web.
-  const attempts = Capacitor.getPlatform()==='android' ? 2 : 1;
+  const isAndroid = Capacitor.getPlatform()==='android';
+  // Prefer the copy actually bundled into the native app. Android's first
+  // WebView asset request can hang (not merely reject) while its local network
+  // stack is starting. Bound each request so bootstrap always reaches either
+  // the real library or its normal offline/error UI instead of a white screen.
+  const attempts = isAndroid ? 2 : 1;
   for (let attempt=0;attempt<attempts;attempt++) {
     try {
-      const response=await fetch('/library-metadata.json');
-      if (!response.ok) throw new Error('Bundled library metadata HTTP '+response.status);
-      const metadata=await response.json();
-      if (Capacitor.getPlatform()==='android' && (!Array.isArray(metadata?.speakers)||!Array.isArray(metadata?.topics)))
+      let metadata;
+      if (isAndroid) {
+        metadata = await fetchJsonWithTimeout('/library-metadata.json', {}, 5000);
+      } else {
+        const response=await fetch('/library-metadata.json');
+        if (!response.ok) throw new Error('Bundled library metadata HTTP '+response.status);
+        metadata=await response.json();
+      }
+      if (isAndroid && (!Array.isArray(metadata?.speakers)||!Array.isArray(metadata?.topics)))
         throw new Error('Incomplete bundled library metadata');
       loaded=metadata;
       break;
     } catch (error) {
       if(attempt+1<attempts)
         await new Promise(resolve=>setTimeout(resolve,300));
+      else if (isAndroid)
+        console.warn('Bundled library metadata unavailable after bounded retries', String(error?.message||error).slice(0,180));
     }
   }
   if(!loaded) {
-    const response=await fetch(`${WEBSITE}library-metadata.json`);
-    if(Capacitor.getPlatform()==='android'&&!response.ok)throw new Error('Website metadata HTTP '+response.status);
-    loaded=await response.json();
+    if (isAndroid) {
+      loaded = await fetchJsonWithTimeout(`${WEBSITE}library-metadata.json`, {}, 10000);
+      if (!Array.isArray(loaded?.speakers)||!Array.isArray(loaded?.topics))
+        throw new Error('Incomplete website library metadata');
+    } else {
+      const response=await fetch(`${WEBSITE}library-metadata.json`);
+      if (!response.ok) throw new Error('Website metadata HTTP '+response.status);
+      loaded=await response.json();
+    }
   }
   state.metadata=loaded;
 
@@ -7375,47 +7390,57 @@ function syncOpenFilterChecks(key, values) {
 }
 
 function bindPlayerSwipeToClose(sheet) {
-  let startY = 0;
-  let startX = 0;
-  let startAt = 0;
-  let dragging = false;
-  let distance = 0;
+  // A previous swipe that began while settings were scrolled MUST NOT become
+  // a dismiss gesture when the native player or an async render resets scroll.
+  // In particular, physical taps on 1.25x/1.5x/2x must never close the sheet.
+  let gesture = null;
   const reset = () => {
     sheet.classList.remove('dragging');
     sheet.style.transform = '';
   };
   sheet.addEventListener('touchstart', event => {
-    if (event.touches.length !== 1 || sheet.scrollTop > 0) return;
+    gesture = null;
+    reset();
+    if (event.touches.length !== 1) return;
     const touch = event.touches[0];
-    startY = touch.clientY;
-    startX = touch.clientX;
-    startAt = performance.now();
-    distance = 0;
-    dragging = false;
-  }, { passive: true });
+    const control = event.target?.closest?.('button, input, select, textarea, a, [role="button"]');
+    gesture = {
+      allowed: sheet.scrollTop <= 0 && !control,
+      startY:touch.clientY, startX:touch.clientX,
+      startAt:performance.now(), distance:0, dragging:false
+    };
+  }, { passive:true });
   sheet.addEventListener('touchmove', event => {
-    if (event.touches.length !== 1 || sheet.scrollTop > 0) return reset();
+    if (!gesture || !gesture.allowed || event.touches.length !== 1) return;
+    if (sheet.scrollTop > 0) {
+      gesture.allowed = false;
+      return reset();
+    }
     const touch = event.touches[0];
-    const dy = touch.clientY - startY;
-    const dx = Math.abs(touch.clientX - startX);
+    const dy = touch.clientY - gesture.startY;
+    const dx = Math.abs(touch.clientX - gesture.startX);
     if (dy <= 0 || dy < dx) return;
-    if (dy > 10) dragging = true;
-    if (!dragging) return;
-    distance = dy;
+    if (dy > 10) gesture.dragging = true;
+    if (!gesture.dragging) return;
+    gesture.distance = dy;
     sheet.classList.add('dragging');
     sheet.style.transform = `translateY(${Math.min(dy, window.innerHeight * 0.7)}px)`;
     event.preventDefault();
-  }, { passive: false });
+  }, { passive:false });
   sheet.addEventListener('touchend', () => {
-    if (!dragging) return reset();
-    const elapsed = Math.max(1, performance.now() - startAt);
-    const velocity = distance / elapsed;
-    if (distance > 105 || velocity > 0.65) {
+    const ended = gesture;
+    gesture = null;
+    if (!ended?.allowed || !ended.dragging || sheet.scrollTop > 0) return reset();
+    const elapsed = Math.max(1, performance.now() - ended.startAt);
+    if (ended.distance > 105 || ended.distance / elapsed > 0.65) {
       state.playerOpen = false;
       render();
     } else reset();
-  }, { passive: true });
-  sheet.addEventListener('touchcancel', reset, { passive: true });
+  }, { passive:true });
+  sheet.addEventListener('touchcancel', () => {
+    gesture = null;
+    reset();
+  }, { passive:true });
 }
 
 function refreshDonationProviderPanelFast() {
@@ -9858,6 +9883,50 @@ async function performWatchModeSwitch(mode) {
   const video = state.watchVideo;
   const id = videoId(video);
 
+  // A quick Audio tap can arrive after the Watch page renders but before
+  // createNativeMedia3VideoPlayer() has returned its adapter. Falling through
+  // to the legacy audio handoff in that window races the pending native Video
+  // start: the late start can reclaim VIDEO and leave the Audio panel at 0:00.
+  // For Android Drive-backed lectures, wait for the in-flight native adapter
+  // instead of starting a second competing handoff. Vimeo-only lectures retain
+  // their dedicated Vimeo path.
+  const nativeAndroidExpected = Capacitor.getPlatform()==='android' &&
+    !isAndroidVimeoOnlyVideo(video);
+  if (mode==='audio' && nativeAndroidExpected &&
+      !state.watchVimeo?.isIrgunNativeVideoPlayer) {
+    const tellNativeStillStarting=()=>{
+      setToast(currentLanguage()==='he'
+        ? 'הווידאו עדיין נטען. נסו שוב לעבור לאודיו בעוד רגע.'
+        : 'Video is still starting. Please try Audio again in a moment.');
+      return false;
+    };
+    // A non-native player for a Drive-backed Android lecture is an invalid
+    // ownership state; don't layer a second audio engine over it.
+    if (state.watchVimeo) return tellNativeStillStarting();
+    let initFlight = watchVimeoInitFlight &&
+      String(watchVimeoInitFlight.key)===String(id) ? watchVimeoInitFlight : null;
+    if (!initFlight) {
+      void initWatchVimeo(true);
+      initFlight = watchVimeoInitFlight &&
+        String(watchVimeoInitFlight.key)===String(id) ? watchVimeoInitFlight : null;
+    }
+    const deadline = Date.now()+12000;
+    while (!state.watchVimeo?.isIrgunNativeVideoPlayer && Date.now()<deadline &&
+        state.watchVideo && String(videoId(state.watchVideo))===String(id)) {
+      if (!watchVimeoInitFlight && !state.watchVimeo) break;
+      if (initFlight && watchVimeoInitFlight!==initFlight && !state.watchVimeo) break;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    if (!state.watchVimeo?.isIrgunNativeVideoPlayer &&
+        (state.watchVimeo || (watchVimeoInitFlight &&
+          String(watchVimeoInitFlight.key)===String(id)))) {
+      return tellNativeStillStarting();
+    }
+    // If the native initialization completed with a real failure, there is no
+    // late start left to race. The normal Audio fallback below can now try its
+    // verified audio URL instead of blocking listening indefinitely.
+  }
+
   if (state.watchVimeo?.isIrgunNativeVideoPlayer) {
     // Media3 beta: Audio/Video is a video-track selection change in the SAME
     // ExoPlayer and MediaSession. No pause, new MediaItem, hidden MP3 shadow,
@@ -10143,7 +10212,11 @@ function showAndroidNativeVideoError(frame, detail) {
   retry.addEventListener('click', () => {
     notice.remove();
     state.watchNativeVideoFailedId = '';
-    void initWatchVimeo(true);
+    if (state.watchVimeo?.isIrgunNativeVideoPlayer) {
+      void state.watchVimeo.reconnect({userInitiated:true}).then(ok=>{
+        if(!ok) showAndroidNativeVideoError(frame,new Error('Video reconnect did not start'));
+      }).catch(error=>showAndroidNativeVideoError(frame,error));
+    } else void initWatchVimeo(true);
   });
   notice.append(message,retry);
   container.append(notice);
@@ -10352,7 +10425,15 @@ async function initWatchVimeoOnce(userInitiated = false) {
     // performing a second network seek. Queue play immediately as well.
     if (userInitiated && !audioToVideoHandoff && !player.isIrgunNativeVideoPlayer) player.play().catch(() => {});
 
-    await player.ready();
+    const playerReady = await player.ready();
+    if (player.isIrgunNativeVideoPlayer && playerReady === false) {
+      // The user switched to Audio while the initial native Video frame was
+      // still buffering. Dispose only the Video adapter, retaining its native
+      // Media3 Audio session, and do not show a false Video error over Audio.
+      if (state.watchVimeo === player) state.watchVimeo = null;
+      try { await player.destroy?.(); } catch (_) {}
+      return;
+    }
     if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video' || !state.watchVideo || videoId(state.watchVideo) !== videoKey || state.watchVimeo !== player) {
       try { await player.destroy(); } catch (_) {}
       return;
@@ -10447,6 +10528,18 @@ async function initWatchVimeoOnce(userInitiated = false) {
   } catch (error) {
     if (Capacitor.getPlatform() === 'android') {
       if (generation === state.watchVimeoGeneration) {
+        // A native Video init can still be awaiting its first frame after the
+        // user has already switched the same lecture to Audio. A snapshot or
+        // readiness error from that abandoned Video wait must not clear the
+        // Audio adapter, mark Video permanently failed, or show an error over
+        // the working Audio panel.
+        if (state.watchMode !== 'video' || !state.watchVideo ||
+            String(videoId(state.watchVideo)) !== String(videoKey)) {
+          if (state.watchVimeo===player) state.watchVimeo=null;
+          state.watchVimeoReady=false;
+          try { await player?.destroy?.(); } catch (_) {}
+          return;
+        }
         if (state.watchVimeo===player) state.watchVimeo=null;
         state.watchVimeoReady=false;
         state.watchVideoPlaying=false;

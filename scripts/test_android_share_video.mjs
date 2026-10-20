@@ -116,3 +116,44 @@ test('native Media3 adapter prepositions the old PlayerView without replacing or
   await assert.rejects(failing.setMode('video'),/mode error/);
   assert.equal(failing.getMode(),'audio','The adapter must roll back its mode after a native rejection');
 });
+
+
+test('Android Audio tap waits for pending native Media3 adapter instead of racing a second player handoff',()=>{
+  const switcher=js.slice(js.indexOf('async function performWatchModeSwitch(mode) {'),
+    js.indexOf('async function switchWatchMode(mode) {'));
+  const guard=switcher.slice(0,switcher.indexOf('if (state.watchVimeo?.isIrgunNativeVideoPlayer) {'));
+  assert.match(guard,/nativeAndroidExpected/);
+  assert.match(guard,/!isAndroidVimeoOnlyVideo\(video\)/,
+    'Vimeo-only playback keeps its existing dedicated route');
+  assert.match(guard,/watchVimeoInitFlight/);
+  assert.match(guard,/void initWatchVimeo\(true\)/);
+  assert.match(guard,/await new Promise\(resolve=>setTimeout\(resolve,100\)\)/);
+  assert.match(guard,/const tellNativeStillStarting=\(\)=>\{[\s\S]*?return false;/);
+  assert.match(guard,/if \(state\.watchVimeo\) return tellNativeStillStarting\(\)/,
+    'Do not layer Audio over an unexpected non-native player');
+  assert.match(guard,/if \(!state\.watchVimeo\?\.isIrgunNativeVideoPlayer &&[\s\S]*?return tellNativeStillStarting\(\);/,
+    'Do not enter the legacy Audio handoff while native Video initialization is pending');
+});
+
+test('native Video readiness cancels cleanly when a fast Audio switch takes ownership',()=>{
+  const ready=adapter.slice(adapter.indexOf('    ready:async()=>{'),
+    adapter.indexOf('    destroy:async()=>{',adapter.indexOf('    ready:async()=>{')));
+  assert.match(ready,/if\(mode!=='video'\)return false/);
+  const init=js.slice(js.indexOf('async function initWatchVimeoOnce('),
+    js.indexOf('\nasync function loadComments()',js.indexOf('async function initWatchVimeoOnce(')));
+  assert.match(init,/const playerReady = await player\.ready\(\);[\s\S]*?playerReady === false[\s\S]*?await player\.destroy\?\.\(\);[\s\S]*?return;/,
+    'Audio selection during Video startup must retain Audio and skip the false Video error path');
+});
+
+
+test('late native Video startup errors cannot replace the selected Audio UI',()=>{
+  const from=js.indexOf('async function initWatchVimeoOnce(');
+  const to=js.indexOf('\nasync function loadComments()',from);
+  const init=js.slice(from,to);
+  assert.match(init,/const playerReady = await player\.ready\(\);[\s\S]*?playerReady === false[\s\S]*?return;/);
+  const catchStart=init.indexOf("} catch (error) {");
+  const androidCatch=init.slice(catchStart,init.indexOf('\n    if (generation === state.watchVimeoGeneration)',catchStart));
+  assert.match(androidCatch,/state\.watchMode !== 'video' \|\| !state\.watchVideo[\s\S]*?await player\?\.destroy\?\.\(\);[\s\S]*?return;/);
+  assert.ok(androidCatch.indexOf('return;')<androidCatch.indexOf('showAndroidNativeVideoError'),
+    'An abandoned Video init must return before displaying the Video error overlay');
+});
