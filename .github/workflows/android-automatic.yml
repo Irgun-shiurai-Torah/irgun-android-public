@@ -61,7 +61,8 @@ jobs:
             exit 2
           fi
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
+          test -x "$SDK_ROOT/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy"
 
       - name: Set automatic Android version
         id: version
