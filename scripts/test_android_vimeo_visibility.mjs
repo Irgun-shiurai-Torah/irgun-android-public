@@ -33,7 +33,9 @@ test('Native catalog identifies itself to API even when WebView Origin is omitte
   assert.match(main,/isNativeVideoCatalog = rawPath\.startsWith\('\/video-map'\)/);
   assert.match(main,/headers:\{'X-Irgun-App':'1'\}/);
   assert.match(main,/refreshAppVimeoVisibilityOnReturn\(\)/);
-  assert.match(main,/enabled!==previous && !bootstrapInFlight/);
+  assert.match(main,/mode!==previous && !bootstrapInFlight/);
+  const source=readFileSync(new URL('../src/android-media-source.js',import.meta.url),'utf8');
+  assert.ok(source.includes("headers:{'X-Irgun-App':'1'}"));
 });
 
 test('App OFF hides every explicitly Vimeo-only catalog item even when the Vimeo ID is malformed',()=>{
