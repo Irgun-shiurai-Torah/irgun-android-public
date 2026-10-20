@@ -35,3 +35,14 @@ test('Native catalog identifies itself to API even when WebView Origin is omitte
   assert.match(main,/refreshAppVimeoVisibilityOnReturn\(\)/);
   assert.match(main,/enabled!==previous && !bootstrapInFlight/);
 });
+
+test('App OFF hides every explicitly Vimeo-only catalog item even when the Vimeo ID is malformed',()=>{
+  const malformed={id:'vimeo-without-valid-id',vimeoId:'invalid',hasDriveVideo:false};
+  const unlisted={id:'1234567890:secret',vimeoId:'1234567890:secret',hasDriveVideo:false};
+  assert.deepEqual(visibleAndroidVideoCatalog([malformed,unlisted,driveCopy],false),[driveCopy]);
+});
+test('Drive-library and direct city videos stay visible regardless of Vimeo-only flag',()=>{
+  const city={id:'drivev-456',sourceType:'city-drive',directVideo:true,hasDriveVideo:false};
+  const folder={id:'drivev-123',sourceType:'drive-library',hasDriveVideo:false};
+  assert.deepEqual(visibleAndroidVideoCatalog([city,folder,vimeoOnly],false),[city,folder]);
+});
