@@ -147,20 +147,7 @@ jobs:
       - name: Verify Google Play release diagnostics
         if: ${{ steps.credentials.outputs.signing == 'true' }}
         shell: bash
-        run: |
-          set -euo pipefail
-          AAB=android/app/build/outputs/bundle/release/app-release.aab
-          MAPPING=android/app/build/outputs/mapping/release/mapping.txt
-          test -s "$AAB"
-          test -s "$MAPPING"
-          unzip -Z1 "$AAB" > "$RUNNER_TEMP/irgun-aab-entries.txt"
-          if grep -Eq '^base/lib/[^/]+/[^/]+[.]so$' "$RUNNER_TEMP/irgun-aab-entries.txt"; then
-            if ! grep -q '^BUNDLE-METADATA/com[.]android[.]tools[.]build[.]debugsymbols/' "$RUNNER_TEMP/irgun-aab-entries.txt"; then
-              echo "::error::The AAB contains native libraries but no embedded native debug symbols."
-              exit 1
-            fi
-          fi
-          echo "Release AAB and R8 mapping verified"
+        run: bash scripts/verify_android_native_symbols.sh android/app/build/outputs/bundle/release/app-release.aab android/app/build/outputs/mapping/release/mapping.txt build-artifacts/native-symbol-report warn
 
       - name: Stage downloadable build files
         shell: bash
