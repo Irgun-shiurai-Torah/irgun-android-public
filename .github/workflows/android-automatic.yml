@@ -61,7 +61,8 @@ jobs:
             exit 2
           fi
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973"
+          test -x "$SDK_ROOT/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy"
 
       - name: Set automatic Android version
         id: version
@@ -143,6 +144,11 @@ jobs:
         working-directory: android
         run: ./gradlew --no-daemon clean assembleDebug
 
+      - name: Verify Google Play release diagnostics
+        if: ${{ steps.credentials.outputs.signing == 'true' }}
+        shell: bash
+        run: bash scripts/verify_android_native_symbols.sh android/app/build/outputs/bundle/release/app-release.aab android/app/build/outputs/mapping/release/mapping.txt build-artifacts/native-symbol-report warn
+
       - name: Stage downloadable build files
         shell: bash
         run: |
@@ -153,6 +159,11 @@ jobs:
               "build-artifacts/IrgunApp-${IRGUN_ANDROID_VERSION_NAME}-vc${IRGUN_ANDROID_VERSION_CODE}-signed.apk"
             cp android/app/build/outputs/bundle/release/app-release.aab \
               "build-artifacts/IrgunApp-${IRGUN_ANDROID_VERSION_NAME}-vc${IRGUN_ANDROID_VERSION_CODE}.aab"
+            cp android/app/build/outputs/mapping/release/mapping.txt "build-artifacts/IrgunApp-${IRGUN_ANDROID_VERSION_NAME}-vc${IRGUN_ANDROID_VERSION_CODE}-r8-mapping.txt"
+            SYMBOLS=android/app/build/outputs/native-debug-symbols/release/native-debug-symbols.zip
+            if [ -s "$SYMBOLS" ]; then
+              cp "$SYMBOLS" "build-artifacts/IrgunApp-${IRGUN_ANDROID_VERSION_NAME}-vc${IRGUN_ANDROID_VERSION_CODE}-native-debug-symbols.zip"
+            fi
           else
             cp android/app/build/outputs/apk/debug/app-debug.apk \
               "build-artifacts/IrgunApp-${IRGUN_ANDROID_VERSION_NAME}-vc${IRGUN_ANDROID_VERSION_CODE}-debug.apk"
