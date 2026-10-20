@@ -68,6 +68,9 @@ test('runtime refresh retains a single native engine and lecture identity guard'
   assert.match(plugin, /public void refreshSource\(PluginCall call\)/);
   assert.match(plugin, /IrgunPlaybackService\.refreshNativeVideoSource\(/);
   assert.match(plugin, /userRequested/);
+  assert.match(plugin, /response\.put\("networkRecoveryPending", state\.networkRecoveryPending\)/);
+  assert.match(service, /networkRecoveryPending = s != null && s\.networkRecoveryPending/);
+  assert.match(adapter, /snapshot\.networkRecoveryPending === true/);
   assert.match(adapter, /refreshAttempts\+\+;[\s\S]*?getAndroidHlsSource/);
   assert.match(main, /reconnect\(\{userInitiated:true\}\)/);
   assert.match(service, /private void refreshNativeVideoSourceInternal\(/);
