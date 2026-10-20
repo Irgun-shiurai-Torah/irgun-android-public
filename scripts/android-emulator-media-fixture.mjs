@@ -47,8 +47,10 @@ export async function loadNativeEmulatorCatalogFixture(hlsId,{
   }catch(error){
     // Only the established, actually-played QA lecture has a fallback. A
     // custom fixture or live catalog reporting a missing lecture must FAIL.
-    if(selected!==KNOWN_NATIVE_MEDIA3_FIXTURE.id ||
-        /Selected test shiur missing/.test(String(error.message)))throw error;
+    // Bad catalog data or an explicit 4xx response is a genuine failure,
+    // not a reason to hide the problem behind cached metadata.
+    const transient=/Emulator fixture fetch failed|timeout|network|connection|fetch failed|socket/i.test(String(error.message));
+    if(selected!==KNOWN_NATIVE_MEDIA3_FIXTURE.id || !transient)throw error;
     return {target:{...KNOWN_NATIVE_MEDIA3_FIXTURE},
       candidates:[{...KNOWN_NATIVE_MEDIA3_FIXTURE}],lookup:'pinned-fixture',
       catalogError:String(error.message)};
