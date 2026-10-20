@@ -13,6 +13,7 @@ export function shouldRefreshNativeVideoSource({
 }) {
   if (!foreground || !surfaceVisible || !snapshot?.active ||
       !snapshot.videoSelected || snapshot.playWhenReady !== true ||
+      snapshot.networkRecoveryPending === true ||
       refreshAttempts >= MAX_NATIVE_RESUME_REFRESHES) return false;
   if (!(stalledSinceMs > 0)) return false;
   // On an app process recreation, Android can restore an hours-old bookmark
