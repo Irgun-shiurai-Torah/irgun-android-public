@@ -222,3 +222,16 @@ test('City Admin performs resumable chunk upload and publishes only after metada
     URL.revokeObjectURL=originalRevokeObjectUrl;
   }
 });
+
+test('Admin exposes separate WEBSITE and APP Vimeo-only visibility controls',()=>{
+  const admin=readFileSync(new URL('../src/admin-website-parity.js',import.meta.url),'utf8');
+  const main=readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
+  assert.match(admin,/name="showVimeoOnlyWebsite"/);
+  assert.match(admin,/name="showVimeoOnlyApp"/);
+  assert.match(admin,/showVimeoOnlyWebsite:text\(values\.get\('showVimeoOnlyWebsite'\)\)==='true'/);
+  assert.match(admin,/showVimeoOnlyApp:text\(values\.get\('showVimeoOnlyApp'\)\)==='true'/);
+  assert.match(admin,/onAppVimeoVisibilityChanged/);
+  assert.match(main,/visibleAndroidVideoCatalog\(videos,state\.showVimeoOnlyApp\)/);
+  assert.match(main,/loadAppVimeoOnlyVisibility\(\)/);
+  assert.match(main,/!state\.showVimeoOnlyApp && isAndroidVimeoOnlyVideo\(video\)/);
+});
