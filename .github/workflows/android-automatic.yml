@@ -20,7 +20,7 @@ concurrency:
 
 env:
   PACKAGE_NAME: org.irgunshiuraitorah.app
-  ANDROID_BASE_VERSION_CODE: "94"
+  ANDROID_BASE_VERSION_CODE: "100"
 
 jobs:
   build:
