@@ -64,13 +64,15 @@ test('runtime refresh retains a single native engine and lecture identity guard'
   const service=read('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunPlaybackService.java');
   const plugin=read('android/app/src/main/java/org/irgunshiuraitorah/app/IrgunNativeVideoPlugin.java');
   const adapter=read('src/android-native-media3-video.js');
+  const guard=read('src/android-native-video-recovery.js');
   const main=read('src/main.js');
   assert.match(plugin, /public void refreshSource\(PluginCall call\)/);
   assert.match(plugin, /IrgunPlaybackService\.refreshNativeVideoSource\(/);
   assert.match(plugin, /userRequested/);
   assert.match(plugin, /response\.put\("networkRecoveryPending", state\.networkRecoveryPending\)/);
   assert.match(service, /networkRecoveryPending = s != null && s\.networkRecoveryPending/);
-  assert.match(adapter, /snapshot\.networkRecoveryPending === true/);
+  assert.match(guard, /snapshot\.networkRecoveryPending === true/);
+  assert.match(adapter, /snapshot:s/);
   assert.match(adapter, /refreshAttempts\+\+;[\s\S]*?getAndroidHlsSource/);
   assert.match(main, /reconnect\(\{userInitiated:true\}\)/);
   assert.match(service, /private void refreshNativeVideoSourceInternal\(/);
