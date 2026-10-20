@@ -9817,6 +9817,15 @@ async function performWatchModeSwitch(mode) {
     !isAndroidVimeoOnlyVideo(video);
   if (mode==='audio' && nativeAndroidExpected &&
       !state.watchVimeo?.isIrgunNativeVideoPlayer) {
+    const tellNativeStillStarting=()=>{
+      setToast(currentLanguage()==='he'
+        ? 'הווידאו עדיין נטען. נסו שוב לעבור לאודיו בעוד רגע.'
+        : 'Video is still starting. Please try Audio again in a moment.');
+      return false;
+    };
+    // A non-native player for a Drive-backed Android lecture is an invalid
+    // ownership state; don't layer a second audio engine over it.
+    if (state.watchVimeo) return tellNativeStillStarting();
     let initFlight = watchVimeoInitFlight &&
       String(watchVimeoInitFlight.key)===String(id) ? watchVimeoInitFlight : null;
     if (!initFlight) {
@@ -9831,12 +9840,14 @@ async function performWatchModeSwitch(mode) {
       if (initFlight && watchVimeoInitFlight!==initFlight && !state.watchVimeo) break;
       await new Promise(resolve=>setTimeout(resolve,100));
     }
-    if (!state.watchVimeo?.isIrgunNativeVideoPlayer) {
-      setToast(currentLanguage()==='he'
-        ? 'הווידאו עדיין נטען. נסו שוב לעבור לאודיו בעוד רגע.'
-        : 'Video is still starting. Please try Audio again in a moment.');
-      return false;
+    if (!state.watchVimeo?.isIrgunNativeVideoPlayer &&
+        (state.watchVimeo || (watchVimeoInitFlight &&
+          String(watchVimeoInitFlight.key)===String(id)))) {
+      return tellNativeStillStarting();
     }
+    // If the native initialization completed with a real failure, there is no
+    // late start left to race. The normal Audio fallback below can now try its
+    // verified audio URL instead of blocking listening indefinitely.
   }
 
   if (state.watchVimeo?.isIrgunNativeVideoPlayer) {
