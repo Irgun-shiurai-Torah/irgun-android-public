@@ -113,9 +113,10 @@ test('Android startup shows cached lectures immediately without prematurely clai
       data:[{id:'cached-shiur',title:'Saved shiur'}],savedAt:987654321
     }};
     const state={libraryReady:false,loading:true,usingCachedLibrary:false,offlineCacheSavedAt:0,
-      counter:50,trends:{week:new Map(),month:new Map(),all:new Map()}};
+      counter:50,trends:{week:new Map(),month:new Map(),all:new Map()},showVimeoOnlyApp:true};
     const renderCalls=[];
     const deps={state,loadMetadata:async()=>{},offlineCacheGet:async key=>cache[key]||null,
+      visibleAndroidVideoCatalog:videos=>videos,
       enrichVideo:v=>v,enrichAudio:v=>v,itemDate:()=>0,videoId:v=>v.id,rawAudioId:v=>v.id,
       render:()=>renderCalls.push({ready:state.libraryReady,offline:state.usingCachedLibrary}),
       console:{warn:()=>{}},Capacitor:{getPlatform:()=>platform},

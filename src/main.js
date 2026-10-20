@@ -15,6 +15,7 @@ import {verifiedPurchasedIds,mergeVerifiedPaidCatalog,paidCatalogAccountKey} fro
 import {createAndroidPaidQuestionController} from './android-paid-index-controller.js';
 import {bindAndroidPlayerSheetInteractions,preserveAndroidPlayerSheetScroll} from './android-player-controls.js';
 import {isAndroidVimeoOnlyVideo,createAndroidVimeoPlayer} from './android-vimeo-playback.js';
+import {visibleAndroidVideoCatalog} from './android-vimeo-visibility.js';
 import {createAndroidVideoDisplaySync} from './android-video-display.js';
 import {androidNavigationRoot,createAndroidBottomNavigation,prepareAndroidTabNavigation} from './android-bottom-navigation.js';
 const androidPlayerSheetRenderGate=bindAndroidPlayerSheetInteractions({document,view:window,
@@ -34,6 +35,8 @@ const API = 'https://api.irgunshiuraitorah.com';
 const WEBSITE = 'https://irgunshiuraitorah.com/';
 usageAnalytics.configure('15.1.23');
 const TOKEN_KEY = 'istAppSessionToken';
+const APP_VIMEO_VISIBLE_KEY='istAppShowVimeoOnlyLectures';
+const APP_VIMEO_MODE_KEY='istAppVimeoOnlyMode';
 const SPEED_KEY = 'istPlaybackSpeed';
 const VISITOR_KEY = 'istAppVisitorId';
 const OFFLINE_DOWNLOADS_KEY = 'istOfflineDownloadsV1';
@@ -190,6 +193,13 @@ const state = {
   offlineCacheSavedAt: 0,
   screen: 'home',
   videos: [],
+  // Native APP visibility is independent of the WEBSITE Admin setting.
+  showVimeoOnlyApp: localStorage.getItem(APP_VIMEO_MODE_KEY)
+    ? localStorage.getItem(APP_VIMEO_MODE_KEY)!=='off'
+    : localStorage.getItem(APP_VIMEO_VISIBLE_KEY)!=='0',
+  vimeoOnlyAppMode: ['off','vimeo','our-player'].includes(localStorage.getItem(APP_VIMEO_MODE_KEY))
+    ? localStorage.getItem(APP_VIMEO_MODE_KEY)
+    : localStorage.getItem(APP_VIMEO_VISIBLE_KEY)==='0'?'off':'vimeo',
   audioItems: [],
   videoById: new Map(),
   audioById: new Map(),
@@ -2124,7 +2134,13 @@ async function bootstrapJson(path) {
       // be missing from the app. Catalog endpoints now get a longer window, explicit
       // no-store, and a harmless cache-busting query while retaining the offline fallback.
       const isCatalog = rawPath.startsWith('/video-map') || rawPath.startsWith('/audio-map');
-      const options = isCatalog ? { cache:'no-store' } : undefined;
+      // Mark native video-catalog requests explicitly. Some WebView/network
+      // stacks omit Origin; without this header the API could apply the
+      // WEBSITE switch to the APP when the two switches differ.
+      const isNativeVideoCatalog = rawPath.startsWith('/video-map') && Capacitor.getPlatform()!=='web';
+      const options = isCatalog
+        ? { cache:'no-store', ...(isNativeVideoCatalog ? {headers:{'X-Irgun-App':'1'}} : {}) }
+        : undefined;
       const timeoutMs = isCatalog ? 20000 : 7000;
       const separator = rawPath.includes('?') ? '&' : '?';
       // A cold Android WebView can fail its FIRST live catalog request before
@@ -2569,6 +2585,58 @@ async function bootstrapJsonOr(path, fallback) {
   try { return await bootstrapJson(path); } catch (_) { return fallback; }
 }
 
+function applyAppVimeoOnlyVisibility(selection) {
+  if (Capacitor.getPlatform()!=='android') return;
+  // A legacy visibility-only backend still means Vimeo's embedded player.
+  const mode = ['off','vimeo','our-player'].includes(selection)
+    ? selection : (selection===false?'off':'vimeo');
+  const previousMode=state.vimeoOnlyAppMode;
+  state.vimeoOnlyAppMode=mode;
+  state.showVimeoOnlyApp=mode!=='off';
+  try {
+    localStorage.setItem(APP_VIMEO_MODE_KEY,mode);
+    localStorage.setItem(APP_VIMEO_VISIBLE_KEY,state.showVimeoOnlyApp?'1':'0');
+  } catch(_){}
+  if((mode==='off'||(previousMode!==mode && state.watchVideo && isAndroidVimeoOnlyVideo(state.watchVideo))) &&
+      state.watchVideo && isAndroidVimeoOnlyVideo(state.watchVideo))
+    void closeWatch(false).catch(error=>console.warn('Vimeo-only player close failed',error));
+  state.videos=visibleAndroidVideoCatalog(state.videos,state.showVimeoOnlyApp);
+  state.videoById=new Map(state.videos.map(video=>[videoId(video),video]));
+}
+
+async function loadAppVimeoOnlyVisibility() {
+  if(Capacitor.getPlatform()!=='android')return state.vimeoOnlyAppMode;
+  if(navigator.onLine===false)return state.vimeoOnlyAppMode;
+  try {
+    const settings=await fetchJsonWithTimeout(`${API}/playback-routing`,{cache:'no-store'},5000);
+    const mode = ['off','vimeo','our-player'].includes(settings.vimeoOnlyAppMode)
+      ? settings.vimeoOnlyAppMode : settings.showVimeoOnlyApp===false?'off':'vimeo';
+    applyAppVimeoOnlyVisibility(mode);
+  } catch(error) {
+    console.warn('Using last-known app Vimeo-only playback mode while settings are unavailable',error);
+  }
+  return state.vimeoOnlyAppMode;
+}
+
+let foregroundVimeoVisibilityCheck = null;
+let lastForegroundVimeoVisibilityAt = 0;
+function refreshAppVimeoVisibilityOnReturn() {
+  if(Capacitor.getPlatform()!=='android' || document.hidden ||
+      navigator.onLine===false || !state.libraryReady || bootstrapInFlight) return;
+  if(foregroundVimeoVisibilityCheck || Date.now()-lastForegroundVimeoVisibilityAt<12000)return;
+  lastForegroundVimeoVisibilityAt=Date.now();
+  const previous=state.vimeoOnlyAppMode;
+  foregroundVimeoVisibilityCheck=loadAppVimeoOnlyVisibility()
+    .then(mode=>{
+      // A change made in Website Admin must also update an already-open app
+      // when it returns to the foreground, including restoring a hidden list.
+      if(mode!==previous && !bootstrapInFlight)
+        return bootstrap({background:true});
+    })
+    .catch(error=>console.warn('Could not refresh Vimeo-only app visibility',error))
+    .finally(()=>{foregroundVimeoVisibilityCheck=null;});
+}
+
 async function hydrateInitialCatalogCache() {
   if (state.libraryReady) return false;
   try {
@@ -2591,7 +2659,8 @@ async function hydrateInitialCatalogCache() {
     const all = cached[4]?.data || { items:[] };
     const counter = cached[5]?.data || { count:state.counter };
     const likeCounts = cached[6]?.data || {};
-    state.videos = videos.map(enrichVideo).sort((a,b)=>itemDate(b)-itemDate(a));
+    state.videos = visibleAndroidVideoCatalog(videos,state.showVimeoOnlyApp)
+      .map(enrichVideo).sort((a,b)=>itemDate(b)-itemDate(a));
     state.audioItems = (audios.items || []).map(enrichAudio).sort((a,b)=>itemDate(b)-itemDate(a));
     state.videoById = new Map(state.videos.map(v => [videoId(v), v]));
     state.audioById = new Map(state.audioItems.map(a => [rawAudioId(a), a]));
@@ -2640,10 +2709,11 @@ async function bootstrap(options = {}) {
       bootstrapJsonOr('/trending?period=month&limit=2500', { items:[] }),
       bootstrapJsonOr('/trending?period=all&limit=2500', { items:[] }),
       bootstrapJsonOr('/shiur-view-count', { count:1124579 }),
-      bootstrapJsonOr('/like-counts', {})
+      bootstrapJsonOr('/like-counts', {}),
+      loadAppVimeoOnlyVisibility()
     ]);
 
-    state.videos = (Array.isArray(videos) ? videos : []).map(enrichVideo)
+    state.videos = visibleAndroidVideoCatalog(videos,state.showVimeoOnlyApp).map(enrichVideo)
       .sort((a, b) => itemDate(b) - itemDate(a));
     state.audioItems = (audios.items || []).map(enrichAudio)
       .sort((a, b) => itemDate(b) - itemDate(a));
@@ -5164,7 +5234,13 @@ const websiteAdminParity=createWebsiteAdminParity({
   userKey:()=>String(state.user?.id||state.user?.email||''),
   render:()=>render(),
   toast:message=>setToast(message),
-  ask:message=>window.confirm(message)
+  ask:message=>window.confirm(message),
+  onAppVimeoVisibilityChanged:enabled=>{
+    applyAppVimeoOnlyVisibility(enabled);
+    // The server also filters the catalogue. Refetch immediately so turning
+    // App ON restores any Vimeo-only lecture absent from the current list.
+    if(!bootstrapInFlight)void bootstrap({background:true});
+  }
 });
 
 function accountAdminHtml(){
@@ -9614,7 +9690,8 @@ audio.addEventListener('error', () => {
 
 async function openWatch(id, requestedTime = null, options = {}) {
   const video = state.videoById.get(String(id));
-  if (!video) return;
+  if (!video || (Capacitor.getPlatform()==='android' &&
+    !state.showVimeoOnlyApp && isAndroidVimeoOnlyVideo(video))) return;
   usageAnalytics.event('shiur_opened',{shiurId:String(id),mediaType:'video',dedupeKey:`shiur-open:${id}`,cooldownMs:60000});
   usageAnalytics.setMedia({isPlaying:false,mediaType:'video',playerState:'paused',shiurId:String(id)});
   const fromAudio = Boolean(options && options.fromAudio && currentAudioIsAuthoritative() && state.current && state.current.id === String(id));
@@ -10168,7 +10245,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
   const frame = document.getElementById('watchVimeoFrame');
   if (!video || !frame || state.watchMode !== 'video') return;
   const directOnly = video.sourceType === 'drive-library';
-  const androidVimeoOnly = Capacitor.getPlatform()==='android' && isAndroidVimeoOnlyVideo(video);
+  const androidVimeoOnly = Capacitor.getPlatform()==='android' && isAndroidVimeoOnlyVideo(video) && state.vimeoOnlyAppMode!=='our-player';
   // Android HLS must start even if the optional Vimeo SDK is blocked or late.
   if (!directOnly && Capacitor.getPlatform() !== 'android' && !window.Vimeo?.Player) return;
   const generation = state.watchVimeoGeneration;
@@ -10795,11 +10872,15 @@ function refreshPlaybackAfterForeground() {
   });
 }
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) refreshPlaybackAfterForeground();
+  if (!document.hidden) {
+    refreshPlaybackAfterForeground();
+    refreshAppVimeoVisibilityOnReturn();
+  }
   if (!document.hidden && (state.error || state.offlineMode || state.usingCachedLibrary)) bootstrap({ background:true });
 });
 window.addEventListener('focus', () => {
   refreshPlaybackAfterForeground();
+  refreshAppVimeoVisibilityOnReturn();
   handlePendingPushOpen();
   if (state.error || state.offlineMode || state.usingCachedLibrary) bootstrap({ background:true });
 });

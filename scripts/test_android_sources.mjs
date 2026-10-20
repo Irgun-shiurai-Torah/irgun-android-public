@@ -823,13 +823,14 @@ test('logout shows the start of the sign-in form after a scrolled account profil
 test('restart restores the exact Drive-inclusive catalog cache and retains legacy caches',async()=>{
   for(const path of ['/video-map?driveLibrary=1','/video-map']) {
     const video={id:'drivev-restart',title:'Saved Drive lecture'};
-    const state={counter:1,trends:{}};
+    const state={counter:1,trends:{},showVimeoOnlyApp:true};
     const cache=new Map([['bootstrap:'+path,{data:[video],savedAt:123}]]);
     const context={state,Math,Map,console:{warn(){}},loadMetadata:async()=>{},
       // Warm-start cache is usable while online without falsely announcing
       // an offline fallback. Its platform/network context must be explicit.
       Capacitor:{getPlatform:()=> 'android'},navigator:{onLine:true},
       offlineCacheGet:async key=>cache.get(key)||null,enrichVideo:v=>v,enrichAudio:v=>v,
+      visibleAndroidVideoCatalog:videos=>videos,
       itemDate:()=>0,videoId:v=>v.id,rawAudioId:v=>v.id,render(){}};
     const start=mainSource.indexOf('async function hydrateInitialCatalogCache(');
     runInNewContext(mainSource.slice(start,mainSource.indexOf('async function bootstrap(',start))+'\nthis.hydrate=hydrateInitialCatalogCache;',context);
@@ -924,13 +925,14 @@ test('Android cold offline restart restores only verified identity even if netwo
   }
 });
 test('ready catalog and restored account remain usable while secondary startup feeds are pending',async()=>{
-  const state={libraryReady:false,loading:true,counter:1,trends:{},screen:'home'};
+  const state={libraryReady:false,loading:true,counter:1,trends:{},screen:'home',showVimeoOnlyApp:true};
   const rendered=[];const stalled=new Promise(()=>{});
   const context={state,Map,navigator:{onLine:true},console:{error(){},warn(){}},bootstrapInFlight:false,
     // The source slice runs in a VM, so supply the newly introduced offline
     // account helper even though this particular scenario is online.
     restoreOfflineAccount:()=>{},
     loadMetadata:async()=>{},initNativeDownloader:async()=>{},
+    loadAppVimeoOnlyVisibility:async()=>true,visibleAndroidVideoCatalog:videos=>videos,
     bootstrapJson:async()=>[{id:'lecture'}],bootstrapJsonOr:async(_,fallback)=>fallback,
     enrichVideo:v=>v,enrichAudio:v=>v,itemDate:()=>0,videoId:v=>v.id,rawAudioId:v=>v.id,
     restoreSession:async()=>{state.user={id:1};state.playlists=[{id:'server-playlist'}];},
