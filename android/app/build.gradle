@@ -62,6 +62,11 @@ android {
             } else if (irgunHasReleaseSigning) {
                 signingConfig signingConfigs.release
             }
+            // Include native function-name symbols in release AABs for Google Play
+            // crash/ANR symbolication. R8 mapping for Java/Kotlin stays separate.
+            ndk {
+                debugSymbolLevel 'SYMBOL_TABLE'
+            }
             // Optimize/obfuscate DEX code for Google Play. Keep resource
             // shrinking off until it has been independently verified.
             minifyEnabled true
