@@ -109,7 +109,14 @@ export async function verifyAndroidTaskDismissal({adb,sample,delay,report}) {
   writeFileSync('emulator-report/task-dismissal-activity-recents.txt',recentDump);
   assert.equal(topRecentTaskIsIrgun(recentDump),true,
     'Android ActivityManager must expose the actual Irgun task before dismissal');
-  let recentAfter='',taskDismissed=false,lastGesture=gesture;
+  // The initial gesture is computed from the verified first Overview card.
+  // Later attempts recompute against fresh accessibility bounds inside the loop.
+  // Do not reference an uninitialized "gesture" variable here: that made
+  // every real-playback emulator job fail *after playback succeeded*.
+  let recentAfter='',taskDismissed=false;
+  let lastGesture=recentsDismissGesture(hierarchy,{
+    width:Number(size[1]),height:Number(size[2]),topTaskIsIrgun:true,attempt:0
+  });
   // Retry only with fresh accessibility bounds and physical swipes at distinct
   // points in the verified Irgun card. Never force-stop or shell-remove a task.
   for(let attempt=0;attempt<3&&!taskDismissed;attempt++){
