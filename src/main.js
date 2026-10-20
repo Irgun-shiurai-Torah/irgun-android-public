@@ -36,6 +36,7 @@ const WEBSITE = 'https://irgunshiuraitorah.com/';
 usageAnalytics.configure('15.1.23');
 const TOKEN_KEY = 'istAppSessionToken';
 const APP_VIMEO_VISIBLE_KEY='istAppShowVimeoOnlyLectures';
+const APP_VIMEO_MODE_KEY='istAppVimeoOnlyMode';
 const SPEED_KEY = 'istPlaybackSpeed';
 const VISITOR_KEY = 'istAppVisitorId';
 const OFFLINE_DOWNLOADS_KEY = 'istOfflineDownloadsV1';
@@ -194,6 +195,9 @@ const state = {
   videos: [],
   // Native APP visibility is independent of the WEBSITE Admin setting.
   showVimeoOnlyApp: localStorage.getItem(APP_VIMEO_VISIBLE_KEY)!=='0',
+  vimeoOnlyAppMode: ['off','vimeo','our-player'].includes(localStorage.getItem(APP_VIMEO_MODE_KEY))
+    ? localStorage.getItem(APP_VIMEO_MODE_KEY)
+    : localStorage.getItem(APP_VIMEO_VISIBLE_KEY)==='0'?'off':'vimeo',
   audioItems: [],
   videoById: new Map(),
   audioById: new Map(),
@@ -2564,26 +2568,37 @@ async function bootstrapJsonOr(path, fallback) {
   try { return await bootstrapJson(path); } catch (_) { return fallback; }
 }
 
-function applyAppVimeoOnlyVisibility(enabled) {
+function applyAppVimeoOnlyVisibility(selection) {
   if (Capacitor.getPlatform()!=='android') return;
-  state.showVimeoOnlyApp=Boolean(enabled);
-  try { localStorage.setItem(APP_VIMEO_VISIBLE_KEY,state.showVimeoOnlyApp?'1':'0'); } catch(_){}
-  if(!state.showVimeoOnlyApp && state.watchVideo && isAndroidVimeoOnlyVideo(state.watchVideo))
+  // A legacy visibility-only backend still means Vimeo's embedded player.
+  const mode = ['off','vimeo','our-player'].includes(selection)
+    ? selection : (selection===false?'off':'vimeo');
+  const previousMode=state.vimeoOnlyAppMode;
+  state.vimeoOnlyAppMode=mode;
+  state.showVimeoOnlyApp=mode!=='off';
+  try {
+    localStorage.setItem(APP_VIMEO_MODE_KEY,mode);
+    localStorage.setItem(APP_VIMEO_VISIBLE_KEY,state.showVimeoOnlyApp?'1':'0');
+  } catch(_){}
+  if((mode==='off'||(previousMode!==mode && state.watchVideo && isAndroidVimeoOnlyVideo(state.watchVideo))) &&
+      state.watchVideo && isAndroidVimeoOnlyVideo(state.watchVideo))
     void closeWatch(false).catch(error=>console.warn('Vimeo-only player close failed',error));
   state.videos=visibleAndroidVideoCatalog(state.videos,state.showVimeoOnlyApp);
   state.videoById=new Map(state.videos.map(video=>[videoId(video),video]));
 }
 
 async function loadAppVimeoOnlyVisibility() {
-  if(Capacitor.getPlatform()!=='android')return true;
-  if(navigator.onLine===false)return state.showVimeoOnlyApp;
+  if(Capacitor.getPlatform()!=='android')return state.vimeoOnlyAppMode;
+  if(navigator.onLine===false)return state.vimeoOnlyAppMode;
   try {
     const settings=await fetchJsonWithTimeout(`${API}/playback-routing`,{cache:'no-store'},5000);
-    applyAppVimeoOnlyVisibility(settings.showVimeoOnlyApp!==false);
+    const mode = ['off','vimeo','our-player'].includes(settings.vimeoOnlyAppMode)
+      ? settings.vimeoOnlyAppMode : settings.showVimeoOnlyApp===false?'off':'vimeo';
+    applyAppVimeoOnlyVisibility(mode);
   } catch(error) {
-    console.warn('Using last-known app Vimeo-only visibility while settings are unavailable',error);
+    console.warn('Using last-known app Vimeo-only playback mode while settings are unavailable',error);
   }
-  return state.showVimeoOnlyApp;
+  return state.vimeoOnlyAppMode;
 }
 
 let foregroundVimeoVisibilityCheck = null;
@@ -2593,7 +2608,7 @@ function refreshAppVimeoVisibilityOnReturn() {
       navigator.onLine===false || !state.libraryReady || bootstrapInFlight) return;
   if(foregroundVimeoVisibilityCheck || Date.now()-lastForegroundVimeoVisibilityAt<12000)return;
   lastForegroundVimeoVisibilityAt=Date.now();
-  const previous=state.showVimeoOnlyApp;
+  const previous=state.vimeoOnlyAppMode;
   foregroundVimeoVisibilityCheck=loadAppVimeoOnlyVisibility()
     .then(enabled=>{
       // A change made in Website Admin must also update an already-open app
@@ -10155,7 +10170,7 @@ async function initWatchVimeoOnce(userInitiated = false) {
   const frame = document.getElementById('watchVimeoFrame');
   if (!video || !frame || state.watchMode !== 'video') return;
   const directOnly = video.sourceType === 'drive-library';
-  const androidVimeoOnly = Capacitor.getPlatform()==='android' && isAndroidVimeoOnlyVideo(video);
+  const androidVimeoOnly = Capacitor.getPlatform()==='android' && isAndroidVimeoOnlyVideo(video) && state.vimeoOnlyAppMode!=='our-player';
   // Android HLS must start even if the optional Vimeo SDK is blocked or late.
   if (!directOnly && Capacitor.getPlatform() !== 'android' && !window.Vimeo?.Player) return;
   const generation = state.watchVimeoGeneration;
