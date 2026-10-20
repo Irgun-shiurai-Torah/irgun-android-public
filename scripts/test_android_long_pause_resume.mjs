@@ -27,7 +27,11 @@ test('explicit Pause, background, Audio mode and covered video never restart',()
   ]) assert.equal(shouldRefreshNativeVideoSource({...args,...change}),false);
 });
 
-test('never disturb a lecture that has not decoded its initial frame',()=>{
+test('restored bookmark with no first frame refreshes after a generous startup window',()=>{
+  const opened={...args,lastFrameAtMs:0,resumedAtPosition:true,nativeStartedAtMs:now-15000,stalledSinceMs:now-15000};
+  assert.equal(shouldRefreshNativeVideoSource(opened),true);
+  assert.equal(shouldRefreshNativeVideoSource({...opened,nativeStartedAtMs:now-12000}),false);
+  assert.equal(shouldRefreshNativeVideoSource({...opened,resumedAtPosition:false}),false);
   assert.equal(shouldRefreshNativeVideoSource({...args,lastFrameAtMs:0}),false);
   assert.equal(shouldRefreshNativeVideoSource({...args,stalledSinceMs:0}),false);
 });
