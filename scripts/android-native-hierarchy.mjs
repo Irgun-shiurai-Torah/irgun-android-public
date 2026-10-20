@@ -13,18 +13,22 @@ export function nativeHierarchy(evidencePath,{allWindows=false,run=execFileSync}
     ...(allWindows?['-e','allWindows','true']:[]),
     'org.irgunshiuraitorah.qa/.WindowObserver'];
   let result;
-  try {
-    result=adb(...observe);
-  } catch(error) {
-    // Some emulators briefly drop ADB while entering fullscreen or PiP.
-    // Repeat only this read-only observation once after confirming that the
-    // app process never restarted. Do not retry input or a media mutation.
-    const detail=String(error.stderr||error.message||'');
-    if(!/device offline|device.*not found|no devices\/emulators found|waiting for device/i.test(detail))throw error;
-    adb('wait-for-device');
-    assert.equal(adb('shell','pidof',pkg),before,
-      'Irgun process changed during native hierarchy observation recovery');
-    result=adb(...observe);
+  // ADB can briefly disconnect more than once on software-rendered emulators
+  // while Media3 changes fullscreen/PiP surfaces. Retry ONLY this read-only
+  // accessibility observation up to three times, and require the exact same
+  // Irgun PID after each reconnect. Never replay a physical tap or media action.
+  for (let attempt=0;attempt<3;attempt++) {
+    try {
+      result=adb(...observe);
+      break;
+    } catch(error) {
+      const detail=String(error.stderr||error.message||'');
+      const transient=/device offline|device.*not found|no devices\/emulators found|waiting for device/i.test(detail);
+      if(!transient || attempt===2) throw error;
+      adb('wait-for-device');
+      assert.equal(adb('shell','pidof',pkg),before,
+        'Irgun process changed during native hierarchy observation recovery');
+    }
   }
   assert.equal(adb('shell','pidof',pkg),before,
     'Native screen observation must not restart the Irgun app');
