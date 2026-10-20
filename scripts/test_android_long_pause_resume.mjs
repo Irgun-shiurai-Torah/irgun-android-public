@@ -66,7 +66,7 @@ test('runtime refresh retains a single native engine and lecture identity guard'
   assert.match(service, /player\.setMediaItem\(nativeVideoMediaItem\(source, nativeVideoUsingHls\), position\)/);
   assert.match(adapter, /shouldRefreshNativeVideoSource\(/);
   assert.match(adapter, /await native\.refreshSource\(/);
-  assert.match(adapter, /reconnect: async/);
+  assert.match(adapter, /reconnect:options=>reconnect\(options\)/);
   assert.match(main, /state\.watchVimeo\?\.isIrgunNativeVideoPlayer/);
   assert.match(main, /state\.watchVimeo\.reconnect\(/);
 });
