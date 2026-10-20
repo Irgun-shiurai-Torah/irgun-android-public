@@ -10,7 +10,7 @@ export async function getAndroidHlsSource(apiBase, videoId, {
     const timer = setTimeout(() => controller.abort(), 10000);
     try {
       const suffix = retry ? `?retry=${Date.now()}` : '';
-      const response = await fetch(`${apiBase}/media/${encodeURIComponent(videoId)}/source.json${suffix}`, {cache:'no-store', signal:controller.signal});
+      const response = await fetch(`${apiBase}/media/${encodeURIComponent(videoId)}/source.json${suffix}`, {cache:'no-store', headers:{'X-Irgun-App':'1'}, signal:controller.signal});
       if (!response.ok) throw new Error(`Video sources unavailable (${response.status})`);
       const data = await response.json();
       if (!data?.video?.hls && !data?.video?.mp4) {
