@@ -3,7 +3,7 @@
 // Native Audio/Video are two track presentations of ONE ExoPlayer MediaItem.
 import {registerPlugin} from '@capacitor/core';
 import {getAndroidHlsSource} from './android-media-source.js';
-import {shouldRefreshNativeVideoSource} from './android-native-video-recovery.js';
+import {shouldRefreshNativeVideoSource, MAX_NATIVE_RESUME_REFRESHES} from './android-native-video-recovery.js';
 
 const native = registerPlugin('IrgunNativeVideo');
 const delay = ms => new Promise(resolve => setTimeout(resolve,ms));
@@ -29,20 +29,29 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
   let framePlacedOnScreen=false;
   let reportedError='',failedFrames=0;
   let lastFrames=0,lastFrameAtMs=0,stalledSinceMs=0,lastRefreshAtMs=0,refreshAttempts=0,refreshingSource=false,nativeStartedAtMs=0;
-  const reconnect=async()=>{
-    if(destroyed||refreshingSource||mode!=='video')return false;
+  const reconnect=async({userInitiated=false}={})=>{
+    if(destroyed||refreshingSource||mode!=='video'||
+        (!userInitiated&&refreshAttempts>=MAX_NATIVE_RESUME_REFRESHES))return false;
     const initial=await refresh();
-    if(!initial.active||!initial.videoSelected||!initial.playWhenReady)return false;
+    if(!initial.active||!initial.videoSelected||(!initial.playWhenReady&&!userInitiated))return false;
     refreshingSource=true;
+    // Count failed lookups too; a lost connection must never cause repeated
+    // descriptor requests every half-second. The user may explicitly retry.
+    lastRefreshAtMs=Date.now();
+    refreshAttempts++;
     try{
       const fresh=await getAndroidHlsSource(String(apiBase).replace(/\/$/,''),String(videoId));
       if(destroyed||mode!=='video')return false;
       const latest=await refresh();
-      if(!latest.active||!latest.videoSelected||!latest.playWhenReady)return false;
-      await native.refreshSource({lectureId:String(videoId),hlsUrl:String(fresh.hls||''),mp4Url:String(fresh.mp4||'')});
-      lastRefreshAtMs=Date.now();
+      if(!latest.active||!latest.videoSelected||(!latest.playWhenReady&&!userInitiated))return false;
+      await native.refreshSource({
+        lectureId:String(videoId),hlsUrl:String(fresh.hls||''),mp4Url:String(fresh.mp4||''),
+        userRequested:userInitiated
+      });
+      // Native frame counters restart with the new MediaItem. The earlier
+      // error notice clears only after new decoded frames and real Play.
+      failedFrames=0;
       lastFrames=0;
-      refreshAttempts++;
       stalledSinceMs=Date.now();
       return true;
     } finally {refreshingSource=false;}
@@ -244,7 +253,7 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     },
     updateFrame:trackFrame,
     refresh,
-    reconnect:async()=>reconnect(),
+    reconnect:options=>reconnect(options),
     ready:async()=>{
       for(let i=0;i<90&&!destroyed;i++){
         const s=await refresh();
