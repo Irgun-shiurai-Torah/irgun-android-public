@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {visibleAndroidVideoCatalog} from '../src/android-vimeo-visibility.js';
 
 const vimeoOnly={id:'1235511026',vimeoId:'1235511026',hasDriveVideo:false};
@@ -25,4 +26,12 @@ test('Website preference does not change Android visibility',()=>{
   settings.showVimeoOnlyWebsite=true;
   settings.showVimeoOnlyApp=false;
   assert.deepEqual(visibleAndroidVideoCatalog(all,settings.showVimeoOnlyApp),[driveCopy,driveLibrary]);
+});
+
+test('Native catalog identifies itself to API even when WebView Origin is omitted',()=>{
+  const main=readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
+  assert.match(main,/isNativeVideoCatalog = rawPath\.startsWith\('\/video-map'\)/);
+  assert.match(main,/headers:\{'X-Irgun-App':'1'\}/);
+  assert.match(main,/refreshAppVimeoVisibilityOnReturn\(\)/);
+  assert.match(main,/enabled!==previous && !bootstrapInFlight/);
 });
