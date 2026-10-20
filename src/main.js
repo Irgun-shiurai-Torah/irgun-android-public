@@ -10440,6 +10440,18 @@ async function initWatchVimeoOnce(userInitiated = false) {
   } catch (error) {
     if (Capacitor.getPlatform() === 'android') {
       if (generation === state.watchVimeoGeneration) {
+        // A native Video init can still be awaiting its first frame after the
+        // user has already switched the same lecture to Audio. A snapshot or
+        // readiness error from that abandoned Video wait must not clear the
+        // Audio adapter, mark Video permanently failed, or show an error over
+        // the working Audio panel.
+        if (state.watchMode !== 'video' || !state.watchVideo ||
+            String(videoId(state.watchVideo)) !== String(videoKey)) {
+          if (state.watchVimeo===player) state.watchVimeo=null;
+          state.watchVimeoReady=false;
+          try { await player?.destroy?.(); } catch (_) {}
+          return;
+        }
         if (state.watchVimeo===player) state.watchVimeo=null;
         state.watchVimeoReady=false;
         state.watchVideoPlaying=false;
