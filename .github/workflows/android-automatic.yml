@@ -20,7 +20,9 @@ concurrency:
 
 env:
   PACKAGE_NAME: org.irgunshiuraitorah.app
-  ANDROID_BASE_VERSION_CODE: "100"
+  # Next automatic build is run #104 => 116 + 104 = versionCode 220.
+  # Later runs increment by 1 (221, 222, ...).
+  ANDROID_BASE_VERSION_CODE: "116"
 
 jobs:
   build:
