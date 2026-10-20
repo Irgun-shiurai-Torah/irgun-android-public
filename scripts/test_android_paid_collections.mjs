@@ -369,3 +369,17 @@ test('paid playback emulator uses valid, single-scoped collection selectors',()=
   assert.ok(!qa.includes("tap('[data-paid-collection-id="),
     'Single-quoted template placeholders never substitute the product ID in actual ADB taps');
 });
+
+
+test('paid emulator QA closes a lingering full-player sheet with a real tap before navigation',()=>{
+  const qa=readFileSync('scripts/android-emulator-paid-playback.mjs','utf8');
+  const close=qa.indexOf('async function closeFullPlayerIfOpen()');
+  const nav=qa.indexOf("await tap('[data-nav=\"paid\"]')");
+  assert.ok(close>=0&&nav>close,'The full-player dismissal helper must precede paid-page navigation');
+  const helper=qa.slice(close,qa.indexOf('async function openPurchasedLibrary()',close));
+  assert.match(helper,/placement\('\[data-close-player\]'\)/);
+  assert.match(helper,/await tap\('\[data-close-player\]'/);
+  assert.match(helper,/if\(!after\.found\)/);
+  assert.doesNotMatch(helper,/\.click\(|evaluateJavascript|dispatchEvent/,
+    'Purchase QA must dismiss the real overlay using an actual Android tap');
+});

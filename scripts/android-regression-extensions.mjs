@@ -902,21 +902,35 @@ try{
     const present=await read();
     assert.ok(present.offline.some(x=>x.key===record.key&&x.bytes>0),'Downloaded file disappeared before deletion');
     await tap('[data-save-offline-kind="video"][data-save-offline-id="'+before.watchId+'"]');
-    const modalBefore=await read();await delay(1300);const modalAfter=await read();
-    if(modalBefore.videoEngine==='native-media3'){
-      // Native PlayerView deliberately hides only the picture surface while
-      // the save/remove dialog is above it. Requiring rendered frames behind
-      // the dialog is wrong; the SAME Media3 audio clock must continue.
-      assert.ok(modalAfter.media3?.active&&modalAfter.media3.playing,
-        'Actual native Media3 session must continue behind offline dialog');
-      assert.ok(modalAfter.media3.positionMs>modalBefore.media3.positionMs+500,
-        'Offline confirmation must not pause or rewind the shared Media3 clock');
-      assert.equal(modalAfter.webViewVideo,null,'Modal must not start WebView fallback');
-    }else{
-      audibleVideo(modalAfter);
-      assert.ok(modalAfter.video.time>modalBefore.video.time+.5&&
-        modalAfter.video.frames>modalBefore.video.frames,
-        'Actual WebView Video must keep moving while offline confirmation is visible');
+    const modalBefore=await read();
+    try {
+      if(modalBefore.videoEngine==='native-media3'){
+        // Playback can be BUFFERING while a real HLS source catches up after
+        // switching back from an offline MP3. A single 1.3-second snapshot
+        // caused a false failure and left the modal covering later tests.
+        // Require the SAME decoder to resume real clock progress within a
+        // bounded 15 seconds while the dialog remains open, never just READY.
+        const modalAfter=await wait(s=>s.media3?.active&&s.media3.playing&&
+          s.media3.playWhenReady&&s.media3.positionMs>modalBefore.media3.positionMs+500&&
+          s.media3.playerIdentity===modalBefore.media3.playerIdentity,
+          'Native Media3 audio did not resume behind the offline confirmation',15000);
+        assert.equal(modalAfter.media3.mediaItemIdentity,modalBefore.media3.mediaItemIdentity,
+          'The offline confirmation must not replace the native media source');
+        assert.equal(modalAfter.webViewVideo,null,'Modal must not start WebView fallback');
+      }else{
+        await delay(1300);const modalAfter=await read();
+        audibleVideo(modalAfter);
+        assert.ok(modalAfter.video.time>modalBefore.video.time+.5&&
+          modalAfter.video.frames>modalBefore.video.frames,
+          'Actual WebView Video must keep moving while offline confirmation is visible');
+      }
+    } catch(error) {
+      // Keep independent network/recovery tests meaningful even when this
+      // modal assertion fails; never leave its overlay covering the player.
+      try {writeFileSync('emulator-report/offline-confirmation-failure.png',
+        execFileSync('adb',['exec-out','screencap','-p'],{maxBuffer:32*1024*1024}));}catch(_){}
+      try {if(await hit('[data-offline-delete-cancel]'))await tap('[data-offline-delete-cancel]');}catch(_){}
+      throw error;
     }
     await tap('[data-offline-delete-cancel]');
     if(modalBefore.videoEngine==='native-media3')await sampleMovingVideo();

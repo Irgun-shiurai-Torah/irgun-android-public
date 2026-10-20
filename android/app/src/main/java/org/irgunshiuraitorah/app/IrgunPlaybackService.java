@@ -1389,6 +1389,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         public final boolean videoSelected;
         public final boolean isPlaying;
         public final boolean playWhenReady;
+        public final boolean networkRecoveryPending;
         public final boolean firstFrame;
         public final long frameCount;
         public final long positionMs;
@@ -1404,6 +1405,7 @@ public class IrgunPlaybackService extends MediaSessionService {
             videoSelected = active && s.nativeVideoSelected;
             isPlaying = active && p.isPlaying();
             playWhenReady = active && p.getPlayWhenReady();
+            networkRecoveryPending = s != null && s.networkRecoveryPending;
             firstFrame = active && s.nativeVideoFirstFrameRendered;
             frameCount = active ? s.nativeVideoRenderedFrames : 0L;
             positionMs = active ? Math.max(0L, p.getCurrentPosition()) : 0L;
@@ -1606,6 +1608,39 @@ public class IrgunPlaybackService extends MediaSessionService {
             IrgunPlaybackService s = active();
             if (s != null) s.openNativeVideoInternal(id,title,speaker,image,audioUrl,
                 hlsUrl,mp4Url,positionMs,speed,shouldPlay);
+        });
+    }
+
+    private void refreshNativeVideoSourceInternal(String expectedLectureId, String hls, String mp4, boolean userRequested) {
+        if (player == null || !nativeVideoSourceActive || !nativeVideoSelected ||
+            !lectureId.equals(cleanStatic(expectedLectureId)) || (!player.getPlayWhenReady() && !userRequested)) return;
+        String nextHls = cleanStatic(hls);
+        String nextMp4 = cleanStatic(mp4);
+        String source = !nextHls.isEmpty() ? nextHls : nextMp4;
+        if (source.isEmpty()) return;
+        long position = Math.max(0L, player.getCurrentPosition());
+        float speed = player.getPlaybackParameters().speed;
+        cancelNetworkRecovery();
+        cancelNativeVideoStallWatch();
+        nativeVideoStallRestarts = 0;
+        nativeVideoHlsUrl = nextHls;
+        nativeVideoMp4Url = nextMp4;
+        nativeVideoUsingHls = !nextHls.isEmpty();
+        nativeVideoMp4FallbackAttempted = false;
+        nativeVideoFirstFrameRendered = false;
+        nativeVideoRenderedFrames = 0L;
+        player.setMediaItem(nativeVideoMediaItem(source, nativeVideoUsingHls), position);
+        player.prepare();
+        player.setPlaybackSpeed(speed);
+        player.setPlayWhenReady(true);
+        publishNativeState();
+        refreshMediaNotification();
+    }
+
+    public static void refreshNativeVideoSource(String lectureId, String hls, String mp4, boolean userRequested) {
+        onMain(() -> {
+            IrgunPlaybackService service = active();
+            if (service != null) service.refreshNativeVideoSourceInternal(lectureId, hls, mp4, userRequested);
         });
     }
 

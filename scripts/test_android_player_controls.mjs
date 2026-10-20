@@ -95,3 +95,46 @@ test('Android rerenders restore scroll only for the same lecture sheet',()=>{
  const ignore=preserveAndroidPlayerSheetScroll({document:{querySelector:()=>{throw Error('iOS DOM must not be read');}},isAndroid:()=>false,playerKey:'video:one'});
  ignore();
 });
+
+function sheetSwipeFixture(){
+ const handlers={};let renders=0,clock=0;
+ const sheet={scrollTop:0,style:{},classList:{add(){},remove(){}},
+   addEventListener:(event,cb)=>{handlers[event]=cb;}};
+ const state={playerOpen:true};
+ const source=app.slice(app.indexOf('function bindPlayerSwipeToClose(sheet) {'),
+   app.indexOf('\nfunction refreshDonationProviderPanelFast()',app.indexOf('function bindPlayerSwipeToClose(sheet) {')));
+ const context={state,window:{innerHeight:650},performance:{now:()=>clock},render:()=>renders++};
+ runInNewContext(source+'\nthis.bind=bindPlayerSwipeToClose;',context);
+ context.bind(sheet);
+ const touch=(y,control=false)=>({touches:[{clientX:125,clientY:y}],
+   target:{closest:()=>control?{}:null},preventDefault(){}});
+ return {sheet,state,handlers,touch,setClock:n=>{clock=n;},get renders(){return renders;}};
+}
+test('a speed-setting tap cannot dismiss the Android sheet even if scroll resets mid-touch',()=>{
+ const f=sheetSwipeFixture();f.sheet.scrollTop=281;
+ f.handlers.touchstart(f.touch(450,true));
+ f.sheet.scrollTop=0;
+ f.handlers.touchmove(f.touch(575,true));
+ f.handlers.touchend();
+ assert.equal(f.state.playerOpen,true);
+ assert.equal(f.renders,0);
+});
+test('an Android speed button at scroll top is never a swipe-to-dismiss origin',()=>{
+ const f=sheetSwipeFixture();
+ f.handlers.touchstart(f.touch(410,true));
+ f.setClock(180);
+ f.handlers.touchmove(f.touch(620,true));
+ f.handlers.touchend();
+ assert.equal(f.state.playerOpen,true);
+});
+test('a true downward swipe from empty top of sheet still dismisses it',()=>{
+ const f=sheetSwipeFixture();f.handlers.touchstart(f.touch(95));
+ f.setClock(310);f.handlers.touchmove(f.touch(235));f.handlers.touchend();
+ assert.equal(f.state.playerOpen,false);assert.equal(f.renders,1);
+});
+test('a scrolled-down gesture is never retroactively activated when scroll reaches zero',()=>{
+ const f=sheetSwipeFixture();f.sheet.scrollTop=130;
+ f.handlers.touchstart(f.touch(330));
+ f.sheet.scrollTop=0;f.setClock(260);f.handlers.touchmove(f.touch(600));f.handlers.touchend();
+ assert.equal(f.state.playerOpen,true);assert.equal(f.renders,0);
+});

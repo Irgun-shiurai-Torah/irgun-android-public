@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {runInNewContext} from 'node:vm';
 import assert from 'node:assert/strict';
 import {readFileSync, mkdtempSync, writeFileSync, rmSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
@@ -163,4 +164,51 @@ test('separate visible-task section cannot misattribute an unrelated actual rece
  const visible='\nVisible recent tasks (most recent first):\n * RecentTaskInfo #0:\n realActivity=org.irgunshiuraitorah.app/.MainActivity';
  assert.equal(hasIrgunRecentTask(other+visible),false);
  assert.equal(topRecentTaskIsIrgun(other+visible),false);
+});
+
+
+test('Recents dismissal retries use distinct in-card flings with stronger upward travel',()=>{
+ const node='<node content-desc="Screenshot of Irgun Shiurai Torah" resource-id="com.google.android.apps.nexuslauncher:id/snapshot" visible="true" bounds="[48,79][272,510]">';
+ assert.deepEqual(recentsDismissGesture(node,{width:320,height:640,attempt:1}),[160,432,160,6]);
+ assert.deepEqual(recentsDismissGesture(node,{width:320,height:640,attempt:2}),[111,359,111,6]);
+});
+
+
+test('real task-dismissal flow initializes the first physical fling and verifies teardown',async()=>{
+  // Execute the production async function, not just its pure coordinate helper.
+  // The old test never called this path and missed a ReferenceError in the
+  // initial lastGesture=gesture assignment after an otherwise green HLS run.
+  const source=readFileSync('scripts/android-task-dismissal-regression.mjs','utf8');
+  const head=source.indexOf('export async function verifyAndroidTaskDismissal(');
+  assert.ok(head>=0);
+  const flow=source.slice(head).replace('export async function','async function');
+  const report={gestures:[],checks:[]};
+  const xml='<hierarchy><node package="com.google.android.apps.nexuslauncher" visible="true" resource-id="com.google.android.apps.nexuslauncher:id/overview_panel"/>'+
+    '<node visible="true" content-desc="Screenshot of Irgun Shiurai Torah" resource-id="com.google.android.apps.nexuslauncher:id/snapshot" bounds="[30,180][290,550]"/></hierarchy>';
+  const recent='Recent tasks:\n  * Recent #0: Task{abc #12 type=standard}\n    realActivity=org.irgunshiuraitorah.app/.SplashActivity';
+  let dismissed=false,snapshots=0,flings=0;
+  const adb=(...argv)=>{
+    const command=argv.join(' ');
+    if(command==='shell wm size')return 'Physical size: 320x640';
+    if(command==='shell dumpsys activity -a recents')return dismissed?'Recent tasks:':recent;
+    if(command.startsWith('shell input swipe ')){dismissed=true;flings++;return '';}
+    if(command==='shell logcat -d -s IrgunPlayback:D *:S')return 'Media3 service destroyed';
+    if(command.startsWith('shell dumpsys'))return '';
+    return '';
+  };
+  const fake={
+    assert,recentsEducationAction,recentsDismissGesture,topRecentTaskIsIrgun,
+    hasIrgunRecentTask,hasRegisteredIrgunMediaSession,hasActivePlaybackNotification,
+    pkg:'org.irgunshiuraitorah.app',writeFileSync:()=>{},
+    execFileSync:()=>Buffer.from('png'),nativeHierarchy:()=>xml
+  };
+  runInNewContext(flow+'\nthis.dismiss=verifyAndroidTaskDismissal;',fake);
+  await fake.dismiss({adb,
+    sample:async()=>({media3:{active:true,playing:true,playerIdentity:'same-player',
+      positionMs:++snapshots*2000}}),
+    delay:async()=>{},report});
+  assert.equal(flings,1,'Exactly one real physical swipe should dismiss a removable task');
+  assert.equal(dismissed,true);
+  assert.equal(report.gestures.length,1);
+  assert.equal(report.checks.length,2);
 });
