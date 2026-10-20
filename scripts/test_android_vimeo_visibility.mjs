@@ -35,7 +35,8 @@ test('Native catalog identifies itself to API even when WebView Origin is omitte
   assert.match(main,/refreshAppVimeoVisibilityOnReturn\(\)/);
   assert.match(main,/mode!==previous && !bootstrapInFlight/);
   const source=readFileSync(new URL('../src/android-media-source.js',import.meta.url),'utf8');
-  assert.ok(source.includes("headers:{'X-Irgun-App':'1'}"));
+  assert.ok(source.includes("?client=android"));
+  assert.ok(!source.includes("headers:{'X-Irgun-App':'1'}"), 'Old Worker CORS cannot accept the custom native media header');
 });
 
 test('App OFF hides every explicitly Vimeo-only catalog item even when the Vimeo ID is malformed',()=>{
