@@ -1040,7 +1040,8 @@ public final class IrgunNativeVideoPlugin extends Plugin {
             call.reject("Approved lecture ID and native media source required");
             return;
         }
-        IrgunPlaybackService.refreshNativeVideoSource(id, hls, mp4);
+        IrgunPlaybackService.refreshNativeVideoSource(id, hls, mp4,
+            Boolean.TRUE.equals(call.getBoolean("userRequested", false)));
         call.resolve();
     }
 
