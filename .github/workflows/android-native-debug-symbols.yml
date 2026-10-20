@@ -1,0 +1,92 @@
+name: Android native symbols release validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'android/app/build.gradle'
+      - '.github/workflows/android-automatic.yml'
+      - '.github/workflows/android-native-debug-symbols.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-native-symbols:
+    name: Build release AAB and inspect native symbols
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out PR source
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Install Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -perm -111 | sort -V | tail -n 1)"
+          fi
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - name: Install app dependencies
+        run: npm ci
+      - name: Prepare app icons
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y imagemagick
+          bash scripts/prepare_android_icons.sh
+      - name: Build web app and run source regression tests
+        env:
+          VITE_ANDROID_MEDIA3_VIDEO_BETA: 'true'
+        run: npm run build
+      - name: Sync Android project
+        run: npx cap sync android
+      - name: Generate launcher resources
+        run: bash scripts/prepare_android_icons.sh
+      - name: Build release AAB without publishing
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon clean :app:bundleRelease
+      - name: Verify native debug metadata and R8 mapping
+        shell: bash
+        run: |
+          set -euo pipefail
+          AAB=android/app/build/outputs/bundle/release/app-release.aab
+          MAPPING=android/app/build/outputs/mapping/release/mapping.txt
+          mkdir -p symbol-report
+          test -s "$AAB"
+          test -s "$MAPPING"
+          unzip -Z1 "$AAB" > symbol-report/aab-entries.txt
+          if grep -Eq '^base/lib/[^/]+/[^/]+[.]so$' symbol-report/aab-entries.txt; then
+            if ! grep -q '^BUNDLE-METADATA/com[.]android[.]tools[.]build[.]debugsymbols/' symbol-report/aab-entries.txt; then
+              echo "::error::Release AAB contains native .so libraries but is missing native debug metadata"
+              exit 1
+            fi
+          else
+            echo "::notice::Release AAB has no native .so libraries to symbolicate"
+          fi
+          echo "Native debug symbols and R8 mapping check passed"
+      - name: Upload symbol verification listing
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-symbol-report-${{ github.run_id }}
+          path: symbol-report/
+          if-no-files-found: warn
+          retention-days: 14
