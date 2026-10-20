@@ -10068,8 +10068,8 @@ function showAndroidNativeVideoError(frame, detail) {
     state.watchNativeVideoFailedId = '';
     if (state.watchVimeo?.isIrgunNativeVideoPlayer) {
       void state.watchVimeo.reconnect({userInitiated:true}).then(ok=>{
-        if(!ok) void initWatchVimeo(true);
-      }).catch(()=>void initWatchVimeo(true));
+        if(!ok) showAndroidNativeVideoError(frame,new Error('Video reconnect did not start'));
+      }).catch(error=>showAndroidNativeVideoError(frame,error));
     } else void initWatchVimeo(true);
   });
   notice.append(message,retry);
