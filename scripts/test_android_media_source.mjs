@@ -29,8 +29,8 @@ test('two transient descriptor failures recover with exactly three reads and bou
   return {ok:true,json:async()=>descriptor};
  },{isOnline:()=>true,wait:ms=>waits.push(ms)});
  assert.equal(source.hls,descriptor.video.hls);assert.equal(urls.length,3);
- assert.match(urls[0],/lecture%3Ahash\/source.json$/);
- assert.ok(urls.slice(1).every(url=>url.includes('?retry=')));
+ assert.match(urls[0],/lecture%3Ahash\/source.json\?client=android$/);
+ assert.ok(urls.slice(1).every(url=>url.includes('?retry=') && url.includes('&client=android')));
  assert.deepEqual(waits,[1100,2200]);
 });
 test('persistent offline connection has an eight-second bound and never sends another request',async()=>{
