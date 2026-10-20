@@ -15,6 +15,7 @@ import {verifiedPurchasedIds,mergeVerifiedPaidCatalog,paidCatalogAccountKey} fro
 import {createAndroidPaidQuestionController} from './android-paid-index-controller.js';
 import {bindAndroidPlayerSheetInteractions,preserveAndroidPlayerSheetScroll} from './android-player-controls.js';
 import {isAndroidVimeoOnlyVideo,createAndroidVimeoPlayer} from './android-vimeo-playback.js';
+import {visibleAndroidVideoCatalog} from './android-vimeo-visibility.js';
 import {createAndroidVideoDisplaySync} from './android-video-display.js';
 import {androidNavigationRoot,createAndroidBottomNavigation,prepareAndroidTabNavigation} from './android-bottom-navigation.js';
 const androidPlayerSheetRenderGate=bindAndroidPlayerSheetInteractions({document,view:window,
@@ -34,6 +35,7 @@ const API = 'https://api.irgunshiuraitorah.com';
 const WEBSITE = 'https://irgunshiuraitorah.com/';
 usageAnalytics.configure('15.1.23');
 const TOKEN_KEY = 'istAppSessionToken';
+const APP_VIMEO_VISIBLE_KEY='istAppShowVimeoOnlyLectures';
 const SPEED_KEY = 'istPlaybackSpeed';
 const VISITOR_KEY = 'istAppVisitorId';
 const OFFLINE_DOWNLOADS_KEY = 'istOfflineDownloadsV1';
@@ -190,6 +192,8 @@ const state = {
   offlineCacheSavedAt: 0,
   screen: 'home',
   videos: [],
+  // Native APP visibility is independent of the WEBSITE Admin setting.
+  showVimeoOnlyApp: localStorage.getItem(APP_VIMEO_VISIBLE_KEY)!=='0',
   audioItems: [],
   videoById: new Map(),
   audioById: new Map(),
@@ -2554,6 +2558,28 @@ async function bootstrapJsonOr(path, fallback) {
   try { return await bootstrapJson(path); } catch (_) { return fallback; }
 }
 
+function applyAppVimeoOnlyVisibility(enabled) {
+  if (Capacitor.getPlatform()!=='android') return;
+  state.showVimeoOnlyApp=Boolean(enabled);
+  try { localStorage.setItem(APP_VIMEO_VISIBLE_KEY,state.showVimeoOnlyApp?'1':'0'); } catch(_){}
+  if(!state.showVimeoOnlyApp && state.watchVideo && isAndroidVimeoOnlyVideo(state.watchVideo))
+    void closeWatch(false).catch(error=>console.warn('Vimeo-only player close failed',error));
+  state.videos=visibleAndroidVideoCatalog(state.videos,state.showVimeoOnlyApp);
+  state.videoById=new Map(state.videos.map(video=>[videoId(video),video]));
+}
+
+async function loadAppVimeoOnlyVisibility() {
+  if(Capacitor.getPlatform()!=='android')return true;
+  if(navigator.onLine===false)return state.showVimeoOnlyApp;
+  try {
+    const settings=await fetchJsonWithTimeout(`${API}/playback-routing`,{cache:'no-store'},5000);
+    applyAppVimeoOnlyVisibility(settings.showVimeoOnlyApp!==false);
+  } catch(error) {
+    console.warn('Using last-known app Vimeo-only visibility while settings are unavailable',error);
+  }
+  return state.showVimeoOnlyApp;
+}
+
 async function hydrateInitialCatalogCache() {
   if (state.libraryReady) return false;
   try {
@@ -2576,7 +2602,8 @@ async function hydrateInitialCatalogCache() {
     const all = cached[4]?.data || { items:[] };
     const counter = cached[5]?.data || { count:state.counter };
     const likeCounts = cached[6]?.data || {};
-    state.videos = videos.map(enrichVideo).sort((a,b)=>itemDate(b)-itemDate(a));
+    state.videos = visibleAndroidVideoCatalog(videos,state.showVimeoOnlyApp)
+      .map(enrichVideo).sort((a,b)=>itemDate(b)-itemDate(a));
     state.audioItems = (audios.items || []).map(enrichAudio).sort((a,b)=>itemDate(b)-itemDate(a));
     state.videoById = new Map(state.videos.map(v => [videoId(v), v]));
     state.audioById = new Map(state.audioItems.map(a => [rawAudioId(a), a]));
@@ -2625,10 +2652,11 @@ async function bootstrap(options = {}) {
       bootstrapJsonOr('/trending?period=month&limit=2500', { items:[] }),
       bootstrapJsonOr('/trending?period=all&limit=2500', { items:[] }),
       bootstrapJsonOr('/shiur-view-count', { count:1124579 }),
-      bootstrapJsonOr('/like-counts', {})
+      bootstrapJsonOr('/like-counts', {}),
+      loadAppVimeoOnlyVisibility()
     ]);
 
-    state.videos = (Array.isArray(videos) ? videos : []).map(enrichVideo)
+    state.videos = visibleAndroidVideoCatalog(videos,state.showVimeoOnlyApp).map(enrichVideo)
       .sort((a, b) => itemDate(b) - itemDate(a));
     state.audioItems = (audios.items || []).map(enrichAudio)
       .sort((a, b) => itemDate(b) - itemDate(a));
@@ -5149,7 +5177,13 @@ const websiteAdminParity=createWebsiteAdminParity({
   userKey:()=>String(state.user?.id||state.user?.email||''),
   render:()=>render(),
   toast:message=>setToast(message),
-  ask:message=>window.confirm(message)
+  ask:message=>window.confirm(message),
+  onAppVimeoVisibilityChanged:enabled=>{
+    applyAppVimeoOnlyVisibility(enabled);
+    // The server also filters the catalogue. Refetch immediately so turning
+    // App ON restores any Vimeo-only lecture absent from the current list.
+    if(!bootstrapInFlight)void bootstrap({background:true});
+  }
 });
 
 function accountAdminHtml(){
@@ -9589,7 +9623,8 @@ audio.addEventListener('error', () => {
 
 async function openWatch(id, requestedTime = null, options = {}) {
   const video = state.videoById.get(String(id));
-  if (!video) return;
+  if (!video || (Capacitor.getPlatform()==='android' &&
+    !state.showVimeoOnlyApp && isAndroidVimeoOnlyVideo(video))) return;
   usageAnalytics.event('shiur_opened',{shiurId:String(id),mediaType:'video',dedupeKey:`shiur-open:${id}`,cooldownMs:60000});
   usageAnalytics.setMedia({isPlaying:false,mediaType:'video',playerState:'paused',shiurId:String(id)});
   const fromAudio = Boolean(options && options.fromAudio && currentAudioIsAuthoritative() && state.current && state.current.id === String(id));
