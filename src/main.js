@@ -2128,7 +2128,13 @@ async function bootstrapJson(path) {
       // be missing from the app. Catalog endpoints now get a longer window, explicit
       // no-store, and a harmless cache-busting query while retaining the offline fallback.
       const isCatalog = rawPath.startsWith('/video-map') || rawPath.startsWith('/audio-map');
-      const options = isCatalog ? { cache:'no-store' } : undefined;
+      // Mark native video-catalog requests explicitly. Some WebView/network
+      // stacks omit Origin; without this header the API could apply the
+      // WEBSITE switch to the APP when the two switches differ.
+      const isNativeVideoCatalog = rawPath.startsWith('/video-map') && Capacitor.getPlatform()!=='web';
+      const options = isCatalog
+        ? { cache:'no-store', ...(isNativeVideoCatalog ? {headers:{'X-Irgun-App':'1'}} : {}) }
+        : undefined;
       const timeoutMs = isCatalog ? 20000 : 7000;
       const separator = rawPath.includes('?') ? '&' : '?';
       // A cold Android WebView can fail its FIRST live catalog request before
@@ -2578,6 +2584,25 @@ async function loadAppVimeoOnlyVisibility() {
     console.warn('Using last-known app Vimeo-only visibility while settings are unavailable',error);
   }
   return state.showVimeoOnlyApp;
+}
+
+let foregroundVimeoVisibilityCheck = null;
+let lastForegroundVimeoVisibilityAt = 0;
+function refreshAppVimeoVisibilityOnReturn() {
+  if(Capacitor.getPlatform()!=='android' || document.hidden ||
+      navigator.onLine===false || !state.libraryReady || bootstrapInFlight) return;
+  if(foregroundVimeoVisibilityCheck || Date.now()-lastForegroundVimeoVisibilityAt<12000)return;
+  lastForegroundVimeoVisibilityAt=Date.now();
+  const previous=state.showVimeoOnlyApp;
+  foregroundVimeoVisibilityCheck=loadAppVimeoOnlyVisibility()
+    .then(enabled=>{
+      // A change made in Website Admin must also update an already-open app
+      // when it returns to the foreground, including restoring a hidden list.
+      if(enabled!==previous && !bootstrapInFlight)
+        return bootstrap({background:true});
+    })
+    .catch(error=>console.warn('Could not refresh Vimeo-only app visibility',error))
+    .finally(()=>{foregroundVimeoVisibilityCheck=null;});
 }
 
 async function hydrateInitialCatalogCache() {
@@ -10737,11 +10762,15 @@ function refreshPlaybackAfterForeground() {
   });
 }
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) refreshPlaybackAfterForeground();
+  if (!document.hidden) {
+    refreshPlaybackAfterForeground();
+    refreshAppVimeoVisibilityOnReturn();
+  }
   if (!document.hidden && (state.error || state.offlineMode || state.usingCachedLibrary)) bootstrap({ background:true });
 });
 window.addEventListener('focus', () => {
   refreshPlaybackAfterForeground();
+  refreshAppVimeoVisibilityOnReturn();
   handlePendingPushOpen();
   if (state.error || state.offlineMode || state.usingCachedLibrary) bootstrap({ background:true });
 });
