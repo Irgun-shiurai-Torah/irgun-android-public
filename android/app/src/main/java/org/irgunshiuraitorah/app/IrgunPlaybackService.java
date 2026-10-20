@@ -1389,6 +1389,7 @@ public class IrgunPlaybackService extends MediaSessionService {
         public final boolean videoSelected;
         public final boolean isPlaying;
         public final boolean playWhenReady;
+        public final boolean networkRecoveryPending;
         public final boolean firstFrame;
         public final long frameCount;
         public final long positionMs;
@@ -1404,6 +1405,7 @@ public class IrgunPlaybackService extends MediaSessionService {
             videoSelected = active && s.nativeVideoSelected;
             isPlaying = active && p.isPlaying();
             playWhenReady = active && p.getPlayWhenReady();
+            networkRecoveryPending = s != null && s.networkRecoveryPending;
             firstFrame = active && s.nativeVideoFirstFrameRendered;
             frameCount = active ? s.nativeVideoRenderedFrames : 0L;
             positionMs = active ? Math.max(0L, p.getCurrentPosition()) : 0L;
