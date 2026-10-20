@@ -232,8 +232,8 @@ test('Admin exposes separate WEBSITE and APP Vimeo-only visibility controls',()=
   assert.match(admin,/name="showVimeoOnlyApp"/);
   assert.match(admin,/formName==='vimeo-website'/);
   assert.match(admin,/formName==='vimeo-app'/);
-  assert.match(admin,/json\('\\/admin\\/playback-routing',\{showVimeoOnlyWebsite\}\)/);
-  assert.match(admin,/json\('\\/admin\\/playback-routing',\{showVimeoOnlyApp\}\)/);
+  assert.ok(admin.includes("json('/admin/playback-routing',{showVimeoOnlyWebsite})"));
+  assert.ok(admin.includes("json('/admin/playback-routing',{showVimeoOnlyApp})"));
   assert.match(admin,/onAppVimeoVisibilityChanged/);
   assert.match(main,/visibleAndroidVideoCatalog\(videos,state\.showVimeoOnlyApp\)/);
   assert.match(main,/loadAppVimeoOnlyVisibility\(\)/);
@@ -245,9 +245,9 @@ test('A visibility save sends only the targeted setting and preserves website pl
   const website=admin.slice(admin.indexOf("formName==='vimeo-website'"),admin.indexOf("formName==='vimeo-app'"));
   const app=admin.slice(admin.indexOf("formName==='vimeo-app'"),admin.indexOf("formName==='routing'"));
   const routing=admin.slice(admin.indexOf("formName==='routing'"),admin.indexOf("formName==='city-add'"));
-  assert.match(website,/json\('\/admin\/playback-routing',\{showVimeoOnlyWebsite\}\)/);
+  assert.ok(website.includes("json('/admin/playback-routing',{showVimeoOnlyWebsite})"));
   assert.doesNotMatch(website,/showVimeoOnlyApp|videoMode/);
-  assert.match(app,/json\('\/admin\/playback-routing',\{showVimeoOnlyApp\}\)/);
+  assert.ok(app.includes("json('/admin/playback-routing',{showVimeoOnlyApp})"));
   assert.doesNotMatch(app,/showVimeoOnlyWebsite|videoMode/);
   assert.match(routing,/vimeoFallbackEnabled/);
   assert.doesNotMatch(routing,/showVimeoOnlyWebsite|showVimeoOnlyApp/);
