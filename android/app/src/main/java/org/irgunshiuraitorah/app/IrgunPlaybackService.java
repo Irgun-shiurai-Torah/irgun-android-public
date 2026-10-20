@@ -1609,9 +1609,9 @@ public class IrgunPlaybackService extends MediaSessionService {
         });
     }
 
-    private void refreshNativeVideoSourceInternal(String expectedLectureId, String hls, String mp4) {
+    private void refreshNativeVideoSourceInternal(String expectedLectureId, String hls, String mp4, boolean userRequested) {
         if (player == null || !nativeVideoSourceActive || !nativeVideoSelected ||
-            !lectureId.equals(cleanStatic(expectedLectureId)) || !player.getPlayWhenReady()) return;
+            !lectureId.equals(cleanStatic(expectedLectureId)) || (!player.getPlayWhenReady() && !userRequested)) return;
         String nextHls = cleanStatic(hls);
         String nextMp4 = cleanStatic(mp4);
         String source = !nextHls.isEmpty() ? nextHls : nextMp4;
@@ -1635,10 +1635,10 @@ public class IrgunPlaybackService extends MediaSessionService {
         refreshMediaNotification();
     }
 
-    public static void refreshNativeVideoSource(String lectureId, String hls, String mp4) {
+    public static void refreshNativeVideoSource(String lectureId, String hls, String mp4, boolean userRequested) {
         onMain(() -> {
             IrgunPlaybackService service = active();
-            if (service != null) service.refreshNativeVideoSourceInternal(lectureId, hls, mp4);
+            if (service != null) service.refreshNativeVideoSourceInternal(lectureId, hls, mp4, userRequested);
         });
     }
 
