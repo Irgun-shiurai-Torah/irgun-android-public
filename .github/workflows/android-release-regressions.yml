@@ -17,7 +17,7 @@ on:
       - 'scripts/test_android_system_ui_observation.mjs'
       - 'scripts/android-native-tap-point.mjs'
       - 'scripts/android-account-playback-fixture.mjs'
-      - 'scripts/test_android_native_tap_point.mjs'
+      - 'scripts/test_android_native_tap_point.mjs scripts/test_android_native_hierarchy.mjs'
       - 'scripts/android-emulator-prepare.py'
       - 'scripts/test_android_emulator_prepare.mjs'
       - 'scripts/android-emulator-sdk-preflight.sh'
