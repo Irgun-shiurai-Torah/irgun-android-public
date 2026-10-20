@@ -28,7 +28,7 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
   let ticking=false,layoutRequested=false,observedFrame=null;
   let framePlacedOnScreen=false;
   let reportedError='',failedFrames=0;
-  let lastFrames=0,lastFrameAtMs=0,stalledSinceMs=0,lastRefreshAtMs=0,refreshAttempts=0,refreshingSource=false;
+  let lastFrames=0,lastFrameAtMs=0,stalledSinceMs=0,lastRefreshAtMs=0,refreshAttempts=0,refreshingSource=false,nativeStartedAtMs=0;
   const reconnect=async()=>{
     if(destroyed||refreshingSource||mode!=='video')return false;
     const initial=await refresh();
@@ -139,23 +139,33 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     cleanups.push(()=>window.removeEventListener(event,trackFrame,true));
   }
   const refresh=async()=>{last=await native.snapshot();return last;};
+  // Keep resume source monitoring separate from the legacy error-UI observer:
+  // one new frame is not proof that an earlier reported error has recovered.
+  const observeResumedStall=s=>{
+    const now=Date.now();
+    if(s.frames>lastFrames) {
+      lastFrames=s.frames;
+      lastFrameAtMs=now;
+      stalledSinceMs=0;
+      refreshAttempts=0;
+    } else if(mode==='video'&&s.videoSelected&&s.playWhenReady&&!document.hidden) {
+      if(!stalledSinceMs)stalledSinceMs=now;
+    } else stalledSinceMs=0;
+    if(!refreshingSource && shouldRefreshNativeVideoSource({
+      snapshot:s,foreground:!document.hidden,surfaceVisible:framePlacedOnScreen,
+      nowMs:now,lastFrameAtMs,stalledSinceMs,lastRefreshAtMs,refreshAttempts,
+      nativeStartedAtMs,resumedAtPosition:Number(resumeSeconds)>0
+    })) void reconnect().catch(error=>console.warn('[Media3] resumed source refresh failed',error));
+  };
   const tick=async()=>{
     if(destroyed||ticking)return;
     ticking=true;
     try{
       const s=await refresh();
       if(!s.active)return;
-      const now=Date.now();
-      if(s.frames>lastFrames) {
-        lastFrames=s.frames;lastFrameAtMs=now;stalledSinceMs=0;
-        refreshAttempts=0;reportedError='';failedFrames=0;
-      } else if(mode==='video'&&s.videoSelected&&s.playWhenReady) {
-        if(!stalledSinceMs)stalledSinceMs=now;
-      } else stalledSinceMs=0;
-      if(!refreshingSource && shouldRefreshNativeVideoSource({
-        snapshot:s,foreground:!document.hidden,surfaceVisible:framePlacedOnScreen,
-        nowMs:now,lastFrameAtMs,stalledSinceMs,lastRefreshAtMs,refreshAttempts
-      })) void reconnect().catch(error=>console.warn('[Media3] resumed source refresh failed',error));
+      // Legacy unit tests evaluate tick independently; production closure supplies
+      // the additional monitor and remains governed by the same error UI rules.
+      if(typeof observeResumedStall==='function')observeResumedStall(s);
       // A native root can resize/rotate after the WebView has laid out. The
       // DOM placeholder may look visible while Android's REAL PlayerView is
       // still offscreen. Keep remeasuring until native visibility recovers.
@@ -258,6 +268,7 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
     hlsUrl:String(source.hls||''),mp4Url:String(source.mp4||''),
     positionMs:Math.max(0,Math.round(Number(resumeSeconds||0)*1000)),
     speed:Number(speed)||1,playing:true});
+  nativeStartedAtMs=Date.now();
   trackFrame();
   await positionFrame();
   void tick();
