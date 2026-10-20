@@ -9806,6 +9806,39 @@ async function performWatchModeSwitch(mode) {
   const video = state.watchVideo;
   const id = videoId(video);
 
+  // A quick Audio tap can arrive after the Watch page renders but before
+  // createNativeMedia3VideoPlayer() has returned its adapter. Falling through
+  // to the legacy audio handoff in that window races the pending native Video
+  // start: the late start can reclaim VIDEO and leave the Audio panel at 0:00.
+  // For Android Drive-backed lectures, wait for the in-flight native adapter
+  // instead of starting a second competing handoff. Vimeo-only lectures retain
+  // their dedicated Vimeo path.
+  const nativeAndroidExpected = Capacitor.getPlatform()==='android' &&
+    !isAndroidVimeoOnlyVideo(video);
+  if (mode==='audio' && nativeAndroidExpected &&
+      !state.watchVimeo?.isIrgunNativeVideoPlayer) {
+    let initFlight = watchVimeoInitFlight &&
+      String(watchVimeoInitFlight.key)===String(id) ? watchVimeoInitFlight : null;
+    if (!initFlight) {
+      void initWatchVimeo(true);
+      initFlight = watchVimeoInitFlight &&
+        String(watchVimeoInitFlight.key)===String(id) ? watchVimeoInitFlight : null;
+    }
+    const deadline = Date.now()+12000;
+    while (!state.watchVimeo?.isIrgunNativeVideoPlayer && Date.now()<deadline &&
+        state.watchVideo && String(videoId(state.watchVideo))===String(id)) {
+      if (!watchVimeoInitFlight && !state.watchVimeo) break;
+      if (initFlight && watchVimeoInitFlight!==initFlight && !state.watchVimeo) break;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    if (!state.watchVimeo?.isIrgunNativeVideoPlayer) {
+      setToast(currentLanguage()==='he'
+        ? 'הווידאו עדיין נטען. נסו שוב לעבור לאודיו בעוד רגע.'
+        : 'Video is still starting. Please try Audio again in a moment.');
+      return false;
+    }
+  }
+
   if (state.watchVimeo?.isIrgunNativeVideoPlayer) {
     // Media3 beta: Audio/Video is a video-track selection change in the SAME
     // ExoPlayer and MediaSession. No pause, new MediaItem, hidden MP3 shadow,
