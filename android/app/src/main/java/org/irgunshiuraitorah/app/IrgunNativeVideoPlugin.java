@@ -48,7 +48,6 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.PluginMethod;
 
-import java.net.URI;
 import java.io.File;
 import java.io.IOException;
 
@@ -60,7 +59,6 @@ import java.io.IOException;
  */
 @CapacitorPlugin(name = "IrgunNativeVideo")
 public final class IrgunNativeVideoPlugin extends Plugin {
-    private static final String API_HOST = "api.irgunshiuraitorah.com";
     private final Handler main = new Handler(Looper.getMainLooper());
     private PlayerView surface;
     private static WeakReference<IrgunNativeVideoPlugin> current = new WeakReference<>(null);
@@ -523,15 +521,7 @@ public final class IrgunNativeVideoPlugin extends Plugin {
     private float clipLeft, clipTop, clipRight, clipBottom;
 
     private boolean permitted(String url) {
-        if (url == null || url.isEmpty()) return false;
-        try {
-            URI uri = URI.create(url);
-            return "https".equalsIgnoreCase(uri.getScheme())
-                && API_HOST.equalsIgnoreCase(uri.getHost())
-                && uri.getPath() != null && uri.getPath().startsWith("/media/");
-        } catch (RuntimeException exception) {
-            return false;
-        }
+        return NativeVideoSourcePolicy.isPermitted(url);
     }
 
     @PluginMethod
