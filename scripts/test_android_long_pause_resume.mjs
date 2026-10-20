@@ -57,6 +57,9 @@ test('runtime refresh retains a single native engine and lecture identity guard'
   const main=read('src/main.js');
   assert.match(plugin, /public void refreshSource\(PluginCall call\)/);
   assert.match(plugin, /IrgunPlaybackService\.refreshNativeVideoSource\(/);
+  assert.match(plugin, /userRequested/);
+  assert.match(adapter, /refreshAttempts\+\+;[\s\S]*?getAndroidHlsSource/);
+  assert.match(main, /reconnect\(\{userInitiated:true\}\)/);
   assert.match(service, /private void refreshNativeVideoSourceInternal\(/);
   assert.match(service, /!lectureId\.equals\(cleanStatic\(expectedLectureId\)\)/);
   assert.match(service, /!player\.getPlayWhenReady\(\)/);
