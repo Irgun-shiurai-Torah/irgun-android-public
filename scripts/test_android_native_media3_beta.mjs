@@ -629,6 +629,66 @@ test('partially scrolled Video keeps the original native geometry with a clipped
   assert.deepEqual(JSON.parse(JSON.stringify(requests[0].clip)),{left:0,top:114,right:320,bottom:180});
 });
 
+test('foreground Home return ignores stale native Audio snapshots after VIDEO restoration begins',()=>{
+  const start=app.indexOf('function reconcileNativeWatchAudio(snapshot)');
+  const end=app.indexOf('const PlaybackController =',start);
+  let parked=0,nativeAudioCalls=0;
+  const context={
+    state:{watchMode:'video',watchVideo:{id:'a'},watchResumeSeconds:50,
+      mediaSwitchBusy:false,nativeBackgroundHandoff:false,
+      nativeVideoForegroundRestoreUntil:Date.now()+5000,
+      watchVimeo:{isIrgunNativeVideoPlayer:true,setMode:()=>{nativeAudioCalls++;}}},
+    videoId:v=>v.id,document:{hidden:false},
+    ensureNativeAudioCurrentForWatch:()=>{throw new Error('Stale Home Audio must not own foreground Video');},
+    parkHostedVideoForAudio:()=>{parked++},render:()=>{throw new Error('Video must not rerender as Audio');}
+  };
+  runInNewContext(app.slice(start,end)+'\nthis.reconcile=reconcileNativeWatchAudio;',context);
+  context.reconcile({mode:'AUDIO',lectureId:'a',audioAuthorityCommitted:true,
+    resumeVideoOnForeground:false,currentPositionMs:92000});
+  assert.equal(context.state.watchMode,'video');
+  assert.equal(context.state.watchResumeSeconds,92);
+  assert.equal(nativeAudioCalls,0,'Do not deselect Video based on the delayed Home snapshot');
+  assert.equal(parked,0,'The existing native PlayerView must stay visible');
+});
+
+test('an expired Home restoration guard accepts a real committed Audio selection',()=>{
+  const start=app.indexOf('function reconcileNativeWatchAudio(snapshot)');
+  const end=app.indexOf('const PlaybackController =',start);
+  let parked=0,audioModes=0;
+  const state={watchMode:'video',watchVideo:{id:'a'},watchResumeSeconds:0,
+    mediaSwitchBusy:false,nativeBackgroundHandoff:false,
+    nativeVideoForegroundRestoreUntil:Date.now()-1,
+    watchVimeo:{isIrgunNativeVideoPlayer:true,setMode:async mode=>{if(mode==='audio') audioModes++;}}};
+  const context={state,videoId:v=>v.id,document:{hidden:false,getElementById:()=>null},
+    ensureNativeAudioCurrentForWatch(){},parkHostedVideoForAudio(){parked++;},render(){}};
+  runInNewContext(app.slice(start,end)+'\nthis.reconcile=reconcileNativeWatchAudio;',context);
+  context.reconcile({mode:'AUDIO',lectureId:'a',audioAuthorityCommitted:true,currentPositionMs:94000});
+  assert.equal(state.watchMode,'audio');
+  assert.equal(state.watchResumeSeconds,94);
+  assert.equal(audioModes,1);
+  assert.equal(parked,1);
+});
+
+test('background Audio observation never hides restored foreground native Video',async()=>{
+  const start=adapter.indexOf('  const tick=async()=>{');
+  const end=adapter.indexOf('  const timer=setInterval',start);
+  const calls=[],context={
+    destroyed:false,ticking:false,mode:'video',framePlacedOnScreen:true,
+    lastPlaying:false,reportedError:'',failedFrames:0,
+    refresh:async()=>({active:true,videoSelected:false,playing:false,frames:0}),
+    scheduleFrame(){},emit(){},console:{warn(){}},
+    native:{frame:value=>{calls.push(value);return Promise.resolve();}},
+    document:{hidden:false},innerWidth:320,innerHeight:640
+  };
+  runInNewContext(adapter.slice(start,end)+'\nthis.tick=tick;',context);
+  await context.tick();
+  assert.equal(calls.length,0,'Transient foreground AUDIO snapshots must not hide Video');
+  context.document.hidden=true;
+  await context.tick();
+  assert.equal(calls.length,1,'Home background Audio still hides the physical PlayerView');
+  assert.equal(calls[0].width,0);
+});
+
 test('temporary Home Audio snapshot preserves the selected native Video view and advancing position',()=>{
   const start=app.indexOf('function reconcileNativeWatchAudio(snapshot)');
   const end=app.indexOf('const PlaybackController =',start);

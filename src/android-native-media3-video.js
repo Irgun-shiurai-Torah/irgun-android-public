@@ -196,9 +196,11 @@ export async function createNativeMedia3VideoPlayer({apiBase,videoId,iframe,
         onRecovered(adapter);
         framePlacedOnScreen=false;trackFrame();
       }
-      if(mode==='video'&&!s.videoSelected){
-        // Android Home was pressed; its media service switched to audio-only
-        // using this same HLS MediaItem, so remove the picture surface.
+      if(mode==='video'&&!s.videoSelected&&document.hidden){
+        // Home temporarily selects Audio on the same MediaItem. Hide the
+        // surface ONLY while the WebView is backgrounded. On return, a
+        // stale AUDIO snapshot may race the Activity's VIDEO restoration;
+        // hiding PlayerView here would erase the newly positioned picture.
         native.frame({width:0,height:0,viewportWidth:innerWidth,viewportHeight:innerHeight}).catch(()=>{});
       }
     }catch(error){if(!destroyed)console.warn('[Media3] state observation failed',error);}
