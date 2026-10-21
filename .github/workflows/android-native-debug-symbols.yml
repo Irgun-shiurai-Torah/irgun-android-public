@@ -64,6 +64,16 @@ jobs:
       - name: Test native-symbol verification cases
         run: bash scripts/test_android_native_symbols.sh
 
+      - name: Prove the candidate DataStore version is resolved
+        shell: bash
+        working-directory: android
+        run: |
+          set -euo pipefail
+          mkdir -p ../symbol-report
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:dependencyInsight --configuration releaseRuntimeClasspath --dependency androidx.datastore | tee ../symbol-report/datastore-dependency-insight.txt
+          grep -q 'androidx.datastore:datastore-core-android:1.2.1' ../symbol-report/datastore-dependency-insight.txt
+
       - name: Build release AAB without publishing
         working-directory: android
         run: |
@@ -72,6 +82,59 @@ jobs:
       - name: Verify native debug metadata and R8 mapping
         shell: bash
         run: bash scripts/verify_android_native_symbols.sh android/app/build/outputs/bundle/release/app-release.aab android/app/build/outputs/mapping/release/mapping.txt symbol-report strict
+
+      - name: Require a genuine no-warning native-symbol result for this trial
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATUS=symbol-report/native-symbols-status.txt
+          cat "$STATUS"
+          if grep -Eq '^(No native [.]so libraries in the AAB|Native debug metadata is embedded in the AAB)' "$STATUS"; then
+            echo 'The candidate AAB contains no native library without symbols.'
+          else
+            echo '::error::This DataStore version did not eliminate the missing native-symbol warning; do not merge as a fix.'
+            exit 1
+          fi
+
+      - name: Validate native symbol tables and matching ELF code for all ABIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          AAB=android/app/build/outputs/bundle/release/app-release.aab
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          TOOLROOT="$SDK_ROOT/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          READELF="$TOOLROOT/llvm-readelf"
+          NM="$TOOLROOT/llvm-nm"
+          test -x "$READELF" && test -x "$NM"
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "$TMP"' EXIT
+          : > symbol-report/verified-native-symbols.txt
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            SYMBOL_ENTRY="BUNDLE-METADATA/com.android.tools.build.debugsymbols/$abi/libdatastore_shared_counter.so.sym"
+            LIB_ENTRY="base/lib/$abi/libdatastore_shared_counter.so"
+            unzip -p "$AAB" "$SYMBOL_ENTRY" > "$TMP/library.sym"
+            unzip -p "$AAB" "$LIB_ENTRY" > "$TMP/library.so"
+            test -s "$TMP/library.sym" && test -s "$TMP/library.so"
+            "$READELF" --sections "$TMP/library.sym" | grep -Eq '[[:space:]][.]symtab[[:space:]]'
+            "$NM" --defined-only "$TMP/library.sym" | grep -Eq '[[:xdigit:]]+ [A-Za-z] '
+            # Some upstream ELF builds do not include GNU build-id notes.
+            # A matching executable .text section proves the .sym file comes
+            # from the exact library packaged in the same AAB, regardless.
+            "$READELF" --hex-dump=.text "$TMP/library.sym" > "$TMP/symbol-text.txt"
+            "$READELF" --hex-dump=.text "$TMP/library.so" > "$TMP/library-text.txt"
+            test -s "$TMP/symbol-text.txt" && test -s "$TMP/library-text.txt"
+            if ! cmp -s "$TMP/symbol-text.txt" "$TMP/library-text.txt"; then
+              echo "::error::Executable .text bytes in native symbols do not match library for $abi"
+              exit 1
+            fi
+            SYM_BUILD_ID="$("$READELF" --notes "$TMP/library.sym" | sed -n 's/.*Build ID: //p' | head -n 1)"
+            SO_BUILD_ID="$("$READELF" --notes "$TMP/library.so" | sed -n 's/.*Build ID: //p' | head -n 1)"
+            if [ -n "$SYM_BUILD_ID" ] && [ -n "$SO_BUILD_ID" ] && [ "$SYM_BUILD_ID" != "$SO_BUILD_ID" ]; then
+              echo "::error::Available native build IDs disagree for $abi"
+              exit 1
+            fi
+            echo "$abi: symbol ELF has defined names and .symtab; executable .text matches packaged binary" | tee -a symbol-report/verified-native-symbols.txt
+          done
 
       - name: Upload symbol verification listing
         if: always()

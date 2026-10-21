@@ -95,6 +95,9 @@ dependencies {
     implementation project(':capacitor-cordova-android-plugins')
     implementation platform('com.google.firebase:firebase-bom:34.18.0')
     implementation 'com.google.firebase:firebase-messaging'
+    // Trial: align Firebase's transitive AndroidX DataStore dependency with the
+    // latest stable 1.2.1 release; native symbol presence must be proven in CI.
+    implementation 'androidx.datastore:datastore-preferences:1.2.1'
     implementation 'androidx.credentials:credentials:1.6.0'
     implementation 'androidx.credentials:credentials-play-services-auth:1.6.0'
     implementation 'com.google.android.libraries.identity.googleid:googleid:1.1.1'
