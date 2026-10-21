@@ -64,6 +64,14 @@ jobs:
       - name: Test native-symbol verification cases
         run: bash scripts/test_android_native_symbols.sh
 
+      - name: Trace which dependency adds AndroidX DataStore
+        working-directory: android
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:dependencyInsight --configuration releaseRuntimeClasspath --dependency androidx.datastore
+
       - name: Build release AAB without publishing
         working-directory: android
         run: |
