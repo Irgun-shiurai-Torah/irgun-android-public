@@ -15,6 +15,16 @@ def irgunHasReleaseSigning = irgunKeystorePath &&
 
 android {
     namespace = "org.irgunshiuraitorah.app"
+    // EXPERIMENT ONLY: This binary is loaded by multi-process AndroidX DataStore.
+    // Firebase currently consumes the single-process preferences API. Before
+    // merging, require release AAB inspection and real FCM token/runtime tests.
+    // Never ship this omission if any app component needs multi-process DataStore.
+    packaging {
+        jniLibs {
+            excludes += ['**/libdatastore_shared_counter.so']
+        }
+    }
+
     compileSdk = rootProject.ext.compileSdkVersion
 
     defaultConfig {
