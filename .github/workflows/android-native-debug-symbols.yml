@@ -70,6 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ../symbol-report
+          chmod +x gradlew
           ./gradlew --no-daemon :app:dependencyInsight --configuration releaseRuntimeClasspath --dependency androidx.datastore | tee ../symbol-report/datastore-dependency-insight.txt
           grep -q 'androidx.datastore:datastore-core-android:1.2.1' ../symbol-report/datastore-dependency-insight.txt
 
