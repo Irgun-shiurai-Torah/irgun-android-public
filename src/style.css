@@ -3579,3 +3579,30 @@ body.irgun-android .android-home-inline-heading .section-link {
   body.irgun-android .android-home-inline-heading { column-gap:10px; }
   body.irgun-android .android-home-inline-heading .section-link { font-size:11px; }
 }
+
+
+/* History, Full Schedule and Browse All go DIRECTLY UNDER their section
+   titles (and before any lecture cards), never on the same line or at end. */
+body.irgun-android .android-home-stacked-heading {
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  justify-content:flex-start;
+  gap:1px;
+}
+body.irgun-android .android-home-stacked-heading .section-link {
+  display:inline-flex;
+  flex:0 0 auto;
+  align-items:center;
+  align-self:flex-start;
+  margin:0;
+  min-height:36px;
+  padding:5px 0;
+  font-size:12px;
+  font-weight:850;
+  line-height:1.3;
+  text-align:start;
+}
+@media(max-width:390px) {
+  body.irgun-android .android-home-stacked-heading .section-link { font-size:11px; }
+}
