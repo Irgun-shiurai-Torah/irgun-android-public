@@ -96,6 +96,36 @@ jobs:
             exit 1
           fi
 
+      - name: Validate DataStore ELF symbol tables and matching build IDs in all ABIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          AAB=android/app/build/outputs/bundle/release/app-release.aab
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          TOOLROOT="$SDK_ROOT/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          READELF="$TOOLROOT/llvm-readelf"
+          NM="$TOOLROOT/llvm-nm"
+          test -x "$READELF" && test -x "$NM"
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "$TMP"' EXIT
+          : > symbol-report/verified-native-symbols.txt
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            SYMBOL_ENTRY="BUNDLE-METADATA/com.android.tools.build.debugsymbols/$abi/libdatastore_shared_counter.so.sym"
+            LIB_ENTRY="base/lib/$abi/libdatastore_shared_counter.so"
+            unzip -p "$AAB" "$SYMBOL_ENTRY" > "$TMP/library.sym"
+            unzip -p "$AAB" "$LIB_ENTRY" > "$TMP/library.so"
+            test -s "$TMP/library.sym" && test -s "$TMP/library.so"
+            "$READELF" --sections "$TMP/library.sym" | grep -Eq '[[:space:]][.]symtab[[:space:]]'
+            "$NM" --defined-only "$TMP/library.sym" | grep -Eq '[[:xdigit:]]+ [A-Za-z] '
+            SYM_BUILD_ID="$("$READELF" --notes "$TMP/library.sym" | sed -n 's/.*Build ID: //p' | head -n 1)"
+            SO_BUILD_ID="$("$READELF" --notes "$TMP/library.so" | sed -n 's/.*Build ID: //p' | head -n 1)"
+            if [ -z "$SYM_BUILD_ID" ] || [ "$SYM_BUILD_ID" != "$SO_BUILD_ID" ]; then
+              echo "::error::Native build ID missing or mismatched for $abi"
+              exit 1
+            fi
+            echo "$abi: debug-symbol ELF has .symtab and matches packaged library build ID" | tee -a symbol-report/verified-native-symbols.txt
+          done
+
       - name: Upload symbol verification listing
         if: always()
         uses: actions/upload-artifact@v7
