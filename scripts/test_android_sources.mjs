@@ -1872,3 +1872,65 @@ test('native Audio mode shows real Watch controls before optional slow Media3 br
   assert.ok(ui>0 && bridge>ui,
     'Confirmed native Audio mode must render its Play controls before awaiting slow bridge snapshots');
 });
+
+
+test('Android homepage review buttons follow the approved layout',()=>{
+  // Exercise the real homepage renderer, rather than accepting a static copy
+  // of a button label or an obsolete selector in a test.
+  const block=(start,end)=>{
+    const a=mainSource.indexOf(start),b=mainSource.indexOf(end,a+start.length);
+    assert.ok(a>=0&&b>a,'Expected current homepage source block: '+start);
+    return mainSource.slice(a,b);
+  };
+  const source=block('function speakerDiscoveryCard(row) {','function homeDiscoveryHtml() {')+
+    block('function homeDiscoveryHtml() {','function promiseWithTimeout(')+
+    block('function homeLiveNowHtml(live) {','function liveHtml()');
+  let live=[],language='en';
+  const ctx={
+    state:{user:{id:'qa'},counter:111,homeTrendPeriod:'week'},
+    currentLanguage:()=>language,
+    continueListeningItems:()=>[{id:'continue'}],
+    followingFeed:()=>[{id:'follow'}],
+    speakerDiscoveryRows:()=>[{id:'zev',tag:'Rav',count:14,latestTitle:'Should not appear'}],
+    speakerLabel:()=> 'Rav Zev Smith',
+    svgIcon:()=>'<svg></svg>',esc:value=>String(value),
+    compactItem:()=>'<article>Continued item</article>',
+    itemCard:()=>'<article>Recorded shiur</article>',
+    homeTrending:()=>[{item:{id:'trending'},count:12}],
+    recentItems:()=>[{id:'recent'}],
+    futureScheduleEvents:()=>[{title:'Upcoming'}],
+    scheduleEventCard:()=>'<article>Upcoming event</article>',
+    liveScheduleEvents:()=>live
+  };
+  runInNewContext(source+'\nthis.home=homeHtml;this.speaker=speakerDiscoveryCard;',ctx);
+  const html=ctx.home();
+  assert.match(html,/<h2>Continue Listening<\/h2>/);
+  assert.match(html,/class="list home-continue-list">[\s\S]*?<\/div><div class="home-section-footer"><button class="section-link" data-nav="library" data-open-history="1">History<\/button>/);
+  assert.match(html,/<h2>Upcoming Shiurim<\/h2>[\s\S]*?class="upcoming-home-list">[\s\S]*?<\/div><div class="home-section-footer"><button class="section-link" data-nav="schedule">Full schedule<\/button>/);
+  assert.match(html,/<h2>Latest Shiurim<\/h2>[\s\S]*?class="card-grid">[\s\S]*?<\/div>\s*<div class="home-section-footer"><button class="section-link" data-nav="shiurim">Browse all<\/button>/);
+  assert.equal((html.match(/data-open-history="1"/g)||[]).length,1,'Only one History button');
+  assert.doesNotMatch(html,/>CONTINUE<|>FOLLOWING<|>DISCOVER<|>POPULAR NOW<|>LIVE & NEXT<|>NEW</);
+  assert.doesNotMatch(html,/class="live-now-section"/,'Home must not show Live Now without a live event');
+  assert.match(html,/Watch Live/,'Watch Live remains accessible while offline');
+  assert.match(html,/data-nav="paid"/,'Keep Android purchase shortcut');
+  const speaker=ctx.speaker({id:'zev',count:14,latestTitle:'An older title'});
+  assert.match(speaker,/Rav Zev Smith/);
+  assert.match(speaker,/14 shiurim/);
+  assert.doesNotMatch(speaker,/Latest:|An older title|Should not appear/);
+  live=[{location:'Flatbush',title:'Broadcasting',speaker:'Rav Zev',date:'today'}];
+  const liveHtml=ctx.home();
+  assert.match(liveHtml,/class="section live-now-section"/);
+  assert.match(liveHtml,/data-nav="live-flatbush"/);
+  assert.match(liveHtml,/Broadcasting/);
+  assert.doesNotMatch(liveHtml,/Next Shiur/,'Live section must not duplicate Upcoming Shiurim');
+});
+
+test('Vimeo-only emulator QA observes current Android Home before a physical navigation tap',()=>{
+  const file=readFileSync('scripts/android-emulator-vimeo.mjs','utf8');
+  assert.match(file,/const isHomeVisible=\(\)=>evaluate\(/);
+  assert.match(file,/if \(!await isHomeVisible\(\)\) \{/);
+  assert.match(file,/tap\('#androidBottomNavigationMount \.bottom-nav \[data-nav="home"\]'\)/);
+  assert.match(file,/assert\.equal\(await isHomeVisible\(\),true/);
+  assert.doesNotMatch(file,/await tap\('\.bottom-nav \[data-nav="home"\]'\)/,
+    'Do not force an unnecessary Home tap after the real Activity already opens Home');
+});
