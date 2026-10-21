@@ -20,6 +20,16 @@ public class IrgunFullscreenPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void livePlayback(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (getActivity() instanceof MainActivity)
+                ((MainActivity)getActivity()).setLiveVideoPlaying(
+                    Boolean.TRUE.equals(call.getBoolean("playing", false)));
+            call.resolve();
+        });
+    }
+
+    @PluginMethod
     public void playback(PluginCall call) {
         getActivity().runOnUiThread(() -> {
             if (getActivity() instanceof MainActivity)
