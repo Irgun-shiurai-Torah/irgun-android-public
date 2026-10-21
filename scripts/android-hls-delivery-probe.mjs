@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { writeFileSync,mkdirSync } from 'node:fs';
 import {fetchProbe} from './android-probe-request.mjs';
+import {requireDriveBackedLecture} from './android-drive-media-fixture.mjs';
 
 const base='https://api.irgunshiuraitorah.com';
 const id=String(process.env.IRGUN_HLS_TEST_ID||'1232214252');
@@ -19,6 +20,8 @@ async function request(path,{range=false,binary=false}={}){
   return payload;
 }
 try{
+  const catalog=JSON.parse(await request('/video-map?driveLibrary=1'));
+  requireDriveBackedLecture(catalog,id);
   const raw=await request('/media/'+encodeURIComponent(id)+'/source.json');
   const descriptor=JSON.parse(raw);
   assert.ok(descriptor.video?.hls,'Fixture must expose a real HLS URL; MP4 fallback does not count');
@@ -34,7 +37,10 @@ try{
   assert.ok(script.length>100000&&script.includes('Hls'),'Proxied HLS.js must be provided, not a redirect/error page');
   // The long October 6 lecture stalled precisely at 9:59.9 after seeking.
   // Inspect the actual server HLS manifest, not only our shorter fixture.
-  const reportedId=String(process.env.IRGUN_REPORTED_HLS_TEST_ID||'1233236785:585d5d53db');
+  // Use the canonical Drive-backed identity from the live catalog. The old
+  // `1233236785:585d5d53db` Vimeo sharing alias is NOT a /media path.
+  const reportedId=String(process.env.IRGUN_REPORTED_HLS_TEST_ID||'1233236785');
+  requireDriveBackedLecture(catalog,reportedId);
   const prefix='/media/'+encodeURIComponent(reportedId);
   const timelineDescriptor=JSON.parse(await request(prefix+'/source.json'));
   assert.ok(timelineDescriptor.video?.hls,'Reported lecture must advertise its HLS source');
