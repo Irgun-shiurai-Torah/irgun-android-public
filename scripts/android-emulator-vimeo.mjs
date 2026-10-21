@@ -60,7 +60,26 @@ try{
   if(await evaluate("!!document.querySelector('[data-close-watch]')")){
    await tap('[data-close-watch]');await delay(500);
   }
-  await tap('.bottom-nav [data-nav="home"]');await delay(600);
+  // The preceding Media3 suite may already leave the real Android Home tab
+  // active. Before touching any navigation control, observe the native nav
+  // and the live Home search. A redundant tap is unnecessary, and a floating
+  // navigation transition can leave its hit target unstable for a few frames.
+  const isHomeVisible=()=>evaluate(`(()=>{
+    const home=document.querySelector('#androidBottomNavigationMount .bottom-nav [data-nav="home"]');
+    const search=document.querySelector('#app #homeLibrarySearch');
+    return Boolean(home?.classList.contains('active') &&
+      home?.getAttribute('aria-current')==='page' && search &&
+      !document.querySelector('#app .loading,#app .offline-error-card'));
+  })()`);
+  if (!await isHomeVisible()) {
+    // A real physical button tap is still required when navigation is needed.
+    // Restrict the selector to the persistent Android nav mount, not the
+    // ephemeral page or any inert swipe-preview markup.
+    await tap('#androidBottomNavigationMount .bottom-nav [data-nav="home"]');
+    for (let i=0;i<20 && !await isHomeVisible();i++) await delay(250);
+  }
+  assert.equal(await isHomeVisible(),true,
+    'Actual Android Home tab and Home search must be visible before Vimeo QA');
   for(let i=0;i<6;i++){
    const visible=await evaluate("!!document.querySelector('#homeLibrarySearch')&&document.querySelector('#homeLibrarySearch').getBoundingClientRect().bottom<innerHeight-80");
    if(visible)break;
