@@ -1,0 +1,52 @@
+name: Android Drive media fixture and playback QA
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/android-drive-media-fixture.mjs'
+      - 'scripts/test_android_drive_media_fixture.mjs'
+      - 'scripts/android-audio-download-probe.mjs'
+      - 'scripts/android-hls-delivery-probe.mjs'
+      - 'scripts/android-regression-extensions.mjs'
+      - '.github/workflows/android-drive-media-fixtures-ci.yml'
+  push:
+    branches: [fix/android-regression-qa-fixtures-20261021]
+    paths:
+      - 'scripts/android-drive-media-fixture.mjs'
+      - 'scripts/test_android_drive_media_fixture.mjs'
+      - 'scripts/android-audio-download-probe.mjs'
+      - 'scripts/android-hls-delivery-probe.mjs'
+      - 'scripts/android-regression-extensions.mjs'
+      - '.github/workflows/android-drive-media-fixtures-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  qa-fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify JS syntax and Vimeo-only exclusion logic
+        run: |
+          node --check scripts/android-regression-extensions.mjs
+          node --check scripts/android-hls-delivery-probe.mjs
+          node --check scripts/android-audio-download-probe.mjs
+          node --test scripts/test_android_drive_media_fixture.mjs
+      - name: Verify real Drive-backed HLS manifests and 10-minute-seek recording
+        run: node scripts/android-hls-delivery-probe.mjs
+      - name: Verify downloadable real MP3 bytes from Drive-backed lecture
+        run: node scripts/android-audio-download-probe.mjs
+      - name: Upload sanitized HTTP QA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-live-drive-media-fixture-evidence
+          path: emulator-report/*.json
+          if-no-files-found: warn
