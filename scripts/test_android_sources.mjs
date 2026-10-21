@@ -1940,7 +1940,10 @@ test('Native Media3 Audio reconciliation checks the visible Audio overlay, not a
   assert.match(reconcile,/visibleAudioWatchUi/);
   assert.ok(reconcile.includes("document.querySelector('#app .watch-overlay')"),
     'Inspect the actual in-app Watch overlay when it exists');
-  assert.match(reconcile,/data-watch-mode="audio"\\.active/);
+  // Match the real Audio tab inside the currently visible Watch overlay.
+  // The selector contains a closing ] before .active; do not assert an
+  // impossible escaped backslash in the rendered source.
+  assert.match(reconcile,/audioOverlay\.querySelector\('\.media-switch \[data-watch-mode="audio"\]\.active'\)/);
   assert.match(reconcile,/!visibleAudioWatchUi/);
 });
 
