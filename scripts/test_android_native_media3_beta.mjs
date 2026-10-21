@@ -161,8 +161,12 @@ test('native Video to Audio retains its media item and exact playback position',
   assert.match(service,/nativeVideoRenderedFrames\+\+/,'Actual video frames, not only clock, must be tracked');
 });
 test('Android native controls expose only bounded and source-safe commands',()=>{
-  assert.match(bridge,/API_HOST = "api\.irgunshiuraitorah\.com"/);
-  assert.match(bridge,/startsWith\("\/media\/"\)/);
+  const sourcePolicy=readFileSync('android/app/src/main/java/org/irgunshiuraitorah/app/NativeVideoSourcePolicy.java','utf8');
+  assert.match(sourcePolicy,/API_HOST = "api\.irgunshiuraitorah\.com"/);
+  assert.match(sourcePolicy,/path\.startsWith\("\/media\/"\)/);
+  assert.match(sourcePolicy,/VIMEO_PLAYER_HOST = "player\.vimeo\.com"/);
+  assert.match(sourcePolicy,/VIMEO_CDN_SUFFIX = "\.vimeocdn\.com"/);
+  assert.match(bridge,/NativeVideoSourcePolicy\.isPermitted\(url\)/);
   assert.match(bridge,/case "seek":/);
   assert.match(bridge,/case "pause":/);
   assert.match(bridge,/case "speed":/);
