@@ -77,14 +77,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if unzip -Z1 android/app/build/outputs/bundle/release/app-release.aab | grep -E '^base/lib/[^/]+/[^/]+[.]so        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: android-symbol-report-${{ github.run_id }}
-          path: symbol-report/
-          if-no-files-found: warn
-          retention-days: 14
-; then
+          if unzip -Z1 android/app/build/outputs/bundle/release/app-release.aab | grep -Eq '^base/lib/[^/]+/[^/]+[.]so$'; then
             echo '::error::A native library is still present. This experiment does not eliminate the Play warning.'
             exit 1
           fi
