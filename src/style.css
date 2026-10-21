@@ -3553,3 +3553,29 @@ body.irgun-android .schedule-event-card.compact .schedule-event-copy h3 { font-s
   body.irgun-android .schedule-event-time { font-size:12px; }
   body.irgun-android .schedule-event-copy p { font-size:11px; }
 }
+
+/* Screenshot review: keep section links adjacent to their headings, including
+   Live Now, History, Full Schedule and Browse All. They wrap below the
+   heading only when the Android viewport is too narrow for both items. */
+body.irgun-android .android-home-inline-heading {
+  justify-content:flex-start;
+  align-items:center;
+  flex-wrap:wrap;
+  column-gap:15px;
+  row-gap:6px;
+}
+body.irgun-android .android-home-inline-heading .section-link {
+  flex:0 0 auto;
+  min-height:40px;
+  display:inline-flex;
+  align-items:center;
+  text-align:start;
+  margin:0;
+  padding:7px 2px;
+  font-size:12px;
+  font-weight:850;
+}
+@media(max-width:390px) {
+  body.irgun-android .android-home-inline-heading { column-gap:10px; }
+  body.irgun-android .android-home-inline-heading .section-link { font-size:11px; }
+}
