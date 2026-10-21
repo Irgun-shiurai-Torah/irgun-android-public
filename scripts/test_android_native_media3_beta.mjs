@@ -636,6 +636,7 @@ test('foreground Home return ignores stale native Audio snapshots after VIDEO re
   const context={
     state:{watchMode:'video',watchVideo:{id:'a'},watchResumeSeconds:50,
       mediaSwitchBusy:false,nativeBackgroundHandoff:false,
+      nativeVideoForegroundRestoreUntil:Date.now()+5000,
       watchVimeo:{isIrgunNativeVideoPlayer:true,setMode:()=>{nativeAudioCalls++;}}},
     videoId:v=>v.id,document:{hidden:false},
     ensureNativeAudioCurrentForWatch:()=>{throw new Error('Stale Home Audio must not own foreground Video');},
@@ -648,6 +649,24 @@ test('foreground Home return ignores stale native Audio snapshots after VIDEO re
   assert.equal(context.state.watchResumeSeconds,92);
   assert.equal(nativeAudioCalls,0,'Do not deselect Video based on the delayed Home snapshot');
   assert.equal(parked,0,'The existing native PlayerView must stay visible');
+});
+
+test('an expired Home restoration guard accepts a real committed Audio selection',()=>{
+  const start=app.indexOf('function reconcileNativeWatchAudio(snapshot)');
+  const end=app.indexOf('const PlaybackController =',start);
+  let parked=0,audioModes=0;
+  const state={watchMode:'video',watchVideo:{id:'a'},watchResumeSeconds:0,
+    mediaSwitchBusy:false,nativeBackgroundHandoff:false,
+    nativeVideoForegroundRestoreUntil:Date.now()-1,
+    watchVimeo:{isIrgunNativeVideoPlayer:true,setMode:async mode=>{if(mode==='audio') audioModes++;}}};
+  const context={state,videoId:v=>v.id,document:{hidden:false,getElementById:()=>null},
+    ensureNativeAudioCurrentForWatch(){},parkHostedVideoForAudio(){parked++;},render(){}};
+  runInNewContext(app.slice(start,end)+'\nthis.reconcile=reconcileNativeWatchAudio;',context);
+  context.reconcile({mode:'AUDIO',lectureId:'a',audioAuthorityCommitted:true,currentPositionMs:94000});
+  assert.equal(state.watchMode,'audio');
+  assert.equal(state.watchResumeSeconds,94);
+  assert.equal(audioModes,1);
+  assert.equal(parked,1);
 });
 
 test('background Audio observation never hides restored foreground native Video',async()=>{
