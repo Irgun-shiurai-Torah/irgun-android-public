@@ -20,6 +20,21 @@ if adb shell am help | grep -q wait-for-broadcast-idle; then
   timeout 60s adb shell am wait-for-broadcast-idle
 fi
 sleep 8
+# The Pixel Tablet Android 16 emulator can report sys.boot_completed while
+# its first-boot Google/system broadcasts are still being dispatched. On the
+# failed runs ActivityManager posted BOOT_COMPLETED well AFTER we launched the
+# app, saturating the emulator while Capacitor registered its plugins. Android
+# then flagged SplashActivity's focus-loss event as an ANR. Wait for the cold
+# OS to settle BEFORE launching the first Activity; do not dismiss an ANR,
+# restart the app, relax foreground assertions, or alter production playback.
+if [[ "${1:-}" == "tablet-display" ]] &&
+   [[ "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" == "36" ]]; then
+  echo "Allow Android 16 tablet first-boot services to settle before strict ANR test"
+  sleep 40
+  if adb shell am help | grep -q wait-for-broadcast-idle; then
+    timeout 90s adb shell am wait-for-broadcast-idle
+  fi
+fi
 adb logcat -c
 if [[ "${1:-}" == "tablet-display" ]]; then
   # Pixel Tablet's natural orientation is landscape. Start physically upright
