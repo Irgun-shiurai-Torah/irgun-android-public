@@ -3795,7 +3795,7 @@ function itemCard(item, options = {}) {
       <button class="media-cover" data-${isAudio ? 'listen-audio' : 'watch'}="${esc(id)}"${isAudio ? '' : watchTimeAttr} aria-label="${esc(isAudio ? tr('Listen') : tr('Watch'))}">
         ${isAudio
           ? logoArtworkHtml()
-          : `<img src="${esc(item.thumbnail || '')}" alt="" loading="lazy">`}
+          : `<img src="${esc(item.thumbnail || '')}" alt="" loading="lazy" decoding="async" fetchpriority="low">`}
         ${isNew(date) ? '<span class="badge-new">NEW</span>' : ''}
       </button>
       <div class="media-primary-overlay">
