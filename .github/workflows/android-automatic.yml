@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - test/android-internal-build-20261021
     paths-ignore:
       - ".github/**"
       - "README*"
