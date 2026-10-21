@@ -1905,13 +1905,18 @@ test('Android homepage review buttons follow the approved layout',()=>{
   runInNewContext(source+'\nthis.home=homeHtml;this.speaker=speakerDiscoveryCard;',ctx);
   const html=ctx.home();
   assert.match(html,/<h2>Continue Listening<\/h2>/);
-  assert.match(html,/class="list home-continue-list">[\s\S]*?<\/div><div class="home-section-footer"><button class="section-link" data-nav="library" data-open-history="1">History<\/button>/);
-  assert.match(html,/<h2>Upcoming Shiurim<\/h2>[\s\S]*?class="upcoming-home-list">[\s\S]*?<\/div><div class="home-section-footer"><button class="section-link" data-nav="schedule">Full schedule<\/button>/);
-  assert.match(html,/<h2>Latest Shiurim<\/h2>[\s\S]*?class="card-grid">[\s\S]*?<\/div>\s*<div class="home-section-footer"><button class="section-link" data-nav="shiurim">Browse all<\/button>/);
+  assert.match(html,/class="section-head android-home-inline-heading"><div><h2>Continue Listening<\/h2><\/div><button class="section-link" data-nav="library" data-open-history="1">History<\/button><\/div><div class="list home-continue-list">/);
+  assert.match(html,/class="section-head android-home-inline-heading"><div><h2>Upcoming Shiurim<\/h2><\/div><button class="section-link" data-nav="schedule">Full schedule<\/button><\/div>/);
+  assert.match(html,/class="section-head android-home-inline-heading"><div><h2>Latest Shiurim<\/h2><\/div><button class="section-link" data-nav="shiurim">Browse all<\/button><\/div>/);
   assert.equal((html.match(/data-open-history="1"/g)||[]).length,1,'Only one History button');
-  assert.doesNotMatch(html,/>CONTINUE<|>FOLLOWING<|>DISCOVER<|>POPULAR NOW<|>LIVE & NEXT<|>NEW</);
+  assert.doesNotMatch(html,/>CONTINUE<|>FOLLOWING<|>DISCOVER<|>POPULAR NOW<|>LIVE & NEXT<|>NEW<|>COMING UP</);
   assert.doesNotMatch(html,/class="section live-now-section"/,'Home must not show Live Now without a live event');
   assert.match(html,/Watch Live/,'Watch Live remains accessible while offline');
+  assert.match(html,/<h1>Torah, wherever you are\.<\/h1>[\s\S]*?<p>Live shiurim, thousands of recordings, and your personal Torah library—/,
+    'Keep the main Torah headline above the longer subtitle on Android');
+  assert.doesNotMatch(html,/class="home-section-footer"/,'Section actions should not appear after scrolling all cards');
+  assert.match(readFileSync('src/style.css','utf8'),/body\.irgun-android \.android-home-inline-heading \{/,
+    'Section action must stay adjacent to its title on Android');
   assert.match(html,/data-nav="paid"/,'Keep Android purchase shortcut');
   const speaker=ctx.speaker({id:'zev',count:14,latestTitle:'An older title'});
   assert.match(speaker,/Rav Zev Smith/);
@@ -1920,6 +1925,7 @@ test('Android homepage review buttons follow the approved layout',()=>{
   live=[{location:'Flatbush',title:'Broadcasting',speaker:'Rav Zev',date:'today'}];
   const liveHtml=ctx.home();
   assert.match(liveHtml,/class="section live-now-section"/);
+  assert.match(liveHtml,/<h2>Live Now<\/h2><button class="section-link" data-nav="live">View live page<\/button>/);
   assert.match(liveHtml,/data-nav="live-flatbush"/);
   assert.match(liveHtml,/Broadcasting/);
   assert.doesNotMatch(liveHtml,/Next Shiur/,'Live section must not duplicate Upcoming Shiurim');
