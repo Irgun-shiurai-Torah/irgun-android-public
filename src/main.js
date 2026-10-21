@@ -9279,7 +9279,8 @@ function reconcileNativeWatchAudio(snapshot) {
   // The handoff may arrive while the WebView is hidden. Build the Audio view
   // from the native snapshot then, so Home -> notification return cannot expose
   // the old Video controls with a frozen 0:00 clock.
-  const audioOverlay = document.querySelector('#app .watch-overlay');
+  const audioOverlay = typeof document.querySelector === 'function'
+    ? document.querySelector('#app .watch-overlay') : null;
   const audioOverlayRect = audioOverlay?.getBoundingClientRect();
   const visibleAudioWatchUi = Boolean(
     audioOverlay && audioOverlayRect?.width > 0 && audioOverlayRect?.height > 0 &&
@@ -9287,7 +9288,8 @@ function reconcileNativeWatchAudio(snapshot) {
     audioOverlayRect.left < innerWidth && audioOverlayRect.top < innerHeight &&
     audioOverlay.querySelector('.media-switch [data-watch-mode="audio"].active') &&
     audioOverlay.querySelector('#watchAudioTime') &&
-    !hasPersistentVideoOverlayForCurrentWatch()
+    !(typeof hasPersistentVideoOverlayForCurrentWatch === 'function' &&
+      hasPersistentVideoOverlayForCurrentWatch())
   );
   // A stale/hidden Audio clock is not proof that the visible Watch controls
   // switched modes. Re-render when the visible overlay still presents Video.

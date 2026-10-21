@@ -1948,7 +1948,8 @@ test('Native Media3 Audio reconciliation checks the visible Audio overlay, not a
   assert.ok(start>=0&&end>start,'Native Audio reconciliation must remain testable');
   const reconcile=mainSource.slice(start,end);
   assert.match(reconcile,/visibleAudioWatchUi/);
-  assert.match(reconcile,/querySelector\('#app \\.watch-overlay'\)/);
+  assert.ok(reconcile.includes("document.querySelector('#app .watch-overlay')"),
+    'Inspect the actual in-app Watch overlay when it exists');
   assert.match(reconcile,/data-watch-mode="audio"\\.active/);
   assert.match(reconcile,/!visibleAudioWatchUi/);
 });
