@@ -1230,7 +1230,7 @@ function homeDiscoveryHtml() {
   const continueRows = continueListeningItems(4);
   const following = state.user ? followingFeed().slice(0,4) : [];
   const speakers = speakerDiscoveryRows(8);
-  return `<section class="home-discovery"><div class="home-search-box"><span>${svgIcon('search')}</span><input id="homeLibrarySearch" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="${he?'חיפוש לפי כותרת, מרצה או קוד שיעור…':'Search title, speaker or lecture code…'}"><button id="homeLibrarySearchGo">${he?'חפש':'Search'}</button></div>${continueRows.length?`<div class="section-head android-home-inline-heading"><div><h2>${he?'המשך להאזין':'Continue Listening'}</h2></div><button class="section-link" data-nav="library" data-open-history="1">${he?'היסטוריה':'History'}</button></div><div class="list home-continue-list">${continueRows.map(row=>compactItem(row)).join('')}</div>`:''}${following.length?`<div class="section-head follow-home-head"><div><h2>${he?'חדש ממה שאתם עוקבים אחריו':'New From What You Follow'}</h2></div></div><div class="card-grid compact-home-grid">${following.map(v=>itemCard({...v,_kind:'video'})).join('')}</div>`:''}<div class="discover-speakers"><div class="discover-speaker-head"><div><strong>${he?'גלו לפי מרצה':'Discover by Speaker'}</strong></div><div class="discover-speaker-head-actions"><button type="button" data-shuffle-speakers="1">${he?'ערבוב':'Shuffle'}</button><button type="button" data-home-all-speakers="1">${he?'כל המרצים':'See all'}</button></div></div><div class="discover-speaker-grid">${speakers.map(speakerDiscoveryCard).join('')}</div></div></section>`;
+  return `<section class="home-discovery"><div class="home-search-box"><span>${svgIcon('search')}</span><input id="homeLibrarySearch" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="${he?'חיפוש לפי כותרת, מרצה או קוד שיעור…':'Search title, speaker or lecture code…'}"><button id="homeLibrarySearchGo">${he?'חפש':'Search'}</button></div>${continueRows.length?`<div class="section-head android-home-stacked-heading"><div><h2>${he?'המשך להאזין':'Continue Listening'}</h2></div><button class="section-link" data-nav="library" data-open-history="1">${he?'היסטוריה':'History'}</button></div><div class="list home-continue-list">${continueRows.map(row=>compactItem(row)).join('')}</div>`:''}${following.length?`<div class="section-head follow-home-head"><div><h2>${he?'חדש ממה שאתם עוקבים אחריו':'New From What You Follow'}</h2></div></div><div class="card-grid compact-home-grid">${following.map(v=>itemCard({...v,_kind:'video'})).join('')}</div>`:''}<div class="discover-speakers"><div class="discover-speaker-head"><div><strong>${he?'גלו לפי מרצה':'Discover by Speaker'}</strong></div><div class="discover-speaker-head-actions"><button type="button" data-shuffle-speakers="1">${he?'ערבוב':'Shuffle'}</button><button type="button" data-home-all-speakers="1">${he?'כל המרצים':'See all'}</button></div></div><div class="discover-speaker-grid">${speakers.map(speakerDiscoveryCard).join('')}</div></div></section>`;
 }
 
 function promiseWithTimeout(promise, ms, message) {
@@ -4346,7 +4346,7 @@ function homeHtml() {
     ${homeLiveNowHtml(live)}
 
     <section class="section">
-      <div class="section-head android-home-inline-heading"><div><h2>Upcoming Shiurim</h2></div><button class="section-link" data-nav="schedule">Full schedule</button></div>
+      <div class="section-head android-home-stacked-heading"><div><h2>Upcoming Shiurim</h2></div><button class="section-link" data-nav="schedule">Full schedule</button></div>
       ${upcoming.length ? `<div class="upcoming-home-list">${upcoming.map(event => scheduleEventCard(event, true)).join('')}</div>` : '<div class="empty">Current upcoming schedule will appear here.</div>'}
     </section>
 
@@ -4356,7 +4356,7 @@ function homeHtml() {
     </section>
 
     <section class="section">
-      <div class="section-head android-home-inline-heading"><div><h2>Latest Shiurim</h2></div><button class="section-link" data-nav="shiurim">Browse all</button></div>
+      <div class="section-head android-home-stacked-heading"><div><h2>Latest Shiurim</h2></div><button class="section-link" data-nav="shiurim">Browse all</button></div>
       <div class="card-grid">${recent.map(itemCard).join('')}</div>
     </section>`;
 }
