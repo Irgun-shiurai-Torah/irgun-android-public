@@ -188,6 +188,8 @@ test('new peek uses the actual five tab renderers, never a second live player or
   assert.match(motion,/script, iframe, video, audio, source, object, embed, canvas/);
   assert.match(motion,/slice\(2\)/);
   assert.match(motion,/imageCount > 4/);
+  assert.match(motion,/if \(total > 220\) el\.remove\(\)/,
+    'The incoming swipe preview must have a bounded DOM node count on low-memory Android devices');
   assert.match(motion,/recent\.set\(tab/);
   assert.match(native,/fullscreenBackCallback = new OnBackPressedCallback\(false\)/);
   assert.doesNotMatch(native,/primaryTabBackCallback|__irgunHandleAndroidSystemBack/);
