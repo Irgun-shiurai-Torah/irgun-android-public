@@ -64,6 +64,15 @@ jobs:
       - name: Test native-symbol verification cases
         run: bash scripts/test_android_native_symbols.sh
 
+      - name: Prove the candidate DataStore version is resolved
+        shell: bash
+        working-directory: android
+        run: |
+          set -euo pipefail
+          mkdir -p ../symbol-report
+          ./gradlew --no-daemon :app:dependencyInsight --configuration releaseRuntimeClasspath --dependency androidx.datastore | tee ../symbol-report/datastore-dependency-insight.txt
+          grep -q 'androidx.datastore:datastore-core-android:1.2.1' ../symbol-report/datastore-dependency-insight.txt
+
       - name: Build release AAB without publishing
         working-directory: android
         run: |
@@ -72,6 +81,19 @@ jobs:
       - name: Verify native debug metadata and R8 mapping
         shell: bash
         run: bash scripts/verify_android_native_symbols.sh android/app/build/outputs/bundle/release/app-release.aab android/app/build/outputs/mapping/release/mapping.txt symbol-report strict
+
+      - name: Require a genuine no-warning native-symbol result for this trial
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATUS=symbol-report/native-symbols-status.txt
+          cat "$STATUS"
+          if grep -Eq '^(No native [.]so libraries in the AAB|Native debug metadata is embedded in the AAB)' "$STATUS"; then
+            echo 'The candidate AAB contains no native library without symbols.'
+          else
+            echo '::error::This DataStore version did not eliminate the missing native-symbol warning; do not merge as a fix.'
+            exit 1
+          fi
 
       - name: Upload symbol verification listing
         if: always()
