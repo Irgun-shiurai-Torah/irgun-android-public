@@ -6,6 +6,10 @@ capture() {
   adb exec-out screencap -p > emulator-report/startup.png || true
   adb logcat -d -v threadtime > emulator-report/logcat.txt || true
   adb shell dumpsys activity activities > emulator-report/activities.txt || true
+  adb shell dumpsys activity lastanr > emulator-report/android-last-anr.txt || true
+  adb shell dumpsys activity exit-info org.irgunshiuraitorah.app > emulator-report/android-process-exits.txt || true
+  adb shell dumpsys meminfo org.irgunshiuraitorah.app > emulator-report/app-meminfo.txt || true
+  adb shell dumpsys gfxinfo org.irgunshiuraitorah.app framestats > emulator-report/app-framestats.txt || true
   adb shell uiautomator dump /sdcard/irgun-window.xml >/dev/null 2>&1 &&
     adb pull /sdcard/irgun-window.xml emulator-report/window.xml >/dev/null 2>&1 || true
 }
@@ -15,13 +19,12 @@ adb install -r android/qa-native-observer/build/outputs/apk/debug/qa-native-obse
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 adb logcat -c
 adb shell am force-stop org.irgunshiuraitorah.app || true
-adb shell am start -W -n org.irgunshiuraitorah.app/.SplashActivity
 
-# Cold boot can take longer than a fixed four-second delay. Verify that the
-# actual app shell has loaded before leaving it to inspect the launcher icon.
-node scripts/android-emulator-inspect.mjs | tee emulator-report/webview-before-home.json
-adb exec-out screencap -p > emulator-report/after-splash.png || true
-
+# Check the installed launcher icon BEFORE starting the heavy WebView catalog.
+# The previous order launched the full Home page and immediately sent KEYCODE_HOME
+# during cold emulator/Google Play Services startup. That produced a 5s focus-loss
+# ANR and extreme RenderThread pressure, obscuring the real startup/tab tests.
+# Other dedicated regression jobs already cover backgrounding during playback.
 adb shell input keyevent KEYCODE_HOME
 drawer_ready=false
 for attempt in $(seq 1 10); do
@@ -70,9 +73,12 @@ if [ "$drawer_ready" != true ]; then
   exit 1
 fi
 adb exec-out screencap -p > emulator-report/launcher-icon.png || true
-adb shell am start -W -n org.irgunshiuraitorah.app/.SplashActivity
 
+# Start the app once the launcher check is finished. Wait for the actual shell
+# to load before driving native gestures; do not immediately background it again.
+adb shell am start -W -n org.irgunshiuraitorah.app/.SplashActivity
 node scripts/android-emulator-inspect.mjs | tee emulator-report/webview.json
+adb exec-out screencap -p > emulator-report/after-splash.png || true
 node scripts/android-emulator-tabs.mjs | tee emulator-report/tab-swipes.log
 # Android Video is now native Media3 exclusively. Do not require the retired
 # WebView <video> element or accidentally pass because a shadow MP3 advanced.
