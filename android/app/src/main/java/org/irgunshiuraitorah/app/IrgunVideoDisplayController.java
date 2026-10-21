@@ -15,7 +15,7 @@ final class IrgunVideoDisplayController {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final VideoRotationPolicy policy = new VideoRotationPolicy();
     private final OrientationEventListener sensor;
-    private boolean foreground, active, playing, expanded, nativeEngine, pip, listening, rotatedFullscreen;
+    private boolean foreground, active, playing, expanded, nativeEngine, pip, listening, rotatedFullscreen, livePlaying;
     private int physicalAngle = -1;
     private Integer previousOrientation;
     private final boolean naturalLandscape;
@@ -36,6 +36,7 @@ final class IrgunVideoDisplayController {
         refresh();
     }
 
+    void livePlayback(boolean value) { livePlaying = value; refresh(); }
     void foreground(boolean value) { foreground = value; refresh(); }
     void pip(boolean value) { pip = value; refresh(); }
 
@@ -59,7 +60,7 @@ final class IrgunVideoDisplayController {
             wantsPlayback = video.active && video.videoSelected && video.playWhenReady && video.error.isEmpty()
                 && (video.durationMs <= 0 || video.positionMs < video.durationMs);
         }
-        boolean keep = VideoRotationPolicy.keepAwake(foreground, active, wantsPlayback, pip);
+        boolean keep = VideoRotationPolicy.keepAwake(foreground, active || livePlaying, wantsPlayback || livePlaying, pip);
         boolean kept = (activity.getWindow().getAttributes().flags & WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0;
         if (keep != kept) {
             if (keep) activity.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
