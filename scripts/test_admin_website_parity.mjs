@@ -255,3 +255,14 @@ test('Saving each platform mode never overwrites the other mode or website video
   assert.match(routing,/vimeoFallbackEnabled/);
   assert.doesNotMatch(routing,/vimeoOnlyWebsiteMode|vimeoOnlyAppMode/);
 });
+
+test('Android Admin also exposes Apple Vimeo-only mode without linking either platform',()=>{
+  const mod=readFileSync('src/admin-website-parity.js','utf8');
+  const labels=['vimeoOnlyWebsiteMode','vimeoOnlyAppMode','vimeoOnlyIosMode'];
+  for(const label of labels)assert.ok(mod.includes(label),'Missing '+label);
+  assert.match(mod,/data-hub-form="vimeo-ios"/);
+  assert.match(mod,/formName==='vimeo-ios'/);
+  assert.match(mod,/json\('\/admin\/playback-routing',\{vimeoOnlyIosMode\}\)/);
+  assert.match(mod,/notify\('Apple Vimeo-only playback saved\. Website and Android settings are unchanged\.'/);
+  assert.doesNotMatch(mod,/onAppVimeoVisibilityChanged\(vimeoOnlyIosMode\)/);
+});
