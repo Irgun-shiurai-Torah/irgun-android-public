@@ -9183,6 +9183,18 @@ function reconcileNativeWatchAudio(snapshot) {
     state.watchResumeSeconds = Math.max(0,Number(snapshot.currentPositionMs)||0)/1000;
     return;
   }
+  // Media3 restores the Video track in MainActivity.onStart/onResume. An
+  // in-flight AUDIO snapshot from Home can arrive AFTER the native resume
+  // flag has been consumed but BEFORE the restored VIDEO snapshot reaches JS.
+  // That stale AUDIO snapshot must not issue setMode('audio'), which would
+  // immediately undo the native restore and park a playing PlayerView.
+  // The explicit Audio button is serialized by mediaSwitchBusy and owns its
+  // own state transition in performWatchModeSwitch.
+  if (state.watchMode === 'video' && state.watchVimeo?.isIrgunNativeVideoPlayer &&
+      !state.mediaSwitchBusy && !state.nativeBackgroundHandoff) {
+    state.watchResumeSeconds = Math.max(0,Number(snapshot.currentPositionMs)||0)/1000;
+    return;
+  }
   const wasVideo = state.watchMode === 'video';
   ensureNativeAudioCurrentForWatch(snapshot);
   state.nativeBackgroundHandoff = false;
@@ -10851,6 +10863,10 @@ async function repairAudioFocusOnForegroundReturn() {
 }
 function refreshPlaybackAfterForeground() {
   if (!usesNativeUnifiedAudio() || document.hidden) return;
+  // Home and notifications can restore native video before the WebView has
+  // delivered its resize event. Remeasure the same PlayerView on return.
+  if (state.watchMode === 'video' && state.watchVimeo?.isIrgunNativeVideoPlayer)
+    state.watchVimeo.updateFrame?.();
   if (foregroundPlaybackRefreshTimer) clearTimeout(foregroundPlaybackRefreshTimer);
   if (foregroundFocusRepairTimer) clearTimeout(foregroundFocusRepairTimer);
   // A focus-loss callback can arrive after the first foreground state pull.
