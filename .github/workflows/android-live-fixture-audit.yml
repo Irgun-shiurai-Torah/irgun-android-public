@@ -1,0 +1,73 @@
+name: Android live fixture audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/android-regression-qa-fixtures-20261021]
+    paths: [.github/workflows/android-live-fixture-audit.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Inspect fixture catalog routing and actual video/audio without logging signed URLs
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json,urllib.request,urllib.error
+          from urllib.parse import quote
+          base="https://api.irgunshiuraitorah.com"
+          head={"Origin":"https://localhost","X-Irgun-App":"1","User-Agent":"Irgun-GitHub-QA-Fixture-ReadOnly"}
+          def request(path,byterange=False):
+            headers=dict(head)
+            if byterange: headers["Range"]="bytes=0-8191"
+            try:
+              req=urllib.request.Request(base+path,headers=headers)
+              with urllib.request.urlopen(req,timeout=26) as r:
+                content=r.read(2400000 if not byterange else 8192)
+                return r.status,dict(r.headers),content
+            except urllib.error.HTTPError as e:
+              return e.code,dict(e.headers),b""
+            except Exception:
+              return 0,{},b""
+          code,heads,buf=request("/video-map?driveLibrary=1")
+          print("VIDEO_MAP_STATUS="+str(code))
+          try:
+            videos=json.loads(buf) if code==200 else []
+            if not isinstance(videos,list):videos=[]
+          except Exception:videos=[]
+          print("CATALOG_COUNT="+str(len(videos)))
+          for id in ["1233236785:585d5d53db","1233236785","1232214252","1237352749"]:
+            found=next((v for v in videos if isinstance(v,dict) and str(v.get("id") or "")==id),None)
+            print("FIXTURE_"+id+"_CATALOG="+str(bool(found)).upper())
+            if found:
+              print("FIXTURE_"+id+"_HAS_DRIVE_VIDEO="+str(found.get("hasDriveVideo","unknown")))
+              print("FIXTURE_"+id+"_HAS_AUDIO="+str(found.get("hasAudio","unknown")))
+              print("FIXTURE_"+id+"_SOURCE_TYPE="+str(found.get("sourceType","unknown"))[:50])
+            code,hh,bb=request("/media/"+quote(id,safe="")+"/source.json")
+            print("FIXTURE_"+id+"_SOURCE_HTTP="+str(code))
+            if code==200:
+              try:
+                v=json.loads(bb)
+                print("FIXTURE_"+id+"_SOURCE_PROVIDER="+str(v.get("provider","unknown"))[:30])
+                print("FIXTURE_"+id+"_HLS="+str(bool((v.get("video") or {}).get("hls"))).upper())
+                print("FIXTURE_"+id+"_MP4="+str(bool((v.get("video") or {}).get("mp4"))).upper())
+                print("FIXTURE_"+id+"_AUDIO_MP3="+str(bool((v.get("audio") or {}).get("mp3"))).upper())
+              except: print("FIXTURE_"+id+"_SOURCE_JSON=INVALID")
+            if id.endswith("585d5d53db") or id in ("1233236785","1232214252"):
+              code,hh,b=request("/audio/"+quote(id,safe=""),True)
+              print("FIXTURE_"+id+"_AUDIO_HTTP="+str(code))
+              print("FIXTURE_"+id+"_AUDIO_TYPE="+str(hh.get("Content-Type","missing")).split(";")[0][:40])
+              print("FIXTURE_"+id+"_AUDIO_BYTES="+str(len(b)))
+              code,hh,b=request("/media/"+quote(id,safe="")+"/360p.m3u8")
+              print("FIXTURE_"+id+"_HLS_360_HTTP="+str(code))
+              if code==200:
+                txt=b.decode("utf8","replace")
+                print("FIXTURE_"+id+"_HLS_360_VALID="+str(txt.startswith("#EXTM3U")).upper())
+                print("FIXTURE_"+id+"_HLS_360_SEGMENTS="+str(txt.count("#EXTINF:")))
+          print("FIXTURE_AUDIT_FINISHED=YES")
+          PY
