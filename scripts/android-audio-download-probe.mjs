@@ -1,15 +1,25 @@
 import assert from 'node:assert/strict';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {audioDownloadPath} from '../src/offline-validation.js';
+import {requireDriveBackedLecture} from './android-drive-media-fixture.mjs';
 
 // Verify the actual file consumed by Android FileTransfer.saveOffline.
 // Check real response status and bytes rather than accepting a successful fetch
 // or a download progress event as proof that the MP3 is playable.
-const id=String(process.env.IRGUN_AUDIO_TEST_ID||'1233236785:585d5d53db');
+// Canonical Oct 6 Drive-backed lecture. The legacy unlisted Vimeo
+// suffix is NOT a catalog/media identity and returns HTTP 404.
+const id=String(process.env.IRGUN_AUDIO_TEST_ID||'1233236785');
 const path=audioDownloadPath(id);
 const report={id,path,origin:'https://localhost',startedAt:new Date().toISOString()};
 let response;
 try {
+  const catalogResponse=await fetch('https://api.irgunshiuraitorah.com/video-map?driveLibrary=1',{
+    headers:{Origin:'https://localhost','X-Irgun-App':'1'},
+    signal:AbortSignal.timeout(30000)
+  });
+  assert.equal(catalogResponse.status,200,'Live catalog must load before Drive-only MP3 QA');
+  requireDriveBackedLecture(await catalogResponse.json(),id,{requireAudio:true});
+  report.driveFixtureVerified=true;
   response=await fetch('https://api.irgunshiuraitorah.com'+path,{
     headers:{Origin:'https://localhost','X-Irgun-App':'1',Range:'bytes=0-65535'},
     signal:AbortSignal.timeout(50000),redirect:'follow'
