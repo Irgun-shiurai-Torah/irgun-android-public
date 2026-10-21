@@ -90,7 +90,7 @@ export function createWebsiteAdminParity({apiJson,esc,isAdmin,isAdminMode,userKe
     panel:'',error:'',success:'',busy:false,busyAction:'',
     loaded:{},contact:{items:[],counts:{},q:'',status:'all'},
     comments:{items:[],page:1,total:0,hasMore:false,q:'',videoId:''},
-    routing:{videoMode:'direct',vimeoFallbackEnabled:true,showVimeoOnlyWebsite:true,showVimeoOnlyApp:true,vimeoOnlyWebsiteMode:'vimeo',vimeoOnlyAppMode:'vimeo'},
+    routing:{videoMode:'direct',vimeoFallbackEnabled:true,showVimeoOnlyWebsite:true,showVimeoOnlyApp:true,vimeoOnlyWebsiteMode:'vimeo',vimeoOnlyAppMode:'vimeo',vimeoOnlyIosMode:'vimeo',showVimeoOnlyIos:true},
     cityAdmins:{items:[],cities:[]},cityNames:[],
     analytics:{live:{},history:{}},
     scheduleText:'',schedulePlan:null,datePlan:null,dateFileName:''
@@ -139,7 +139,7 @@ export function createWebsiteAdminParity({apiJson,esc,isAdmin,isAdminMode,userKe
   function routingHtml(){
     const m=model.routing, option=(value,label,selected)=>'<option value="'+value+'" '+(selected?'selected':'')+'>'+label+'</option>';
     return card('routing',
-      '<p>Vimeo-only lectures have <strong>two independent playback settings</strong>. Off hides them; Vimeo Player uses the embed; Our Player streams recorded Vimeo HLS through Irgun. Lectures copied to Drive are unaffected.</p>'+
+      '<p>Vimeo-only lectures have <strong>three independent playback settings</strong>. Off hides them; Vimeo Player uses the embed; Our Player streams recorded Vimeo HLS through Irgun. Lectures copied to Drive are unaffected.</p>'+
       '<form data-hub-form="vimeo-website" class="admin-form-grid">'+
         '<label>Vimeo-only lectures on WEBSITE<select name="vimeoOnlyWebsiteMode">'+
           option('off','Off',m.vimeoOnlyWebsiteMode==='off'||m.showVimeoOnlyWebsite===false)+
@@ -147,11 +147,17 @@ export function createWebsiteAdminParity({apiJson,esc,isAdmin,isAdminMode,userKe
           option('our-player','Our Player',m.vimeoOnlyWebsiteMode==='our-player')+
         '</select></label>'+submit('Save WEBSITE playback')+'</form>'+
       '<form data-hub-form="vimeo-app" class="admin-form-grid">'+
-        '<label>Vimeo-only lectures in APP<select name="vimeoOnlyAppMode">'+
+        '<label>Vimeo-only lectures in ANDROID<select name="vimeoOnlyAppMode">'+
           option('off','Off',m.vimeoOnlyAppMode==='off'||m.showVimeoOnlyApp===false)+
           option('vimeo','Vimeo Player',m.vimeoOnlyAppMode==='vimeo'||(!m.vimeoOnlyAppMode&&m.showVimeoOnlyApp!==false))+
           option('our-player','Our Player',m.vimeoOnlyAppMode==='our-player')+
-        '</select></label>'+submit('Save APP playback')+'</form>'+
+        '</select></label>'+submit('Save ANDROID playback')+'</form>'+
+      '<form data-hub-form="vimeo-ios" class="admin-form-grid">'+
+        '<label>Vimeo-only lectures in APPLE<select name="vimeoOnlyIosMode">'+
+          option('off','Off',m.vimeoOnlyIosMode==='off'||m.showVimeoOnlyIos===false)+
+          option('vimeo','Vimeo Player',m.vimeoOnlyIosMode==='vimeo'||(!m.vimeoOnlyIosMode&&m.showVimeoOnlyIos!==false))+
+          option('our-player','Our Player',m.vimeoOnlyIosMode==='our-player')+
+        '</select></label>'+submit('Save APPLE playback')+'</form>'+
       '<p>Existing website video mode and Vimeo fallback controls below are separate from these visibility settings.</p>'+
       '<form data-hub-form="routing" class="admin-form-grid">'+
         '<label>Website video mode<select name="videoMode">'+option('direct','HLS → MP4',m.videoMode!=='vimeo')+option('vimeo','Vimeo only',m.videoMode==='vimeo')+'</select></label>'+
@@ -405,6 +411,12 @@ export function createWebsiteAdminParity({apiJson,esc,isAdmin,isAdminMode,userKe
           const nextApp=model.routing.vimeoOnlyAppMode || (model.routing.showVimeoOnlyApp===false?'off':'vimeo');
           if(previousApp!==nextApp)onAppVimeoVisibilityChanged(nextApp);
           notify('App Vimeo-only playback saved. Website setting is unchanged.');
+        });
+      }else if(formName==='vimeo-ios'){
+        const vimeoOnlyIosMode=text(values.get('vimeoOnlyIosMode'));
+        void write(async()=>{
+          model.routing=await json('/admin/playback-routing',{vimeoOnlyIosMode});
+          notify('Apple Vimeo-only playback saved. Website and Android settings are unchanged.');
         });
       }else if(formName==='routing'){
         const next={videoMode:text(values.get('videoMode')),
