@@ -1178,8 +1178,21 @@ try{
     // via the physical player UI before testing the subsequent speeds.
     // The speed settings are on the full player opened from the mini player.
     // The Watch page itself has no [data-open-player] control.
+    // Capture the real lecture identity from native Media3, not an older
+    // showcase/Drive alias. The previous literal suffix never matched the
+    // valid currentId even when native AUDIO kept playing and advancing.
+    const retainedId=String(playing.native.lectureId||playing.currentId||'');
+    assert.ok(retainedId && retainedId===String(playing.currentId),
+      'Real native audio and the Watch fixture must refer to the same lecture');
+    const previousPosition=Number(playing.native.audioPositionMs);
     await tap('[data-close-watch]');
-    await wait(s=>!s.watchId&&s.currentId==='1233236785:585d5d53db','Closing Watch must retain live native audio');
+    const retained=await wait(s=>!s.watchId&&
+      String(s.currentId)===retainedId&&String(s.native.lectureId)===retainedId&&
+      s.native.mode==='AUDIO'&&s.native.audioIsPlaying&&
+      Number(s.native.audioOutputVolume)>0&&
+      Number(s.native.audioPositionMs)>=previousPosition-1500,
+      'Closing Watch must retain live native audio'); 
+    audibleAudio(retained);
     await tapWithScroll('.mini-player .mini-copy');
     await wait(s=>s.playerOpen,'Audio full-player settings did not open from real mini player');
     await tapWithScroll('[data-speed-choice="1"]');
