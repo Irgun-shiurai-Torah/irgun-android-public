@@ -1940,3 +1940,52 @@ test('Vimeo-only emulator QA observes current Android Home before a physical nav
   assert.doesNotMatch(file,/await tap\('\.bottom-nav \[data-nav="home"\]'\)/,
     'Do not force an unnecessary Home tap after the real Activity already opens Home');
 });
+
+
+test('Native Media3 Audio reconciliation checks the visible Audio overlay, not a stale hidden clock',()=>{
+  const start=mainSource.indexOf('function reconcileNativeWatchAudio(snapshot) {');
+  const end=mainSource.indexOf('const PlaybackController =',start);
+  assert.ok(start>=0&&end>start,'Native Audio reconciliation must remain testable');
+  const reconcile=mainSource.slice(start,end);
+  assert.match(reconcile,/visibleAudioWatchUi/);
+  assert.match(reconcile,/querySelector\('#app \\.watch-overlay'\)/);
+  assert.match(reconcile,/data-watch-mode="audio"\\.active/);
+  assert.match(reconcile,/!visibleAudioWatchUi/);
+});
+
+test('Native Media3 Audio can park its persistent host without a stale iframe anchor',()=>{
+  const start=mainSource.indexOf('function parkHostedVideoForAudio() {');
+  const end=mainSource.indexOf('function restoreParkedHostedVideo()',start);
+  assert.ok(start>=0&&end>start,'Native host parking helper must exist');
+  const park=mainSource.slice(start,end);
+  assert.match(park,/isIrgunNativeVideoPlayer/);
+  assert.match(park,/watch-audio-parked/);
+  assert.match(park,/state\.watchHostedExternally = false/);
+});
+
+test('Custom playlist network errors are non-blocking and surfaced as toasts',()=>{
+  assert.doesNotMatch(mainSource,/alert\(error\.message \|\| 'Could not (?:create|add|remove|delete) playlist\.'/);
+  assert.match(mainSource,/setToast\(error\.message \|\| 'Could not add to playlist\.'/);
+  assert.match(mainSource,/setToast\(error\.message \|\| 'Could not remove from playlist\.'/);
+});
+
+test('Android API 36 native Media3 tests wait for first-boot services before launching the app',()=>{
+  const script=readFileSync('scripts/android-emulator-native-media3.sh','utf8');
+  const condition=script.indexOf('if [[ "$(adb shell getprop ro.build.version.sdk');
+  assert.ok(condition>=0&&script.indexOf('sleep 40',condition)>condition,
+    'All API 36 scenarios need the cold-system settle window, not only tablet-display');
+  const block=script.slice(condition,script.indexOf('\nfi',condition));
+  assert.doesNotMatch(block,/tablet-display/);
+});
+
+test('Android speed-selector tap measures the current scroll before stable physical coordinates',()=>{
+  const script=readFileSync('scripts/android-regression-extensions.mjs','utf8');
+  const start=script.indexOf('async function tap(selector){');
+  const end=script.indexOf('\nasync function tapWithScroll',start);
+  assert.ok(start>=0&&end>start,'Physical tap helper must exist');
+  const tap=script.slice(start,end);
+  assert.ok(tap.indexOf('const speedScroll')<tap.indexOf('settledNativeTapPoint'),
+    'Do not introduce an asynchronous DOM read between stable coordinates and the ADB tap');
+  assert.match(tap,/window\.ISTReleaseQA\?\.snapshot\?\.\(\)/);
+  assert.match(tap,/sheetState\.exists&&sheetState\.playerOpen/);
+});

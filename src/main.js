@@ -905,7 +905,7 @@ async function createPlaylist(name, addRef = null) {
     state.playlists = [playlist, ...state.playlists.filter(row => row.id !== playlist.id)];
     return playlist;
   } catch (error) {
-    alert(error.message || 'Could not create playlist.');
+    setToast(error.message || 'Could not create playlist.');
     return null;
   }
 }
@@ -932,7 +932,7 @@ async function addToPlaylist(playlistId, ref) {
     } catch (error) {
       if (!playlist.items.some(item => mediaRefKey(item) === key)) playlist.items.push(removed);
       refreshSaveDestinationButtons(normalized.kind, normalized.id);
-      alert(error.message || 'Could not remove from playlist.');
+      setToast(error.message || 'Could not remove from playlist.');
     }
     return;
   }
@@ -947,7 +947,7 @@ async function addToPlaylist(playlistId, ref) {
   } catch (error) {
     playlist.items = playlist.items.filter(item => mediaRefKey(item) !== key);
     refreshSaveDestinationButtons(normalized.kind, normalized.id);
-    alert(error.message || 'Could not add to playlist.');
+    setToast(error.message || 'Could not add to playlist.');
   }
 }
 
@@ -972,7 +972,7 @@ async function removeFromPlaylist(playlistId, key) {
     if (!playlist.items.some(item => mediaRefKey(item) === String(key))) playlist.items.push(removed);
     refreshSaveDestinationButtons(ref.kind, ref.id);
     if (state.screen === 'library' && state.librarySection === 'playlists') render();
-    alert(error.message || 'Could not remove from playlist.');
+    setToast(error.message || 'Could not remove from playlist.');
   }
 }
 
@@ -985,7 +985,7 @@ async function deletePlaylist(playlistId) {
     state.playlists = state.playlists.filter(row => row.id !== playlist.id);
     if (state.activePlaylistId === playlist.id) state.activePlaylistId = '';
     render();
-  } catch (error) { alert(error.message || 'Could not delete playlist.'); }
+  } catch (error) { setToast(error.message || 'Could not delete playlist.'); }
 }
 
 function openPlaylistPicker(kind, id) {
@@ -6068,12 +6068,18 @@ function waitForMediaEvent(target, eventName, timeoutMs = 1200) {
 }
 
 function parkHostedVideoForAudio() {
-  if (!persistentVideoMount || !state.watchVimeo || !persistentVideoMount.querySelector('#watchVimeoFrame')) return false;
+  if (!persistentVideoMount || !state.watchVimeo) return false;
+  const hasFrame = Boolean(persistentVideoMount.querySelector('#watchVimeoFrame'));
+  const nativeMedia3 = Boolean(state.watchVimeo.isIrgunNativeVideoPlayer);
+  // A native Media3 host can outlive its DOM anchor during a render/handoff.
+  // Still park that host so a committed AUDIO snapshot cannot leave the old
+  // Video controls visible over the advancing native Audio player.
+  if (!hasFrame && !nativeMedia3) return false;
   persistentVideoMount.className = 'persistent-video-mount watch-video-host watch-audio-parked';
   document.body.classList.remove('irgun-watch-mini-hosted');
   state.watchHostedExternally = false;
   state.watchMinimized = false;
-  return true;
+  return hasFrame || nativeMedia3;
 }
 
 function restoreParkedHostedVideo() {
@@ -9273,7 +9279,19 @@ function reconcileNativeWatchAudio(snapshot) {
   // The handoff may arrive while the WebView is hidden. Build the Audio view
   // from the native snapshot then, so Home -> notification return cannot expose
   // the old Video controls with a frozen 0:00 clock.
-  if (wasVideo || (!state.playerOpen && !document.getElementById('watchAudioTime'))) render();
+  const audioOverlay = document.querySelector('#app .watch-overlay');
+  const audioOverlayRect = audioOverlay?.getBoundingClientRect();
+  const visibleAudioWatchUi = Boolean(
+    audioOverlay && audioOverlayRect?.width > 0 && audioOverlayRect?.height > 0 &&
+    audioOverlayRect.right > 0 && audioOverlayRect.bottom > 0 &&
+    audioOverlayRect.left < innerWidth && audioOverlayRect.top < innerHeight &&
+    audioOverlay.querySelector('.media-switch [data-watch-mode="audio"].active') &&
+    audioOverlay.querySelector('#watchAudioTime') &&
+    !hasPersistentVideoOverlayForCurrentWatch()
+  );
+  // A stale/hidden Audio clock is not proof that the visible Watch controls
+  // switched modes. Re-render when the visible overlay still presents Video.
+  if (wasVideo || (!state.playerOpen && !visibleAudioWatchUi)) render();
 }
 
 const PlaybackController = {

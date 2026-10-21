@@ -27,9 +27,12 @@ sleep 8
 # then flagged SplashActivity's focus-loss event as an ANR. Wait for the cold
 # OS to settle BEFORE launching the first Activity; do not dismiss an ANR,
 # restart the app, relax foreground assertions, or alter production playback.
-if [[ "${1:-}" == "tablet-display" ]] &&
-   [[ "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" == "36" ]]; then
-  echo "Allow Android 16 tablet first-boot services to settle before strict ANR test"
+if [[ "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" == "36" ]]; then
+  # The Android 16 emulator can report boot-complete before Google/system
+  # BOOT_COMPLETED work finishes. Launching Capacitor during that burst has
+  # produced a real SplashActivity focus ANR in CI. Let the cold OS settle
+  # before any app launch for every API 36 Media3 scenario, not just tablets.
+  echo "Allow Android 16 first-boot services to settle before strict ANR test"
   sleep 40
   if adb shell am help | grep -q wait-for-broadcast-idle; then
     timeout 90s adb shell am wait-for-broadcast-idle

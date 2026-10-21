@@ -607,11 +607,14 @@ try{
  try{report.foregroundAtFailure=adb('shell','dumpsys','activity','activities').split('\n').filter(line=>/mResumedActivity|topResumedActivity|ResumedActivity/.test(line)).slice(0,8);}catch(_){}
  try{const diagnostics=execFileSync('adb',['logcat','-d','-t','3000','-s','AndroidRuntime:E','chromium:E','cr_AwContents:E','IrgunPlayback:D','ActivityTaskManager:W','*:S'],{encoding:'utf8'});
   writeFileSync('emulator-report/account-android-errors.log',diagnostics.replaceAll(email,'[email]').replaceAll(password,'[password]'));}catch(_){}
- try{const s=await read();report.failurePlayback={watchMode:s.watchMode,audioPlaying:s.audioPlaying,audioTime:s.audioTime,currentId:s.currentId,nativeAudio:s.nativeAudio};
+ try{const s=await read();report.failurePlayback={watchMode:s.watchMode,audioPlaying:s.audioPlaying,audioTime:s.audioTime,currentId:s.currentId,nativeAudio:s.nativeAudio,
+    watchUi:s.watchUi||null,swipeGateActive:!!s.swipeGateActive,playlistPickerOpen:!!s.playlistPickerOpen};
   report.startupAtFailure={libraryReady:s.libraryReady,loading:s.loading,bootstrapInFlight:s.bootstrapInFlight,libraryError:s.libraryError||'unknown',
     authBusy:s.authBusy,authMode:s.authMode,authError:s.authError,authFields:s.authFields,
     loggedIn:s.loggedIn,hasStoredSession:s.hasStoredSession,playlistsCount:s.playlists.length,
-    qaPlaylistFound:!!restartPlaylistName&&s.playlists.some(p=>p.name===restartPlaylistName)};}catch(_){}
+    qaPlaylistFound:!!restartPlaylistName&&s.playlists.some(p=>p.name===restartPlaylistName),
+    qaPlaylistItems:restartPlaylistName?s.playlists.filter(p=>p.name===restartPlaylistName).map(p=>({items:p.items,itemIds:p.itemIds})):[],
+    playlistPickerOpen:!!s.playlistPickerOpen};}catch(_){}
  // Only capture a signed-in page after the form has disappeared. Pre-login
  // failures still retain the safe booleans and native diagnostics above.
  try{const s=await read();if(s.loggedIn&&!s.controls.email&&!s.controls.password&&!s.authFields.emailPresent&&!s.authFields.passwordPresent){adb('shell','screencap','-p','/sdcard/account-failure.png');adb('pull','/sdcard/account-failure.png','emulator-report/account-failure.png');report.failureScreenshotCredentialsAbsent=true;}}catch{}report.status='failed';report.error=String(e.message).replaceAll(email,'[email]').replaceAll(password,'[password]');process.exitCode=1; }finally{

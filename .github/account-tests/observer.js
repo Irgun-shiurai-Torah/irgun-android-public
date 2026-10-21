@@ -98,7 +98,21 @@ window.ISTAccountTest = {
     ? { x:stripRect.x, y:stripRect.y, width:stripRect.width, height:stripRect.height,
         scrollLeft:libraryStrip.scrollLeft, scrollWidth:libraryStrip.scrollWidth, clientWidth:libraryStrip.clientWidth }
     : null;
-  return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,libraryTabStrip,watchScroll,followTarget,
+  const watchOverlays=[...document.querySelectorAll('.watch-overlay')];
+  const visibleWatchOverlay=watchOverlays.find(overlay=>{
+    const r=overlay.getBoundingClientRect();
+    return r.width>0&&r.height>0&&r.right>0&&r.bottom>0&&r.left<innerWidth&&r.top<innerHeight;
+  });
+  const watchUi={
+    activeMode:String(visibleWatchOverlay?.querySelector('.media-switch [data-watch-mode].active')?.dataset.watchMode||''),
+    audioTimeVisible:!!visibleWatchOverlay?.querySelector('#watchAudioTime'),
+    audioPlayVisible:!!visibleWatchOverlay?.querySelector(queries.audioPlay),
+    hostedExternally:!!state.watchHostedExternally,
+    hostClass:String(document.querySelector('#persistentVideoMount')?.className||''),
+    overlayCount:watchOverlays.length,
+    visibleRoot:visibleWatchOverlay?.closest('#persistentVideoMount')?'persistent':'app'
+  };
+  return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,libraryTabStrip,watchScroll,followTarget,watchUi,
     swipeGateActive:typeof tabSwipeRenderGate !== 'undefined' && tabSwipeRenderGate.shouldDefer(),
     followRequests:(window.__ISTAccountApiRequests||[]).slice(-10),
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
