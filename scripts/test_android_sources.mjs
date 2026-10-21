@@ -1910,7 +1910,7 @@ test('Android homepage review buttons follow the approved layout',()=>{
   assert.match(html,/<h2>Latest Shiurim<\/h2>[\s\S]*?class="card-grid">[\s\S]*?<\/div>\s*<div class="home-section-footer"><button class="section-link" data-nav="shiurim">Browse all<\/button>/);
   assert.equal((html.match(/data-open-history="1"/g)||[]).length,1,'Only one History button');
   assert.doesNotMatch(html,/>CONTINUE<|>FOLLOWING<|>DISCOVER<|>POPULAR NOW<|>LIVE & NEXT<|>NEW</);
-  assert.doesNotMatch(html,/class="live-now-section"/,'Home must not show Live Now without a live event');
+  assert.doesNotMatch(html,/class="section live-now-section"/,'Home must not show Live Now without a live event');
   assert.match(html,/Watch Live/,'Watch Live remains accessible while offline');
   assert.match(html,/data-nav="paid"/,'Keep Android purchase shortcut');
   const speaker=ctx.speaker({id:'zev',count:14,latestTitle:'An older title'});
