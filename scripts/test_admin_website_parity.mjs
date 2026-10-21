@@ -266,3 +266,63 @@ test('Android Admin also exposes Apple Vimeo-only mode without linking either pl
   assert.match(mod,/notify\('Apple Vimeo-only playback saved\. Website and Android settings are unchanged\.'/);
   assert.doesNotMatch(mod,/onAppVimeoVisibilityChanged\(vimeoOnlyIosMode\)/);
 });
+
+
+test('Apple playback mode saves are isolated from Android and website',async()=>{
+  const requests=[],androidChanges=[],listeners={};
+  const originalFormData=globalThis.FormData;
+  const host={addEventListener:(name,handler)=>{listeners[name]=handler}};
+  let routing={videoMode:'direct',vimeoFallbackEnabled:true,
+    vimeoOnlyWebsiteMode:'off',vimeoOnlyAppMode:'our-player',vimeoOnlyIosMode:'vimeo',
+    showVimeoOnlyWebsite:false,showVimeoOnlyApp:true,showVimeoOnlyIos:true};
+  const controller=createWebsiteAdminParity({
+    apiJson:async(path,options)=>{
+      assert.equal(path,'/admin/playback-routing');
+      if(!options)return {...routing};
+      const change=JSON.parse(options.body);
+      requests.push({path,method:options.method,body:change});
+      routing={...routing,...change,showVimeoOnlyIos:change.vimeoOnlyIosMode!=='off'};
+      return {...routing};
+    },
+    esc:escapeHtml,isAdmin:()=>true,isAdminMode:()=>true,userKey:()=> 'admin-qa',
+    render:()=>{},toast:()=>{},ask:()=>true,
+    onAppVimeoVisibilityChanged:mode=>androidChanges.push(mode)
+  });
+  controller.bind({getElementById:id=>id==='websiteAdminParity'?host:null});
+  assert.equal(typeof listeners.click,'function');
+  assert.equal(typeof listeners.submit,'function');
+  listeners.click({target:{closest:selector=>selector==='[data-hub-panel]'
+    ? {dataset:{hubPanel:'routing'}} : null}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(controller.html(),/data-hub-form="vimeo-ios"/);
+
+  // Exercise the actual submit handler. This mock only replaces FormData's
+  // parsing of our synthetic form; the controller still builds the API payload.
+  globalThis.FormData=class{
+    constructor(form){this.fields=form.fields}
+    get(name){return this.fields[name]??null}
+  };
+  try{
+    for(const mode of ['off','vimeo','our-player']){
+      let prevented=false;
+      const form={dataset:{hubForm:'vimeo-ios'},fields:{vimeoOnlyIosMode:mode}};
+      listeners.submit({
+        target:{closest:selector=>selector==='[data-hub-form]'?form:null},
+        preventDefault(){prevented=true}
+      });
+      await new Promise(resolve=>setImmediate(resolve));
+      assert.equal(prevented,true);
+      assert.deepEqual(requests.at(-1),{
+        path:'/admin/playback-routing',method:'POST',body:{vimeoOnlyIosMode:mode}
+      });
+      assert.equal(routing.vimeoOnlyWebsiteMode,'off');
+      assert.equal(routing.vimeoOnlyAppMode,'our-player');
+      assert.equal(routing.videoMode,'direct');
+      assert.deepEqual(androidChanges,[],'Changing Apple must not alter Android playback');
+      assert.match(controller.html(),/Apple Vimeo-only playback saved/);
+    }
+    assert.equal(requests.length,3);
+  }finally{
+    globalThis.FormData=originalFormData;
+  }
+});
