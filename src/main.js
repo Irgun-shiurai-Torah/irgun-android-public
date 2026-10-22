@@ -1,3 +1,5 @@
+import { audioSpeedControlsHtml, refreshAudioSpeedControls } from './audio-speed-controls.js';
+import './audio-speed-controls.css';
 import './style.css';
 import { createWebsiteAdminParity } from './admin-website-parity.js';
 import { createCityAdminController, cityAdminPanelHtml } from './admin-city-panel.js';
@@ -6544,7 +6546,7 @@ function watchHtml() {
         <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">${currentLanguage() === 'he' ? 'וידאו' : 'Video'}</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">${currentLanguage() === 'he' ? 'אודיו' : 'Audio'}</button>` : ''}</div>
         ${state.watchMode === 'video'
           ? `<iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${Capacitor.getPlatform() === 'android' ? 'about:blank' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`
-          : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${playbackDurationSeconds()}" value="${playbackPositionSeconds()}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${playbackIsPaused() ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(playbackPositionSeconds())} / ${fmtDurationOrUnknown(playbackDurationSeconds())}</div></div>`}
+          : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${playbackDurationSeconds()}" value="${playbackPositionSeconds()}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${playbackIsPaused() ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(playbackPositionSeconds())} / ${fmtDurationOrUnknown(playbackDurationSeconds())}</div>${audioSpeedControlsHtml(state.playbackSpeed, currentLanguage())}</div>`}
       </div>
       <section class="watch-details">
         <h1>${esc(displayShiurTitle(v.title, ''))}</h1>
@@ -6619,13 +6621,13 @@ function fullPlayerHtml() {
       <input id="fullSeek" class="seek" type="range" min="0" max="${playbackDurationSeconds()}" value="${playbackPositionSeconds()}" step="1">
       <div class="time-row"><span id="fullCurrent">${fmtTime(playbackPositionSeconds())}</span><span id="fullDuration">${fmtDurationOrUnknown(playbackDurationSeconds())}</span></div>
       <div class="big-controls"><button class="skip-control" data-skip="-${state.skipSeconds}" aria-label="Back ${state.skipSeconds} seconds">${svgIcon('back15')}</button><button class="main-play" data-play-toggle="1">${playbackIsPaused() ? svgIcon('play') : '<span class="pause-mark">II</span>'}</button><button class="skip-control" data-skip="${state.skipSeconds}" aria-label="Forward ${state.skipSeconds} seconds">${svgIcon('forward15')}</button></div>
+      ${audioSpeedControlsHtml(state.playbackSpeed, currentLanguage())}
       <div class="player-action-grid">
         ${isPaid ? `<button data-paid-bookmark-current="1">${svgIcon('bookmark')}<span>Bookmark</span></button>${Number(c.bookmarkSeconds) > 0 ? `<button data-paid-go-bookmark="1">${svgIcon('back15')}<span>Go to ${fmtTime(c.bookmarkSeconds)}</span></button>` : ''}<button data-nav="paid">${svgIcon('store')}<span>Purchase</span></button>` : `${canWatch ? `<button data-player-watch="${esc(c.id)}">${svgIcon('video')}<span>Watch</span></button>` : ''}<button class="${liked ? 'active' : ''}" data-like="${esc(likeId)}">${svgIcon('heart')}<span>${liked ? 'Liked' : 'Like'}</span></button><button class="${savePresentation?.cls || ''}" data-open-playlist-picker="1" data-playlist-kind="${c.kind === 'library-audio' ? 'audio' : 'video'}" data-playlist-id="${esc(c.id)}">${svgIcon('bookmark')}<span>${tr(savePresentation?.label || 'Save')}</span></button><button data-share-kind="${c.kind === 'library-audio' ? 'audio' : 'video'}" data-share-id="${esc(c.id)}">${svgIcon('share')}<span>Share</span></button><button data-download-kind="${c.kind === 'library-audio' ? 'audio' : 'video-audio'}" data-download-id="${esc(c.id)}">${svgIcon('download')}<span>Download</span></button><button data-save-offline-kind="${c.kind === 'library-audio' ? 'audio' : 'video'}" data-save-offline-id="${esc(c.id)}" class="${offlineState?.cls || ''}">${offlineIconHtml()}<span>${esc(offlineState?.label || (currentLanguage()==='he'?'האזנה ללא אינטרנט':'Listen Offline'))}</span>${offlineState?.status==='downloading'?`<span class="offline-progress-badge">${Number(offlineState.job?.percent)>0?`${Number(offlineState.job.percent)}%`:'…'}</span>`:''}</button>`}
       </div>
       ${c.offline ? `<div class="offline-player-badge">✓ ${currentLanguage()==='he'?'מתנגן מהקובץ השמור':'Playing offline copy'}</div>` : ''}
       ${state.playQueue.length>1?`<div class="queue-controls"><button data-queue-prev="1" ${state.playQueueIndex<=0?'disabled':''}>← ${currentLanguage()==='he'?'הקודם':'Previous'}</button><button data-queue-next="1" ${state.playQueueIndex>=state.playQueue.length-1?'disabled':''}>${currentLanguage()==='he'?'הבא':'Next'} →</button></div>`:''}
       <div class="player-setting-block"><span class="player-setting-title">${currentLanguage()==='he'?'דילוג קדימה/אחורה':'Skip buttons'}</span><div class="player-setting-chips">${[10,15,30].map(x=>`<button data-skip-choice="${x}" class="${state.skipSeconds===x?'active':''}">${x} sec</button>`).join('')}</div></div>
-      <div class="player-setting-block"><span class="player-setting-title">Playback speed</span><div class="player-setting-chips">${[0.75, 1, 1.25, 1.5, 1.75, 2].map(x => `<button data-speed-choice="${x}" class="${state.playbackSpeed === x ? 'active' : ''}">${x}×</button>`).join('')}</div></div>
       <div class="player-setting-block"><span class="player-setting-title">Sleep timer</span><div class="player-setting-chips">${[['off','Off'],['15','15 min'],['30','30 min'],['45','45 min'],['60','60 min'],['end','End']].map(([value,label]) => `<button data-sleep-choice="${value}" class="${state.sleepMode === value ? 'active' : ''}">${label}</button>`).join('')}</div></div>
       <button class="close-player" data-close-player="1">Close full player</button>
     </section>
@@ -7540,8 +7542,7 @@ function bindDonationControls(root=document) {
 }
 
 function refreshAndroidPlayerSpeedChoices() {
-  document.querySelectorAll('[data-speed-choice]').forEach(button=>
-    button.classList.toggle('active',Number(button.dataset.speedChoice)===state.playbackSpeed));
+  refreshAudioSpeedControls(document, state.playbackSpeed);
 }
 function bindPlayerSpeedChoices() {
   document.querySelectorAll('[data-speed-choice]').forEach(el=>el.addEventListener('click',()=>{
@@ -9296,6 +9297,16 @@ function reconcileNativeWatchAudio(snapshot) {
   if (wasVideo || (!state.playerOpen && !visibleAudioWatchUi)) render();
 }
 
+function syncNativePlaybackSpeed(snapshot) {
+  const rate = Number(snapshot?.playbackSpeed);
+  if (!snapshot?.lectureId || !Number.isFinite(rate) || rate <= 0) return;
+  if (state.playbackSpeed !== rate) {
+    state.playbackSpeed = rate;
+    localStorage.setItem(SPEED_KEY, String(rate));
+  }
+  refreshAndroidPlayerSpeedChoices();
+}
+
 const PlaybackController = {
   listenersInstalled: false,
   nativeRefreshPromise: null,
@@ -9308,6 +9319,7 @@ const PlaybackController = {
     const applyState = data => {
       if (!data || nativeSnapshotConflicts(data)) return;
       state.nativePlayback = { ...state.nativePlayback, ...data, connected:true };
+      syncNativePlaybackSpeed(data);
       restoreCurrentFromNativeSnapshot(data);
       recordPaidNativePlayback(data);
       reconcileNativeWatchAudio(data);
@@ -9498,10 +9510,10 @@ const PlaybackController = {
 
   async setSpeed(rate) {
     const value = Number(rate)||1;
+    if (usesNativeUnifiedAudio()) await nativeMediaPlugin().setSpeed({ rate:value });
+    else if (Capacitor.getPlatform() !== 'android') audio.playbackRate = value;
     state.playbackSpeed = value;
     localStorage.setItem(SPEED_KEY, String(value));
-    if (usesNativeUnifiedAudio()) nativeMediaPlugin().setSpeed({ rate:value }).catch(()=>{});
-    else if (Capacitor.getPlatform() !== 'android') audio.playbackRate = value;
     if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo && typeof state.watchVimeo.setPlaybackRate === 'function') {
       await state.watchVimeo.setPlaybackRate(value).catch(()=>{});
     }
@@ -9559,6 +9571,7 @@ const PlaybackController = {
       ]);
       if (!latest || nativeSnapshotConflicts(latest)) return;
       state.nativePlayback = { ...state.nativePlayback, ...latest, connected:true };
+      syncNativePlaybackSpeed(latest);
       restoreCurrentFromNativeSnapshot(latest);
       reconcileNativeWatchAudio(latest);
       updatePlayerUi();
