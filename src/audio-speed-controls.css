@@ -111,12 +111,3 @@
   color: #15283f;
 }
 
-/* Restore the full-player speed setting to its original settings area.
-   The six large buttons are replaced by just one popover trigger. */
-.player-setting-block.audio-speed-player-setting {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.audio-speed-player-setting .player-setting-title { margin: 0; }
