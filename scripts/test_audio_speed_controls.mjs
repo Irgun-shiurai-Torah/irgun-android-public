@@ -98,7 +98,7 @@ if (!ios) test('Android native video speed is retained for audio; idle defaults 
 });
 
 
-test('the audio view and full player share a compact popup, not six always-visible speed chips', () => {
+test('watch audio uses compact speed popup while full player retains original six small speed chips', () => {
   const en=audioSpeedControlsHtml(1.5,'en');
   assert.match(en,/class="audio-speed-trigger"/);
   assert.match(en,/data-audio-speed-menu role="group" aria-label="Playback speed" hidden/);
@@ -112,7 +112,11 @@ test('the audio view and full player share a compact popup, not six always-visib
   assert.match(he,/data-speed-choice="1" aria-pressed="true"/);
   const watch=app.slice(app.indexOf('function watchHtml()'),app.indexOf('function fullPlayerHtml()'));
   assert.match(watch,/id="watchAudioTime".*audioSpeedControlsHtml\(state.playbackSpeed, currentLanguage\(\)\)/);
-  assert.match(app,/player-setting-block audio-speed-player-setting/);
+  const full=app.slice(app.indexOf('function fullPlayerHtml()'),app.indexOf('async function currentNativePushEnabled()'));
+  assert.match(full,/player-setting-block"><span class="player-setting-title">Playback speed/);
+  assert.match(full,/class="player-setting-chips">\$\{\[0\.75, 1, 1\.25, 1\.5, 1\.75, 2\]/);
+  assert.doesNotMatch(full,/audio-speed-player-setting/);
+  assert.doesNotMatch(full,/audioSpeedControlsHtml\(state.playbackSpeed, currentLanguage\(\)\)/);
 });
 
 test('speed popup toggles, closes on selection and outside tap, and supports Escape', () => {
