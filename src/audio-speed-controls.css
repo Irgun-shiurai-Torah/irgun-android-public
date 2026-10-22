@@ -1,76 +1,122 @@
+/* Compact speed selector: preserve the original artwork / seek / controls layout. */
 .audio-speed-control {
-  width: 100%;
-  max-width: 520px;
-  box-sizing: border-box;
-  margin: 16px auto;
-  padding: 14px;
-  border: 1px solid #dce4ed;
-  border-radius: 18px;
-  background: #f5f8fc;
-  color: #173758;
-  text-align: start;
+  position: relative;
+  display: inline-flex;
+  width: auto;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
+  direction: ltr;
+  text-align: left;
+  z-index: 8;
 }
-.audio-speed-heading {
+.audio-speed-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 57px;
+  min-height: 36px;
+  padding: 6px 11px;
+  border: 1px solid #d5dfea;
+  border-radius: 12px;
+  background: #edf2f8;
+  color: #142f50;
+  font: inherit;
+  font-weight: 800;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.audio-speed-chevron {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+}
+.audio-speed-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 7px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 118px;
+  max-height: 280px;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 6px;
+  border: 1px solid #d7e1ed;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 12px 28px #061b3840;
+  z-index: 40;
+}
+.audio-speed-menu[hidden] { display: none !important; }
+.audio-speed-menu button {
+  width: 100%;
+  min-height: 35px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-  font-size: 13px;
-  font-weight: 700;
-}
-.audio-speed-heading strong {
-  min-width: 42px;
-  padding: 4px 9px;
-  border-radius: 999px;
-  background: #e4edf7;
-  color: #154b7d;
-  text-align: center;
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
-.audio-speed-options {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 7px;
-}
-.audio-speed-options button {
-  min-width: 0;
-  min-height: 48px;
-  padding: 7px 2px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  border: 1px solid #d3deeb;
-  border-radius: 12px;
-  background: #fff;
-  color: #173758;
+  gap: 6px;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 9px;
+  background: transparent;
+  color: #182c46;
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  touch-action: manipulation;
+  text-align: left;
   cursor: pointer;
+  touch-action: manipulation;
 }
-.audio-speed-options button small { font-size: 9px; font-weight: 600; }
-.audio-speed-options button.active {
-  border-color: #1c5d97;
-  background: #1c5d97;
+.audio-speed-check { opacity: 0; }
+.audio-speed-menu button.active {
+  color: #182438;
+  background: #f2dda8;
+}
+.audio-speed-menu button.active .audio-speed-check { opacity: 1; }
+.audio-speed-menu button:focus-visible,
+.audio-speed-trigger:focus-visible {
+  outline: 2px solid #bd9045;
+  outline-offset: 2px;
+}
+
+/* The watch's controls, timer, logo, seek bar and player height remain intact. */
+.watch-audio-panel { position: relative; }
+.watch-audio-panel > .audio-speed-control {
+  position: absolute;
+  right: 14px;
+  bottom: 9px;
+}
+.watch-audio-panel .audio-speed-trigger {
   color: #fff;
-  box-shadow: 0 3px 8px #123e6926;
+  background: #ffffff20;
+  border-color: #ffffff30;
 }
-.audio-speed-options button:focus-visible { outline: 3px solid #d6b36e; outline-offset: 3px; }
-.audio-speed-options button:active { transform: scale(.97); }
-.watch-audio-panel .audio-speed-control {
-  border-color: #ffffff2e;
-  background: #ffffff0d;
-  color: #f2f6fc;
+.watch-audio-panel .audio-speed-menu {
+  background: #162437;
+  border-color: #39485c;
+  box-shadow: 0 12px 28px #0008;
 }
-.watch-audio-panel .audio-speed-heading strong { background: #ffffff1f; color: #fff; }
-.watch-audio-panel .audio-speed-options button { background: #ffffff0d; border-color: #ffffff38; color: #fff; }
-.watch-audio-panel .audio-speed-options button.active { background: #d6b36e; border-color: #d6b36e; color: #13283d; }
-@media (max-width: 380px) {
-  .audio-speed-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.watch-audio-panel .audio-speed-menu button { color: #f4f7fc; }
+.watch-audio-panel .audio-speed-menu button.active {
+  background: #d8b86f;
+  color: #15283f;
 }
+
+/* Restore the full-player speed setting to its original settings area.
+   The six large buttons are replaced by just one popover trigger. */
+.player-setting-block.audio-speed-player-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.audio-speed-player-setting .player-setting-title { margin: 0; }
