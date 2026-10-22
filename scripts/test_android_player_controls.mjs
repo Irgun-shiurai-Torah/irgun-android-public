@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {refreshAudioSpeedControls} from '../src/audio-speed-controls.js';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
@@ -14,9 +15,9 @@ assert.match(app,/restorePlayerSheetScroll\(\);/);
 function speedFixture(platform='android',reject=false){
  const state={playbackSpeed:1},sheet={scrollTop:300},calls=[];
  const buttons=[1.25,1.5,2].map(rate=>({dataset:{speedChoice:String(rate)},active:false,
-  classList:{toggle(_,active){this.owner.active=active;}},addEventListener(_,fn){this.click=fn;}}));
+  setAttribute(name,value){this[name]=value;},classList:{toggle(_,active){this.owner.active=active;}},addEventListener(_,fn){this.click=fn;}}));
  for(const b of buttons)b.classList.owner=b;
- const context={state,Capacitor:{getPlatform:()=>platform},document:{querySelectorAll:()=>buttons},
+ const context={state,refreshAudioSpeedControls,Capacitor:{getPlatform:()=>platform},document:{querySelectorAll:selector=>selector==='[data-speed-choice]'?buttons:[]},
   PlaybackController:{setSpeed:async rate=>{calls.push(rate);if(reject)throw new Error('Native command failed');state.playbackSpeed=rate;}},
   render:()=>{sheet.scrollTop=0;calls.push('render');}};
  runInNewContext(app.slice(start,end)+'\nbindPlayerSpeedChoices();',context);

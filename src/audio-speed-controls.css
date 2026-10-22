@@ -1,0 +1,76 @@
+.audio-speed-control {
+  width: 100%;
+  max-width: 520px;
+  box-sizing: border-box;
+  margin: 16px auto;
+  padding: 14px;
+  border: 1px solid #dce4ed;
+  border-radius: 18px;
+  background: #f5f8fc;
+  color: #173758;
+  text-align: start;
+}
+.audio-speed-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.audio-speed-heading strong {
+  min-width: 42px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: #e4edf7;
+  color: #154b7d;
+  text-align: center;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.audio-speed-options {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 7px;
+}
+.audio-speed-options button {
+  min-width: 0;
+  min-height: 48px;
+  padding: 7px 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: 1px solid #d3deeb;
+  border-radius: 12px;
+  background: #fff;
+  color: #173758;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  touch-action: manipulation;
+  cursor: pointer;
+}
+.audio-speed-options button small { font-size: 9px; font-weight: 600; }
+.audio-speed-options button.active {
+  border-color: #1c5d97;
+  background: #1c5d97;
+  color: #fff;
+  box-shadow: 0 3px 8px #123e6926;
+}
+.audio-speed-options button:focus-visible { outline: 3px solid #d6b36e; outline-offset: 3px; }
+.audio-speed-options button:active { transform: scale(.97); }
+.watch-audio-panel .audio-speed-control {
+  border-color: #ffffff2e;
+  background: #ffffff0d;
+  color: #f2f6fc;
+}
+.watch-audio-panel .audio-speed-heading strong { background: #ffffff1f; color: #fff; }
+.watch-audio-panel .audio-speed-options button { background: #ffffff0d; border-color: #ffffff38; color: #fff; }
+.watch-audio-panel .audio-speed-options button.active { background: #d6b36e; border-color: #d6b36e; color: #13283d; }
+@media (max-width: 380px) {
+  .audio-speed-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
