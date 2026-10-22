@@ -129,6 +129,11 @@ public class MainActivity extends BridgeActivity {
         if (videoDisplay != null) videoDisplay.presentation(active, playing, expanded, nativeEngine);
     }
 
+    // Vimeo live playback keeps the Activity awake without affecting Media3 playback.
+    public void setLiveVideoPlaying(boolean playing) {
+        if (videoDisplay != null) videoDisplay.livePlayback(playing);
+    }
+
     public void setNativeVideoTabletTilt(int direction) {
         // Video presentation only: no media source, MediaSession or settings
         // mutations. This is a fallback when Android locks tablet rotation.

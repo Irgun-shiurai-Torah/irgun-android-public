@@ -1872,3 +1872,114 @@ test('native Audio mode shows real Watch controls before optional slow Media3 br
   assert.ok(ui>0 && bridge>ui,
     'Confirmed native Audio mode must render its Play controls before awaiting slow bridge snapshots');
 });
+
+
+test('Android home links navigate correctly and Live Now follows live availability',()=>{
+  // Reviewers judge placement visually on real phones; this test protects
+  // navigation and live availability, not positions, fonts or card layout.
+  const block=(start,end)=>{
+    const a=mainSource.indexOf(start),b=mainSource.indexOf(end,a+start.length);
+    assert.ok(a>=0&&b>a,'Expected current homepage source block: '+start);
+    return mainSource.slice(a,b);
+  };
+  const source=block('function speakerDiscoveryCard(row) {','function homeDiscoveryHtml() {')+
+    block('function homeDiscoveryHtml() {','function promiseWithTimeout(')+
+    block('function homeLiveNowHtml(live) {','function liveHtml()');
+  let live=[];
+  const ctx={
+    state:{user:{id:'qa'},counter:111,homeTrendPeriod:'week'},
+    currentLanguage:()=> 'en',
+    continueListeningItems:()=>[{id:'continue'}],
+    followingFeed:()=>[{id:'follow'}],
+    speakerDiscoveryRows:()=>[{id:'zev',tag:'Rav',count:14}],
+    speakerLabel:()=> 'Rav Zev Smith',
+    svgIcon:()=>'<svg></svg>',esc:value=>String(value),
+    compactItem:()=>'<article>Continued item</article>',
+    itemCard:()=>'<article>Recorded shiur</article>',
+    homeTrending:()=>[{item:{id:'trending'},count:12}],
+    recentItems:()=>[{id:'recent'}],
+    futureScheduleEvents:()=>[{title:'Upcoming'}],
+    scheduleEventCard:()=>'<article>Upcoming event</article>',
+    liveScheduleEvents:()=>live
+  };
+  runInNewContext(source+'\nthis.home=homeHtml;',ctx);
+  const offline=ctx.home();
+  assert.equal((offline.match(/data-open-history="1"/g)||[]).length,1,
+    'History remains linked to its destination without duplicate controls');
+  assert.match(offline,/data-nav="schedule"/,'Full Schedule remains accessible');
+  assert.match(offline,/data-nav="shiurim"/,'Browse All remains accessible');
+  assert.match(offline,/data-nav="paid"/,'Android purchase shortcut remains accessible');
+  assert.match(offline,/data-nav="live"/,'Watch Live remains accessible');
+  assert.doesNotMatch(offline,/class="section live-now-section"/,
+    'Do not show an active broadcast without a live event');
+  live=[{location:'Flatbush',title:'Broadcasting',speaker:'Rav Zev',date:'today'}];
+  const active=ctx.home();
+  assert.match(active,/class="section live-now-section"/,
+    'Active broadcasts must be discoverable on Home');
+  assert.match(active,/data-nav="live-flatbush"/,
+    'Live card must navigate to the correct live stream');
+});
+
+
+test('Vimeo-only emulator QA observes current Android Home before a physical navigation tap',()=>{
+  const file=readFileSync('scripts/android-emulator-vimeo.mjs','utf8');
+  assert.match(file,/const isHomeVisible=\(\)=>evaluate\(/);
+  assert.match(file,/if \(!await isHomeVisible\(\)\) \{/);
+  assert.match(file,/tap\('#androidBottomNavigationMount \.bottom-nav \[data-nav="home"\]'\)/);
+  assert.match(file,/assert\.equal\(await isHomeVisible\(\),true/);
+  assert.doesNotMatch(file,/await tap\('\.bottom-nav \[data-nav="home"\]'\)/,
+    'Do not force an unnecessary Home tap after the real Activity already opens Home');
+});
+
+
+test('Native Media3 Audio reconciliation checks the visible Audio overlay, not a stale hidden clock',()=>{
+  const start=mainSource.indexOf('function reconcileNativeWatchAudio(snapshot) {');
+  const end=mainSource.indexOf('const PlaybackController =',start);
+  assert.ok(start>=0&&end>start,'Native Audio reconciliation must remain testable');
+  const reconcile=mainSource.slice(start,end);
+  assert.match(reconcile,/visibleAudioWatchUi/);
+  assert.ok(reconcile.includes("document.querySelector('#app .watch-overlay')"),
+    'Inspect the actual in-app Watch overlay when it exists');
+  // Match the real Audio tab inside the currently visible Watch overlay.
+  // The selector contains a closing ] before .active; do not assert an
+  // impossible escaped backslash in the rendered source.
+  assert.match(reconcile,/audioOverlay\.querySelector\('\.media-switch \[data-watch-mode="audio"\]\.active'\)/);
+  assert.match(reconcile,/!visibleAudioWatchUi/);
+});
+
+test('Native Media3 Audio can park its persistent host without a stale iframe anchor',()=>{
+  const start=mainSource.indexOf('function parkHostedVideoForAudio() {');
+  const end=mainSource.indexOf('function restoreParkedHostedVideo()',start);
+  assert.ok(start>=0&&end>start,'Native host parking helper must exist');
+  const park=mainSource.slice(start,end);
+  assert.match(park,/isIrgunNativeVideoPlayer/);
+  assert.match(park,/watch-audio-parked/);
+  assert.match(park,/state\.watchHostedExternally = false/);
+});
+
+test('Custom playlist network errors are non-blocking and surfaced as toasts',()=>{
+  assert.doesNotMatch(mainSource,/alert\(error\.message \|\| 'Could not (?:create|add|remove|delete) playlist\.'/);
+  assert.match(mainSource,/setToast\(error\.message \|\| 'Could not add to playlist\.'/);
+  assert.match(mainSource,/setToast\(error\.message \|\| 'Could not remove from playlist\.'/);
+});
+
+test('Android API 36 native Media3 tests wait for first-boot services before launching the app',()=>{
+  const script=readFileSync('scripts/android-emulator-native-media3.sh','utf8');
+  const condition=script.indexOf('if [[ "$(adb shell getprop ro.build.version.sdk');
+  assert.ok(condition>=0&&script.indexOf('sleep 40',condition)>condition,
+    'All API 36 scenarios need the cold-system settle window, not only tablet-display');
+  const block=script.slice(condition,script.indexOf('\nfi',condition));
+  assert.doesNotMatch(block,/tablet-display/);
+});
+
+test('Android speed-selector tap measures the current scroll before stable physical coordinates',()=>{
+  const script=readFileSync('scripts/android-regression-extensions.mjs','utf8');
+  const start=script.indexOf('async function tap(selector){');
+  const end=script.indexOf('\nasync function tapWithScroll',start);
+  assert.ok(start>=0&&end>start,'Physical tap helper must exist');
+  const tap=script.slice(start,end);
+  assert.ok(tap.indexOf('const speedScroll')<tap.indexOf('settledNativeTapPoint'),
+    'Do not introduce an asynchronous DOM read between stable coordinates and the ADB tap');
+  assert.match(tap,/window\.ISTReleaseQA\?\.snapshot\?\.\(\)/);
+  assert.match(tap,/sheetState\.exists&&sheetState\.playerOpen/);
+});

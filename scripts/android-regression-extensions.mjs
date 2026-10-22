@@ -168,16 +168,23 @@ async function hit(selector){
   return JSON.parse(await evaluate(expr));
 }
 async function tap(selector){
+  const isSpeedChoice=selector.startsWith('[data-speed-choice=');
+  // Read the scroll offset BEFORE taking the final stable tap coordinates.
+  // Reading it after coordinate measurement left a race where a render could
+  // replace the sheet between measurement and the real ADB tap.
+  const speedScroll=isSpeedChoice
+    ? Number(await evaluate('document.querySelector("[data-player-sheet]")?.scrollTop')):null;
   const measured=await settledNativeTapPoint({readBounds:()=>evaluate("window.Capacitor.nativePromise('IrgunPlayback','qaWindowBounds',{})"),readPoint:()=>hit(selector),delay});
   bounds=measured.bounds;const xy=measured.point;
-  const speedScroll=selector.startsWith('[data-speed-choice=')?
-    Number(await evaluate('document.querySelector("[data-player-sheet]")?.scrollTop')):null;
   adb('shell','input','tap',String(xy[0]),String(xy[1]));
   await delay(500);
-  if(speedScroll>0){
-    const sheetState=JSON.parse(await evaluate('JSON.stringify((()=>{const s=document.querySelector("[data-player-sheet]");return {exists:!!s,scrollTop:Number(s?.scrollTop||0),playerOpen:!!window.ISTSimulator?.snapshot?.().playerOpen,watchId:String(window.ISTSimulator?.snapshot?.().watchId||""),screen:String(window.ISTSimulator?.snapshot?.().screen||"")};})())'));
+  if(isSpeedChoice){
+    const sheetState=JSON.parse(await evaluate('JSON.stringify((()=>{const s=document.querySelector("[data-player-sheet]");const qa=window.ISTReleaseQA?.snapshot?.()||{};const active=document.querySelector("#app .watch-overlay .media-switch [data-watch-mode].active, #persistentVideoMount .watch-overlay .media-switch [data-watch-mode].active");return {exists:!!s,scrollTop:Number(s?.scrollTop||0),playerOpen:!!qa.playerOpen,watchId:String(qa.watchId||""),screen:String(qa.screen||""),watchMode:String(qa.watchMode||""),activeMode:String(active?.dataset.watchMode||"")};})())'));
+    assert.ok(sheetState.exists&&sheetState.playerOpen,
+      'Physical speed selection must not close the full player; '+JSON.stringify({selector,before:speedScroll,...sheetState}));
     const after=sheetState.scrollTop;
-    assert.ok(after>=speedScroll-2,'Actual Android speed selection must preserve the settings sheet scroll; '+JSON.stringify({selector,before:speedScroll,...sheetState}));
+    if(speedScroll>0)assert.ok(after>=speedScroll-2,
+      'Actual Android speed selection must preserve the settings sheet scroll; '+JSON.stringify({selector,before:speedScroll,...sheetState}));
     report.speedSettingScrolls??=[];report.speedSettingScrolls.push({selector,before:speedScroll,after,...sheetState});
   }
   return xy;

@@ -905,7 +905,7 @@ async function createPlaylist(name, addRef = null) {
     state.playlists = [playlist, ...state.playlists.filter(row => row.id !== playlist.id)];
     return playlist;
   } catch (error) {
-    alert(error.message || 'Could not create playlist.');
+    setToast(error.message || 'Could not create playlist.');
     return null;
   }
 }
@@ -932,7 +932,7 @@ async function addToPlaylist(playlistId, ref) {
     } catch (error) {
       if (!playlist.items.some(item => mediaRefKey(item) === key)) playlist.items.push(removed);
       refreshSaveDestinationButtons(normalized.kind, normalized.id);
-      alert(error.message || 'Could not remove from playlist.');
+      setToast(error.message || 'Could not remove from playlist.');
     }
     return;
   }
@@ -947,7 +947,7 @@ async function addToPlaylist(playlistId, ref) {
   } catch (error) {
     playlist.items = playlist.items.filter(item => mediaRefKey(item) !== key);
     refreshSaveDestinationButtons(normalized.kind, normalized.id);
-    alert(error.message || 'Could not add to playlist.');
+    setToast(error.message || 'Could not add to playlist.');
   }
 }
 
@@ -972,7 +972,7 @@ async function removeFromPlaylist(playlistId, key) {
     if (!playlist.items.some(item => mediaRefKey(item) === String(key))) playlist.items.push(removed);
     refreshSaveDestinationButtons(ref.kind, ref.id);
     if (state.screen === 'library' && state.librarySection === 'playlists') render();
-    alert(error.message || 'Could not remove from playlist.');
+    setToast(error.message || 'Could not remove from playlist.');
   }
 }
 
@@ -985,7 +985,7 @@ async function deletePlaylist(playlistId) {
     state.playlists = state.playlists.filter(row => row.id !== playlist.id);
     if (state.activePlaylistId === playlist.id) state.activePlaylistId = '';
     render();
-  } catch (error) { alert(error.message || 'Could not delete playlist.'); }
+  } catch (error) { setToast(error.message || 'Could not delete playlist.'); }
 }
 
 function openPlaylistPicker(kind, id) {
@@ -1220,7 +1220,7 @@ function speakerDiscoveryRows(limit = 8) {
 
 function speakerDiscoveryCard(row) {
   const he = currentLanguage() === 'he';
-  const latest = row.latestTopic || row.latestTitle || '';
+  const latest = ''; // Android: omit Latest from speaker cards; retain the speaker/shiur count.
   const countText = `${Number(row.count || 0).toLocaleString()} ${he ? 'שיעורים' : (Number(row.count || 0) === 1 ? 'shiur' : 'shiurim')}`;
   return `<button class="discover-speaker-card" data-home-speaker="${esc(row.id)}"><span class="discover-speaker-tag">${esc(row.tag || '')}</span><strong>${esc(speakerLabel(row.id))}</strong><small>${esc(countText)}</small>${latest ? `<span class="discover-speaker-latest">${he ? 'חדש: ' : 'Latest: '}${esc(latest)}</span>` : ''}</button>`;
 }
@@ -1230,7 +1230,7 @@ function homeDiscoveryHtml() {
   const continueRows = continueListeningItems(4);
   const following = state.user ? followingFeed().slice(0,4) : [];
   const speakers = speakerDiscoveryRows(8);
-  return `<section class="home-discovery"><div class="home-search-box"><span>${svgIcon('search')}</span><input id="homeLibrarySearch" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="${he?'חיפוש לפי כותרת, מרצה או קוד שיעור…':'Search title, speaker or lecture code…'}"><button id="homeLibrarySearchGo">${he?'חפש':'Search'}</button></div>${continueRows.length?`<div class="section-head"><div><span class="section-kicker">${he?'המשך':'CONTINUE'}</span><h2>${he?'המשך להאזין':'Continue Listening'}</h2></div><button class="section-link" data-nav="library" data-open-history="1">${he?'היסטוריה':'History'}</button></div><div class="list home-continue-list">${continueRows.map(row=>compactItem(row)).join('')}</div>`:''}${following.length?`<div class="section-head follow-home-head"><div><span class="section-kicker">${he?'במעקב':'FOLLOWING'}</span><h2>${he?'חדש ממה שאתם עוקבים אחריו':'New From What You Follow'}</h2></div></div><div class="card-grid compact-home-grid">${following.map(v=>itemCard({...v,_kind:'video'})).join('')}</div>`:''}<div class="discover-speakers"><div class="discover-speaker-head"><div><span class="section-kicker">${he?'גילוי':'DISCOVER'}</span><strong>${he?'גלו לפי מרצה':'Discover by Speaker'}</strong></div><div class="discover-speaker-head-actions"><button type="button" data-shuffle-speakers="1">${he?'ערבוב':'Shuffle'}</button><button type="button" data-home-all-speakers="1">${he?'כל המרצים':'See all'}</button></div></div><div class="discover-speaker-grid">${speakers.map(speakerDiscoveryCard).join('')}</div></div></section>`;
+  return `<section class="home-discovery"><div class="home-search-box"><span>${svgIcon('search')}</span><input id="homeLibrarySearch" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="${he?'חיפוש לפי כותרת, מרצה או קוד שיעור…':'Search title, speaker or lecture code…'}"><button id="homeLibrarySearchGo">${he?'חפש':'Search'}</button></div>${continueRows.length?`<div class="section-head android-home-stacked-heading"><div><h2>${he?'המשך להאזין':'Continue Listening'}</h2></div><button class="section-link" data-nav="library" data-open-history="1">${he?'היסטוריה':'History'}</button></div><div class="list home-continue-list">${continueRows.map(row=>compactItem(row)).join('')}</div>`:''}${following.length?`<div class="section-head follow-home-head"><div><h2>${he?'חדש ממה שאתם עוקבים אחריו':'New From What You Follow'}</h2></div></div><div class="card-grid compact-home-grid">${following.map(v=>itemCard({...v,_kind:'video'})).join('')}</div>`:''}<div class="discover-speakers"><div class="discover-speaker-head"><div><strong>${he?'גלו לפי מרצה':'Discover by Speaker'}</strong></div><div class="discover-speaker-head-actions"><button type="button" data-shuffle-speakers="1">${he?'ערבוב':'Shuffle'}</button><button type="button" data-home-all-speakers="1">${he?'כל המרצים':'See all'}</button></div></div><div class="discover-speaker-grid">${speakers.map(speakerDiscoveryCard).join('')}</div></div></section>`;
 }
 
 function promiseWithTimeout(promise, ms, message) {
@@ -3795,7 +3795,7 @@ function itemCard(item, options = {}) {
       <button class="media-cover" data-${isAudio ? 'listen-audio' : 'watch'}="${esc(id)}"${isAudio ? '' : watchTimeAttr} aria-label="${esc(isAudio ? tr('Listen') : tr('Watch'))}">
         ${isAudio
           ? logoArtworkHtml()
-          : `<img src="${esc(item.thumbnail || '')}" alt="" loading="lazy">`}
+          : `<img src="${esc(item.thumbnail || '')}" alt="" loading="lazy" decoding="async" fetchpriority="low">`}
         ${isNew(date) ? '<span class="badge-new">NEW</span>' : ''}
       </button>
       <div class="media-primary-overlay">
@@ -4308,12 +4308,21 @@ async function expandPersistentWatch() {
   state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0, 300);
 }
 
+function homeLiveNowHtml(live) {
+  if (!live.length) return ''; // Hide the whole section when no stream is marked live.
+  return `<section class="section live-now-section">
+    <div class="section-head android-home-inline-heading"><h2>Live Now</h2><button class="section-link" data-nav="live">View live page</button></div>
+    <div class="live-now-grid">${live.slice(0,2).map(event => `<button class="live-now-card" data-nav="${event.location === 'Flatbush' ? 'live-flatbush' : 'live-boro'}"><span class="live-pill"><i></i> LIVE</span><strong>${esc(event.title || 'Live Broadcast')}</strong><span>${esc(event.speaker || event.location || '')}</span><small>${esc(event.location || '')}</small></button>`).join('')}</div>
+  </section>`;
+}
+
+let lastRenderedHomeLiveSignature = '';
 function homeHtml() {
   const trending = homeTrending();
   const recent = recentItems();
   const upcoming = futureScheduleEvents(3);
   const live = liveScheduleEvents();
-  const next = upcoming[0];
+  lastRenderedHomeLiveSignature = live.map(event => [event.location,event.title,event.date].join(':')).join('|');
   return `<section class="hero pro-hero">
       <div class="hero-photo" aria-hidden="true"></div>
       <div class="hero-overlay" aria-hidden="true"></div>
@@ -4334,25 +4343,20 @@ function homeHtml() {
 
     ${homeDiscoveryHtml()}
 
-    <section class="section live-now-section">
-      <div class="section-head"><div><span class="section-kicker">LIVE &amp; NEXT</span><h2>${live.length ? 'Live Now' : 'Next Shiur'}</h2></div><button class="section-link" data-nav="live">View live page</button></div>
-      ${live.length ? `<div class="live-now-grid">${live.slice(0,2).map(event => `<button class="live-now-card" data-nav="${event.location === 'Flatbush' ? 'live-flatbush' : 'live-boro'}"><span class="live-pill"><i></i> LIVE</span><strong>${esc(event.title || 'Live Broadcast')}</strong><span>${esc(event.speaker || event.location || '')}</span><small>${esc(event.location || '')}</small></button>`).join('')}</div>`
-        : next ? scheduleEventCard(next, true)
-        : `<div class="pro-empty"><strong>No upcoming shiur is posted yet.</strong><span>Open the schedule for the current flyers.</span><button data-nav="schedule">View Schedule</button></div>`}
-    </section>
+    ${homeLiveNowHtml(live)}
 
     <section class="section">
-      <div class="section-head"><div><span class="section-kicker">COMING UP</span><h2>Upcoming Shiurim</h2></div><button class="section-link" data-nav="schedule">Full schedule</button></div>
+      <div class="section-head android-home-stacked-heading"><div><h2>Upcoming Shiurim</h2></div><button class="section-link" data-nav="schedule">Full schedule</button></div>
       ${upcoming.length ? `<div class="upcoming-home-list">${upcoming.map(event => scheduleEventCard(event, true)).join('')}</div>` : '<div class="empty">Current upcoming schedule will appear here.</div>'}
     </section>
 
     <section class="section">
-      <div class="section-head"><div><span class="section-kicker">POPULAR NOW</span><h2>Trending Shiurim</h2></div><div class="segmented"><button data-trend-period="week" class="${state.homeTrendPeriod === 'week' ? 'active' : ''}">This Week</button><button data-trend-period="month" class="${state.homeTrendPeriod === 'month' ? 'active' : ''}">This Month</button></div></div>
+      <div class="section-head"><div><h2>Trending Shiurim</h2></div><div class="segmented"><button data-trend-period="week" class="${state.homeTrendPeriod === 'week' ? 'active' : ''}">This Week</button><button data-trend-period="month" class="${state.homeTrendPeriod === 'month' ? 'active' : ''}">This Month</button></div></div>
       ${trending.length ? `<div class="card-grid">${trending.map(x => itemCard(x.item, { trendCount: x.count })).join('')}</div>` : '<div class="empty">Trending shiurim will appear here.</div>'}
     </section>
 
     <section class="section">
-      <div class="section-head"><div><span class="section-kicker">NEW</span><h2>Latest Shiurim</h2></div><button class="section-link" data-nav="shiurim">Browse all</button></div>
+      <div class="section-head android-home-stacked-heading"><div><h2>Latest Shiurim</h2></div><button class="section-link" data-nav="shiurim">Browse all</button></div>
       <div class="card-grid">${recent.map(itemCard).join('')}</div>
     </section>`;
 }
@@ -4374,12 +4378,27 @@ function liveHtml() {
 let liveAnalyticsFrame = null;
 let liveAnalyticsPlayer = null;
 let liveAnalyticsHandlers = null;
+let livePlaybackAwake = false;
+// Wake policy follows actual Vimeo playback rather than an event being scheduled.
+// Do not interfere with a recorded video that may still have its own player open.
+function syncLiveScreenAwake(playing) {
+  const next = Boolean(playing && !document.hidden &&
+    (state.screen === 'live-boro' || state.screen === 'live-flatbush') &&
+    !(state.watchVideo && state.watchMode === 'video'));
+  if (next === livePlaybackAwake) return;
+  livePlaybackAwake = next;
+  if (!Capacitor.isNativePlatform()) return;
+  Promise.resolve().then(() => {
+    return IrgunFullscreen.livePlayback({playing:next});
+  }).catch(error => console.warn('Live video screen-awake update failed', error));
+}
 function syncLivePlaybackAnalytics() {
   const frame = app.querySelector('.live-player-wrap iframe.live-frame');
   if (frame === liveAnalyticsFrame) return;
   if (liveAnalyticsPlayer && liveAnalyticsHandlers) {
     for (const [name, handler] of liveAnalyticsHandlers) liveAnalyticsPlayer.off(name, handler);
   }
+  syncLiveScreenAwake(false);
   if (liveAnalyticsFrame && usageAnalytics.state().shiurId.startsWith('Live: ')) {
     usageAnalytics.setMedia({ isPlaying:false, mediaType:'none', playerState:'browsing', shiurId:'' });
   }
@@ -4391,16 +4410,31 @@ function syncLivePlaybackAnalytics() {
   const liveId = `Live: ${city}`;
   try {
     const player = new window.Vimeo.Player(frame);
-    const play = () => usageAnalytics.setMedia({ isPlaying:true, mediaType:'video', playerState:'playing', shiurId:liveId });
+    const play = () => {
+      if (frame !== liveAnalyticsFrame) return;
+      syncLiveScreenAwake(true);
+      usageAnalytics.setMedia({ isPlaying:true, mediaType:'video', playerState:'playing', shiurId:liveId });
+    };
     const stop = () => {
+      if (frame !== liveAnalyticsFrame) return;
+      syncLiveScreenAwake(false);
       if (usageAnalytics.state().shiurId === liveId)
         usageAnalytics.setMedia({ isPlaying:false, mediaType:'none', playerState:'browsing', shiurId:'' });
     };
     liveAnalyticsPlayer = player;
-    liveAnalyticsHandlers = [['play',play],['playing',play],['timeupdate',play],['pause',stop],['ended',stop]];
+    liveAnalyticsHandlers = [['play',play],['playing',play],['timeupdate',play],['pause',stop],['ended',stop],['error',stop]];
     for (const [name, handler] of liveAnalyticsHandlers) player.on(name, handler);
+    // The frame may already be playing before the Vimeo API becomes available.
+    void player.getPaused().then(paused => { if (!paused) play(); }).catch(() => {});
   } catch (error) { console.warn('Live playback analytics unavailable:', error); }
 }
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) syncLiveScreenAwake(false);
+  else if (liveAnalyticsPlayer && liveAnalyticsFrame) {
+    void liveAnalyticsPlayer.getPaused().then(paused => syncLiveScreenAwake(!paused)).catch(() => {});
+  }
+});
+window.addEventListener('pagehide', () => syncLiveScreenAwake(false));
 
 function liveStreamHtml(location) {
   const boro = location === 'boro';
@@ -6034,12 +6068,18 @@ function waitForMediaEvent(target, eventName, timeoutMs = 1200) {
 }
 
 function parkHostedVideoForAudio() {
-  if (!persistentVideoMount || !state.watchVimeo || !persistentVideoMount.querySelector('#watchVimeoFrame')) return false;
+  if (!persistentVideoMount || !state.watchVimeo) return false;
+  const hasFrame = Boolean(persistentVideoMount.querySelector('#watchVimeoFrame'));
+  const nativeMedia3 = Boolean(state.watchVimeo.isIrgunNativeVideoPlayer);
+  // A native Media3 host can outlive its DOM anchor during a render/handoff.
+  // Still park that host so a committed AUDIO snapshot cannot leave the old
+  // Video controls visible over the advancing native Audio player.
+  if (!hasFrame && !nativeMedia3) return false;
   persistentVideoMount.className = 'persistent-video-mount watch-video-host watch-audio-parked';
   document.body.classList.remove('irgun-watch-mini-hosted');
   state.watchHostedExternally = false;
   state.watchMinimized = false;
-  return true;
+  return hasFrame || nativeMedia3;
 }
 
 function restoreParkedHostedVideo() {
@@ -6762,8 +6802,10 @@ async function loadScheduleData(force = false) {
   }
 }
 
+
 async function loadLiveStatus(force = false) {
   if (state.liveStatusLoaded && !force) return;
+  const firstLoad = !state.liveStatusLoaded;
   try {
     const data = await publicJson(`/live-stream-status?v=${Date.now()}`);
     state.liveOverrides = new Set((data.enabledLocations || []).filter(location => LIVE_STREAMS[location]));
@@ -6771,8 +6813,19 @@ async function loadLiveStatus(force = false) {
     state.liveOverrides = new Set();
   }
   state.liveStatusLoaded = true;
-  if (state.screen.startsWith('live') || state.screen === 'home') render();
+  // A timed live event may start/end even when the API overrides are unchanged.
+  // Rebuild the Home feed only when its live cards actually change. Never rebuild
+  // an active Vimeo iframe merely because a status poll has completed.
+  if (state.screen === 'home') {
+    const current = liveScheduleEvents().map(event => [event.location,event.title,event.date].join(':')).join('|');
+    if (firstLoad || current !== lastRenderedHomeLiveSignature) render();
+  } else if (firstLoad && state.screen.startsWith('live')) render();
 }
+// Recheck live availability while Home is visible: no manual refresh needed.
+setInterval(() => {
+  if (!document.hidden && state.screen === 'home' && !state.loading && !state.error)
+    void loadLiveStatus(true);
+}, 60000);
 
 async function loadRecurringDonations(force = false) {
   if (!state.user || state.recurringLoading) return;
@@ -9226,7 +9279,21 @@ function reconcileNativeWatchAudio(snapshot) {
   // The handoff may arrive while the WebView is hidden. Build the Audio view
   // from the native snapshot then, so Home -> notification return cannot expose
   // the old Video controls with a frozen 0:00 clock.
-  if (wasVideo || (!state.playerOpen && !document.getElementById('watchAudioTime'))) render();
+  const audioOverlay = typeof document.querySelector === 'function'
+    ? document.querySelector('#app .watch-overlay') : null;
+  const audioOverlayRect = audioOverlay?.getBoundingClientRect();
+  const visibleAudioWatchUi = Boolean(
+    audioOverlay && audioOverlayRect?.width > 0 && audioOverlayRect?.height > 0 &&
+    audioOverlayRect.right > 0 && audioOverlayRect.bottom > 0 &&
+    audioOverlayRect.left < innerWidth && audioOverlayRect.top < innerHeight &&
+    audioOverlay.querySelector('.media-switch [data-watch-mode="audio"].active') &&
+    audioOverlay.querySelector('#watchAudioTime') &&
+    !(typeof hasPersistentVideoOverlayForCurrentWatch === 'function' &&
+      hasPersistentVideoOverlayForCurrentWatch())
+  );
+  // A stale/hidden Audio clock is not proof that the visible Watch controls
+  // switched modes. Re-render when the visible overlay still presents Video.
+  if (wasVideo || (!state.playerOpen && !visibleAudioWatchUi)) render();
 }
 
 const PlaybackController = {

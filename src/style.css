@@ -3429,3 +3429,180 @@ body.irgun-android .home-shortcuts strong { line-height:1.25; }
 .admin-parity-compact{padding:9px 2px;border-bottom:1px solid #dce5ef;font-size:12px}
 .admin-parity-success{color:#147343!important;font-weight:800}
 @media(max-width:540px){.admin-parity-menu{grid-template-columns:repeat(2,minmax(0,1fr))}.admin-parity-panel{padding:10px}}
+
+
+/* Approved Android homepage readability / hierarchy, October 2026.
+   The existing top-bar white divider/borders are intentionally untouched. */
+body.irgun-android .topbar .top-account {
+  min-width:108px;
+  max-width:142px;
+  min-height:42px;
+  padding:10px 12px;
+  font-size:12px;
+  text-align:center;
+}
+body.irgun-android .topbar .brand-logo-frame {
+  width:70px;
+  height:58px;
+  flex:0 0 70px;
+}
+body.irgun-android .topbar .brand-logo-frame img {
+  width:100%;
+  height:100%;
+  object-fit:contain;
+}
+body.irgun-android .topbar .brand-copy { min-width:0; }
+body.irgun-android .topbar .brand-copy strong {
+  font-size:17px;
+  line-height:1.16;
+  overflow-wrap:normal;
+}
+body.irgun-android .home-section-footer {
+  display:flex;
+  justify-content:flex-end;
+  margin-top:11px;
+}
+body.irgun-android .home-section-footer .section-link {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-height:40px;
+  padding:9px 13px;
+  border-radius:11px;
+  font-size:12px;
+  font-weight:850;
+}
+body.irgun-android .discover-speaker-card { gap:7px; padding:13px; }
+body.irgun-android .discover-speaker-card strong {
+  font-size:14.5px;
+  font-weight:900;
+  line-height:1.32;
+  white-space:normal;
+  overflow-wrap:anywhere;
+}
+body.irgun-android .discover-speaker-card small {
+  font-size:11.5px;
+  line-height:1.35;
+  font-weight:850;
+  color:#43536a;
+}
+body.irgun-android .schedule-event-date {
+  min-height:36px;
+  padding:8px 12px;
+  font-size:12px;
+  font-weight:900;
+}
+body.irgun-android .schedule-event-date b { font-size:10px; }
+body.irgun-android .schedule-event-main {
+  grid-template-columns:88px minmax(0,1fr);
+  gap:12px;
+  padding:15px;
+}
+body.irgun-android .schedule-event-time { font-size:14px; line-height:1.35; font-weight:950; }
+body.irgun-android .schedule-event-copy h3 { font-size:16px; line-height:1.3; font-weight:900; }
+body.irgun-android .schedule-event-copy strong { font-size:13px; line-height:1.4; font-weight:850; }
+body.irgun-android .schedule-event-copy p { font-size:12px; line-height:1.4; }
+body.irgun-android .schedule-event-card.compact .schedule-event-main {
+  grid-template-columns:83px minmax(0,1fr);
+  gap:11px;
+  padding:14px;
+}
+body.irgun-android .schedule-event-card.compact .schedule-event-copy h3 { font-size:15.5px; }
+
+@media(max-width:560px) {
+  body.irgun-android .topbar .brand-logo-frame { width:59px; height:51px; flex-basis:59px; }
+  body.irgun-android .topbar .brand-copy strong { font-size:14px; }
+  body.irgun-android .topbar .top-account {
+    min-width:88px;
+    max-width:116px;
+    min-height:40px;
+    padding:9px 9px;
+    font-size:11px;
+  }
+  body.irgun-android .schedule-event-main,
+  body.irgun-android .schedule-event-card.compact .schedule-event-main {
+    grid-template-columns:75px minmax(0,1fr);
+    gap:10px;
+    padding:13px;
+  }
+  body.irgun-android .schedule-event-copy h3,
+  body.irgun-android .schedule-event-card.compact .schedule-event-copy h3 { font-size:15px; }
+  body.irgun-android .schedule-event-time { font-size:13px; }
+  body.irgun-android .schedule-event-copy strong { font-size:12.5px; }
+  body.irgun-android .schedule-event-copy p { font-size:11.5px; }
+}
+@media(max-width:390px) {
+  body.irgun-android .topbar .brand-logo-frame { width:48px; height:44px; flex-basis:48px; }
+  body.irgun-android .topbar .brand-copy strong { font-size:13px; line-height:1.15; }
+  body.irgun-android .topbar .top-account {
+    min-width:73px;
+    max-width:91px;
+    min-height:40px;
+    padding:8px 7px;
+    font-size:10px !important;
+  }
+  body.irgun-android .discover-speaker-card strong { font-size:13.5px; }
+  body.irgun-android .schedule-event-main,
+  body.irgun-android .schedule-event-card.compact .schedule-event-main {
+    grid-template-columns:69px minmax(0,1fr);
+    gap:8px;
+    padding:12px;
+  }
+  body.irgun-android .schedule-event-copy h3,
+  body.irgun-android .schedule-event-card.compact .schedule-event-copy h3 { font-size:14px; }
+  body.irgun-android .schedule-event-time { font-size:12px; }
+  body.irgun-android .schedule-event-copy p { font-size:11px; }
+}
+
+/* Screenshot review: keep section links adjacent to their headings, including
+   Live Now, History, Full Schedule and Browse All. They wrap below the
+   heading only when the Android viewport is too narrow for both items. */
+body.irgun-android .android-home-inline-heading {
+  justify-content:flex-start;
+  align-items:center;
+  flex-wrap:wrap;
+  column-gap:15px;
+  row-gap:6px;
+}
+body.irgun-android .android-home-inline-heading .section-link {
+  flex:0 0 auto;
+  min-height:40px;
+  display:inline-flex;
+  align-items:center;
+  text-align:start;
+  margin:0;
+  padding:7px 2px;
+  font-size:12px;
+  font-weight:850;
+}
+@media(max-width:390px) {
+  body.irgun-android .android-home-inline-heading { column-gap:10px; }
+  body.irgun-android .android-home-inline-heading .section-link { font-size:11px; }
+}
+
+
+/* History, Full Schedule and Browse All go DIRECTLY UNDER their section
+   titles (and before any lecture cards), never on the same line or at end. */
+body.irgun-android .android-home-stacked-heading {
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  justify-content:flex-start;
+  gap:1px;
+}
+body.irgun-android .android-home-stacked-heading .section-link {
+  display:inline-flex;
+  flex:0 0 auto;
+  align-items:center;
+  align-self:flex-start;
+  margin:0;
+  min-height:36px;
+  padding:5px 0;
+  font-size:12px;
+  font-weight:850;
+  line-height:1.3;
+  text-align:start;
+}
+@media(max-width:390px) {
+  body.irgun-android .android-home-stacked-heading .section-link { font-size:11px; }
+}

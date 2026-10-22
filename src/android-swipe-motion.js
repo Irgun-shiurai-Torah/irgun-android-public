@@ -35,7 +35,7 @@ export function createAndroidSwipeMotion({
       page.querySelectorAll(rows).forEach(container => {
         // Real first cards are visible. Trimming below-fold results prevents
         // the old crash-prone duplicate 48-card library or live player page.
-        Array.from(container.children || []).slice(4).forEach(el => el.remove());
+        Array.from(container.children || []).slice(2).forEach(el => el.remove());
       });
       let imageCount = 0;
       page.querySelectorAll('*').forEach(el => {
@@ -53,9 +53,9 @@ export function createAndroidSwipeMotion({
         }
         if (el.matches?.('img')) {
           imageCount++;
-          if (imageCount > 10) {
-            // Keep the original size/background layout without loading more
-            // than ten thumbnails into the GPU during each finger drag.
+          if (imageCount > 4) {
+            // Keep the original size/background layout but load at most four
+            // thumbnails into the GPU during a low-memory Android swipe.
             el.removeAttribute('src');el.removeAttribute('srcset');
           } else {
             el.setAttribute('loading', 'lazy');
@@ -67,7 +67,7 @@ export function createAndroidSwipeMotion({
       const trim = parent => {
         for (const el of Array.from(parent.children || [])) {
           total++;
-          if (total > 440) el.remove();
+          if (total > 220) el.remove();
           else trim(el);
         }
       };
