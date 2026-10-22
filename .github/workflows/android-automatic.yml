@@ -2,13 +2,12 @@ name: Irgun Android - Automatic Builds
 
 on:
   push:
+    # One-time design preview build: commit this workflow on this isolated
+    # branch. No changes to main and no automatic builds on other branches.
     branches:
-      - main
-    paths-ignore:
-      - ".github/**"
-      - "README*"
-      - "**/*.md"
-      - "**/*.txt"
+      - preview/android-audio-speed-internal-20261023
+    paths:
+      - ".github/workflows/android-automatic.yml"
   workflow_dispatch:
 
 permissions:
