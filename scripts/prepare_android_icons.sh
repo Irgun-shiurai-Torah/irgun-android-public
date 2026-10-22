@@ -18,18 +18,15 @@ fi
 
 NAVY="#0B2B49"
 RES="android/app/src/main/res"
-mkdir -p assets "$RES/drawable-nodpi" "$RES/mipmap-anydpi-v26"
+mkdir -p assets "$RES/drawable-nodpi" "$RES/mipmap-anydpi-v26" "$RES/mipmap-sw320dp-anydpi-v26"
 
-# Preserve the approved 1024px artwork without an intermediate downsample.
-# This padding keeps the scroll tips inside Android's adaptive safe circle,
-# while making the logo larger than the previous 820px preparation.
+# Use only the approved artwork. No redrawing, text replacement, or alternate logo.
+# This padding keeps the scroll tips inside Android's adaptive safe circle.
 "${IMG[@]}" "$MASTER" -alpha off -depth 8 assets/icon-only.png
 "${IMG[@]}" "$MASTER" -gravity center -background none -extent 1080x1080 -depth 8 assets/icon-foreground.png
 "${IMG[@]}" -size 1080x1080 canvas:"$NAVY" -depth 8 assets/icon-background.png
 
-# Launchers can display icons larger than the standard density templates.
-# Keep the adaptive foreground at full resolution and let Android rasterize
-# it once at the actual display size.
+# Preserve the full-resolution foreground and let Android rasterize it at display size.
 cp assets/icon-foreground.png "$RES/drawable-nodpi/irgun_launcher_foreground.png"
 
 for entry in ldpi:36:81 mdpi:48:108 hdpi:72:162 xhdpi:96:216 xxhdpi:144:324 xxxhdpi:192:432; do
@@ -45,8 +42,24 @@ for entry in ldpi:36:81 mdpi:48:108 hdpi:72:162 xhdpi:96:216 xxhdpi:144:324 xxxh
   "${IMG[@]}" -size "${adaptive}x${adaptive}" canvas:"$NAVY" -depth 8 "$resource_dir/ic_launcher_background.png"
 done
 
+# Compact phones below 320dp smallest width get a modestly larger rendering
+# of the exact same logo. The increase is deliberately limited to 9% inset
+# to improve legibility while protecting the scroll ends from launcher masks.
 for name in ic_launcher ic_launcher_round; do
   cat > "$RES/mipmap-anydpi-v26/$name.xml" <<'ICON_XML'
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground>
+        <inset android:drawable="@drawable/irgun_launcher_foreground" android:inset="9%" />
+    </foreground>
+</adaptive-icon>
+ICON_XML
+done
+
+# Regular phones and tablets (smallest width >= 320dp) keep the current sizing.
+for name in ic_launcher ic_launcher_round; do
+  cat > "$RES/mipmap-sw320dp-anydpi-v26/$name.xml" <<'ICON_XML'
 <?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background" />
@@ -59,5 +72,4 @@ done
 
 # Do not run @capacitor/assets afterwards: its custom-foreground generator
 # uses legacy 48dp templates for adaptive icons and overwrites these resources.
-echo "Android launcher icons prepared from the full-resolution approved artwork."
-
+echo "Android launcher icons prepared from the approved artwork, with a compact-screen size variant."
