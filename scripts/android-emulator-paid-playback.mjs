@@ -236,14 +236,30 @@ try{
       // horizontal tab swipes and folder opening physical via Android ADB.
       await openPurchasedLibrary();
       let ownedPage=await paidView();
-      // The verified entitlement lookup can finish after the physical tab
-      // switches. Poll the real DOM until the authenticated catalog resolves.
-      for(let i=0;i<75&&(!ownedPage.productVisible||!ownedPage.owned);i++){
+      // A paid card can initially render from a stale or intermediate catalog
+      // snapshot with its "owned" chip present but the Listen action not yet
+      // attached. Do not fail on the first incomplete DOM snapshot: wait for
+      // all three user-visible conditions before physically tapping Listen.
+      for(let i=0;i<75&&(!ownedPage.productVisible||!ownedPage.owned||!ownedPage.listen);i++){
         await delay(450);
         ownedPage=await paidView();
       }
+      if(!ownedPage.productVisible||!ownedPage.owned||!ownedPage.listen){
+        // Include safe geometry/state diagnostics, never tokens or paid URLs.
+        report.purchasedCardFailure={
+          stage:'purchased-card-not-ready',
+          productVisible:ownedPage.productVisible,
+          owned:ownedPage.owned,
+          listen:ownedPage.listen,
+          listenLabel:ownedPage.listenLabel,
+          tracks:ownedPage.tracks,
+          folderNodes:ownedPage.folderNodes,
+          albumExpanded:ownedPage.albumExpanded
+        };
+      }
       assert.ok(ownedPage.productVisible&&ownedPage.owned,
         'Belsky product was not verified in the authenticated Purchased Library');
+      assert.ok(ownedPage.listen,'Purchased Belsky Listen action never became available after catalog settled');
       const expanded=await ensurePurchasedAlbumOpen();
       report.checks.push('Physical purchased Listen opens the real track album');
       assert.equal(expanded.albumExpanded,true,'Purchased album must be visible before opening track folders');
