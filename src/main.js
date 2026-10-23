@@ -1,4 +1,4 @@
-import { audioSpeedControlsHtml, refreshAudioSpeedControls } from './audio-speed-controls.js';
+import { audioSpeedControlsHtml, refreshAudioSpeedControls, bindAudioSpeedPopupMenus } from './audio-speed-controls.js';
 import './audio-speed-controls.css';
 import './style.css';
 import { createWebsiteAdminParity } from './admin-website-parity.js';
@@ -6621,13 +6621,13 @@ function fullPlayerHtml() {
       <input id="fullSeek" class="seek" type="range" min="0" max="${playbackDurationSeconds()}" value="${playbackPositionSeconds()}" step="1">
       <div class="time-row"><span id="fullCurrent">${fmtTime(playbackPositionSeconds())}</span><span id="fullDuration">${fmtDurationOrUnknown(playbackDurationSeconds())}</span></div>
       <div class="big-controls"><button class="skip-control" data-skip="-${state.skipSeconds}" aria-label="Back ${state.skipSeconds} seconds">${svgIcon('back15')}</button><button class="main-play" data-play-toggle="1">${playbackIsPaused() ? svgIcon('play') : '<span class="pause-mark">II</span>'}</button><button class="skip-control" data-skip="${state.skipSeconds}" aria-label="Forward ${state.skipSeconds} seconds">${svgIcon('forward15')}</button></div>
-      ${audioSpeedControlsHtml(state.playbackSpeed, currentLanguage())}
       <div class="player-action-grid">
         ${isPaid ? `<button data-paid-bookmark-current="1">${svgIcon('bookmark')}<span>Bookmark</span></button>${Number(c.bookmarkSeconds) > 0 ? `<button data-paid-go-bookmark="1">${svgIcon('back15')}<span>Go to ${fmtTime(c.bookmarkSeconds)}</span></button>` : ''}<button data-nav="paid">${svgIcon('store')}<span>Purchase</span></button>` : `${canWatch ? `<button data-player-watch="${esc(c.id)}">${svgIcon('video')}<span>Watch</span></button>` : ''}<button class="${liked ? 'active' : ''}" data-like="${esc(likeId)}">${svgIcon('heart')}<span>${liked ? 'Liked' : 'Like'}</span></button><button class="${savePresentation?.cls || ''}" data-open-playlist-picker="1" data-playlist-kind="${c.kind === 'library-audio' ? 'audio' : 'video'}" data-playlist-id="${esc(c.id)}">${svgIcon('bookmark')}<span>${tr(savePresentation?.label || 'Save')}</span></button><button data-share-kind="${c.kind === 'library-audio' ? 'audio' : 'video'}" data-share-id="${esc(c.id)}">${svgIcon('share')}<span>Share</span></button><button data-download-kind="${c.kind === 'library-audio' ? 'audio' : 'video-audio'}" data-download-id="${esc(c.id)}">${svgIcon('download')}<span>Download</span></button><button data-save-offline-kind="${c.kind === 'library-audio' ? 'audio' : 'video'}" data-save-offline-id="${esc(c.id)}" class="${offlineState?.cls || ''}">${offlineIconHtml()}<span>${esc(offlineState?.label || (currentLanguage()==='he'?'האזנה ללא אינטרנט':'Listen Offline'))}</span>${offlineState?.status==='downloading'?`<span class="offline-progress-badge">${Number(offlineState.job?.percent)>0?`${Number(offlineState.job.percent)}%`:'…'}</span>`:''}</button>`}
       </div>
       ${c.offline ? `<div class="offline-player-badge">✓ ${currentLanguage()==='he'?'מתנגן מהקובץ השמור':'Playing offline copy'}</div>` : ''}
       ${state.playQueue.length>1?`<div class="queue-controls"><button data-queue-prev="1" ${state.playQueueIndex<=0?'disabled':''}>← ${currentLanguage()==='he'?'הקודם':'Previous'}</button><button data-queue-next="1" ${state.playQueueIndex>=state.playQueue.length-1?'disabled':''}>${currentLanguage()==='he'?'הבא':'Next'} →</button></div>`:''}
       <div class="player-setting-block"><span class="player-setting-title">${currentLanguage()==='he'?'דילוג קדימה/אחורה':'Skip buttons'}</span><div class="player-setting-chips">${[10,15,30].map(x=>`<button data-skip-choice="${x}" class="${state.skipSeconds===x?'active':''}">${x} sec</button>`).join('')}</div></div>
+      <div class="player-setting-block"><span class="player-setting-title">Playback speed</span><div class="player-setting-chips">${[0.75, 1, 1.25, 1.5, 1.75, 2].map(x => `<button data-speed-choice="${x}" class="${state.playbackSpeed === x ? 'active' : ''}">${x}×</button>`).join('')}</div></div>
       <div class="player-setting-block"><span class="player-setting-title">Sleep timer</span><div class="player-setting-chips">${[['off','Off'],['15','15 min'],['30','30 min'],['45','45 min'],['60','60 min'],['end','End']].map(([value,label]) => `<button data-sleep-choice="${value}" class="${state.sleepMode === value ? 'active' : ''}">${label}</button>`).join('')}</div></div>
       <button class="close-player" data-close-player="1">Close full player</button>
     </section>
@@ -8038,6 +8038,7 @@ function bind() {
     PlaybackController.seekTo(Number(seek.value) || 0).catch(()=>{});
   });
   bindPlayerSpeedChoices();
+  bindAudioSpeedPopupMenus(document);
   document.querySelectorAll('[data-sleep-choice]').forEach(el => el.addEventListener('click', () => setSleepTimer(el.dataset.sleepChoice)));
   const watchAudioSeek = document.getElementById('watchAudioSeek');
   if (watchAudioSeek) watchAudioSeek.addEventListener('input', () => {
