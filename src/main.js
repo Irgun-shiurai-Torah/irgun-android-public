@@ -3778,6 +3778,20 @@ function topicChildren(parentId) {
   return (state.metadata.topics || []).filter(topic => topic.parent === parentId).map(topic => String(topic.id));
 }
 
+// A shiur's all-time play total is shown to the public from 300 onward.
+// Authenticated administrators can see exact lower totals only in Admin Mode.
+function shiurViewsHtml(item, isAudio = false) {
+  const id = isAudio ? rawAudioId(item) : videoId(item);
+  const totals = state.trends.all;
+  const count = Math.max(0, Math.floor(Math.max(
+    Number(totals.get(String(id))) || 0,
+    isAudio ? Number(totals.get(`audio:${id}`)) || 0 : 0
+  )));
+  if (!(state.isAdmin && state.adminMode) && count < 300) return '';
+  const label = currentLanguage() === 'he' ? (isAudio ? 'האזנות' : 'צפיות') : (isAudio ? 'listens' : 'views');
+  return `<span class="shiur-views-stat">${count.toLocaleString('en-US')} ${label}</span>`;
+}
+
 function itemCard(item, options = {}) {
   const isAudio = item._kind === 'audio';
   const id = isAudio ? rawAudioId(item) : videoId(item);
@@ -3812,6 +3826,7 @@ function itemCard(item, options = {}) {
       <div class="media-meta">${date ? esc(fmtDate(date)) : ''}${isAudio ? ` - ${esc(fmtDurationOrUnknown(item.duration))}` : (item.duration ? ` - ${esc(fmtTime(item.duration))}` : '')}</div>
       ${state.isAdmin && state.adminMode ? `<div class="admin-card-tools media-admin-tools"><button data-admin-video-edit="${esc(id)}" data-admin-media-kind="${isAudio ? 'audio' : 'video'}">Edit Shiur</button></div>` : ''}
       ${catalogCode ? `<div class="card-catalog-code">${esc(catalogCode)}</div>` : ''}
+      ${shiurViewsHtml(item, isAudio)}
       <div class="action-row">
         ${actionIconButton({ cls: liked ? 'active' : '', attrs: `data-like="${esc(actionIdValue)}"`, icon: svgIcon('heart'), label: 'Like', suffix: `<span class="card-like-count">${count}</span>` })}
         ${actionIconButton({ cls: savePresentation.cls, attrs: `data-open-playlist-picker="1" data-playlist-kind="${isAudio ? 'audio' : 'video'}" data-playlist-id="${esc(id)}"`, icon: svgIcon('bookmark'), label: savePresentation.label })}
@@ -6551,6 +6566,7 @@ function watchHtml() {
       <section class="watch-details">
         <h1>${esc(displayShiurTitle(v.title, ''))}</h1>
         <div class="watch-meta">${esc([v.showcase, fmtDate(v.lectureDate || v.date || v.created), v.duration ? fmtTime(v.duration) : '', v._speakerLabel, v._topicLabel].filter(Boolean).join(' - '))}</div>
+        ${shiurViewsHtml(v)}
         <div class="watch-actions compact-watch-actions">
           <button class="watch-action ${liked ? 'active' : ''}" data-like="${esc(likeId)}">${svgIcon('heart')}<span class="watch-action-text">${likeCount}</span></button>
           <button class="watch-action ${savePresentation.cls}" data-open-playlist-picker="1" data-playlist-kind="video" data-playlist-id="${esc(id)}">${svgIcon('bookmark')}<span class="watch-action-text">${tr(savePresentation.label)}</span></button>
@@ -6617,6 +6633,7 @@ function fullPlayerHtml() {
       <div class="grabber"></div>
       <div class="player-art ${c.thumbnail ? '' : 'audio-logo'}">${c.thumbnail ? `<img src="${esc(c.thumbnail)}" alt="">` : '<img src="/logo.png" alt="Irgun Shiurai Torah">'}</div>
       <div class="player-heading"><h2>${esc(c.title || '')}</h2><p>${esc(c.subtitle || '')}</p></div>
+      ${!isPaid && sourceItem ? shiurViewsHtml(sourceItem, c.kind === 'library-audio') : ''}
       ${followButtons ? `<div class="follow-bar player-follow-bar">${followButtons}</div>` : ''}
       <input id="fullSeek" class="seek" type="range" min="0" max="${playbackDurationSeconds()}" value="${playbackPositionSeconds()}" step="1">
       <div class="time-row"><span id="fullCurrent">${fmtTime(playbackPositionSeconds())}</span><span id="fullDuration">${fmtDurationOrUnknown(playbackDurationSeconds())}</span></div>
