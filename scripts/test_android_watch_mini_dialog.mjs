@@ -166,7 +166,7 @@ test('native Audio cannot be hidden behind a stale full Video host even when ada
   const mount={
     dataset:{irgunWatchId:'lecture'},
     className:'persistent-video-mount watch-video-host watch-full-host',
-    classList:{contains(name){return mount.className.split(/\\s+/).includes(name);}},
+    classList:{contains(name){return mount.className.split(/\s+/).includes(name);}},
     querySelector:selector=>selector.includes('#watchVimeoFrame')?{}:null
   };
   const state={watchVideo:{id:'lecture'},watchMode:'audio',
@@ -205,7 +205,9 @@ test('native Audio cannot be hidden behind a stale full Video host even when ada
     'Never park the host of a different lecture');
 
   const renderSource=between(main,'function render() {','function syncOpenFilterChecks(');
-  assert.match(renderSource,/parkStaleAndroidVideoHostWhenAudioOwns\\(\\);[\\s\\S]*?app\\.innerHTML = shell\\(content \\+ playlistPickerHtml\\(\\)\\)/,
+  assert.ok(renderSource.indexOf('parkStaleAndroidVideoHostWhenAudioOwns();') >= 0 &&
+    renderSource.indexOf('parkStaleAndroidVideoHostWhenAudioOwns();') <
+    renderSource.indexOf('app.innerHTML = shell(content + playlistPickerHtml());'),
     'Audio host must be parked BEFORE shell chooses whether to render Audio Watch');
 });
 
