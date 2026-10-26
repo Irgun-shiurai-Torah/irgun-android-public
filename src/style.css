@@ -66,6 +66,12 @@ a { color: inherit; text-decoration: none; }
 .media-body { padding: 11px; }
 .media-title { display: block; width: 100%; min-height: 38px; padding: 0; border: 0; text-align: left; background: transparent; color: var(--navy); font-weight: 850; font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .media-meta { color: var(--muted); font-size: 10px; line-height: 1.35; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Option A: views live in the existing date/duration metadata line, not a new row. */
+.media-meta-row { display: flex; flex-wrap: wrap; align-items: center; column-gap: 9px; row-gap: 3px; white-space: normal; overflow: visible; text-overflow: clip; }
+.media-meta-row .media-date-duration { min-width: 0; }
+.shiur-views-stat { display: inline-flex; align-items: center; gap: 4px; color: inherit; font-size: inherit; font-weight: 500; line-height: inherit; white-space: nowrap; vertical-align: baseline; }
+.shiur-views-stat .ui-icon { width: 13px; height: 13px; flex: 0 0 13px; }
+
 .content-match-time { display:inline-flex; align-items:center; width:max-content; max-width:100%; margin-top:6px; padding:5px 9px; border-radius:999px; background:#eef6ff; color:#0b5cab; font-size:10px; font-weight:800; }
 .action-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .action, .icon-action { border: 0; border-radius: 10px; background: #edf2f7; color: var(--navy); padding: 8px 9px; font-weight: 850; font-size: 10px; }

@@ -132,6 +132,13 @@ test('IME-obscured Password and Login scroll into view rather than back to Email
   for(const key of ['email','closeWatch','settings','audioMode','videoMode','audioPlay'])assert.equal(accountSwipeDirection(key),'down');
 });
 
+test('playlist name, create and Back are reached by scrolling toward the TOP of the real Library page',()=>{
+  for(const key of ['playlistName','createPlaylist','playlistBack'])
+    assert.equal(accountSwipeDirection(key),'down',key+' must not swipe farther down the playlist list');
+  for(const key of ['playlists','testPlaylist','deletePlaylist'])
+    assert.equal(accountSwipeDirection(key),'up',key+' retains its existing list navigation');
+});
+
 test('Watch player recovery uses a real downward swipe within the measured scroll viewport',()=>{
   const scroll={x:0,y:44,width:320,height:550,top:742};
   const gesture=watchPlayerReturnGesture(scroll);
