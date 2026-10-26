@@ -27,20 +27,26 @@ test('retry offline read-only hierarchy observations only when Irgun PID is unch
   assert.ok(a.calls.every(s=>!s.includes('input tap')&&!s.includes('am start')&&!s.includes('force-stop')));
 });
 test('offline instrument error with empty stderr still retries the safe read-only observation',()=>{
-  const a=fakeAdb();
-  let tries=0;
-  const run=(binary,args,options)=>{
-    if(args[1]==='am'&&args[2]==='instrument'&&tries++===0) {
-      // execFileSync can expose Buffer.alloc(0) for stderr, while the
-      // Command failed message itself contains the offline diagnostic.
-      throw Object.assign(new Error('Command failed: adb shell am instrument: error: device offline'),
-        {stderr:Buffer.alloc(0),stdout:Buffer.alloc(0)});
+  const calls=[];let observations=0;
+  const run=(_binary,args)=>{
+    calls.push(args.join(' '));
+    if(args[0]==='wait-for-device')return '';
+    if(args[1]==='pidof')return '1234\n';
+    if(args[1]==='am'&&args[2]==='instrument') {
+      observations++;
+      if(observations===1) {
+        // execFileSync can expose an empty stderr Buffer while its
+        // Command failed message contains the real offline diagnostic.
+        throw Object.assign(new Error('Command failed: adb shell am instrument: error: device offline'),
+          {stderr:Buffer.alloc(0),stdout:Buffer.alloc(0)});
+      }
+      return expected;
     }
-    return a.run(binary,args,options);
+    throw new Error('Unexpected ADB command '+args.join(' '));
   };
   assert.match(nativeHierarchy(null,{run,allWindows:true}),/<node/);
-  assert.ok(a.calls.includes('wait-for-device'));
-  assert.equal(tries,2,'observer must receive an actual successful second read');
+  assert.ok(calls.includes('wait-for-device'));
+  assert.equal(observations,2,'observer must receive a successful second read');
 });
 
 test('native observer never hides a changed app PID',()=>{
