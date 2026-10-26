@@ -22,7 +22,9 @@ export function nativeHierarchy(evidencePath,{allWindows=false,run=execFileSync}
       result=adb(...observe);
       break;
     } catch(error) {
-      const detail=String(error.stderr||error.message||'');
+      // Node may supply an empty stderr Buffer while the useful transport
+      // failure is still in error.message. Inspect all available diagnostics.
+      const detail=[error.stderr,error.stdout,error.message].map(value=>String(value||'')).join('\n');
       const transient=/device offline|device.*not found|no devices\/emulators found|waiting for device/i.test(detail);
       if(!transient || attempt===2) throw error;
       adb('wait-for-device');
