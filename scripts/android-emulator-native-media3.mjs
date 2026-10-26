@@ -638,7 +638,19 @@ try {
   report.checks.push({label:'Physical PiP button enters real Android pinned task and returns without player/item/clock change',
     before:beforePip,pip:pipMoved.media3,after:afterPip.media3});
 
+  // The first PiP return can publish Media3's in-page state before Android
+  // finishes restoring native window focus/geometry. Do not aim a real header
+  // tap at the system transition; wait for the same normal PlayerView to settle.
+  await waitNative(s=>!s.media3.systemPip && !s.media3.fullscreen &&
+    s.media3.playing && s.media3.surfaceVisibleOnScreen &&
+    s.media3.surfaceY>=65 && s.media3.surfaceVisibleHeight>60 &&
+    s.media3.surfaceVisibleHeight<s.media3.rootHeight*.65,
+    'PiP return must fully restore an in-page surface before the header tap',15000);
+  await delay(1200);
   const headerPipStart=Date.now(),headerBefore=(await sample()).media3;
+  assert.ok(!headerBefore.systemPip && !headerBefore.fullscreen &&
+    headerBefore.surfaceY>=65 && headerBefore.surfaceVisibleHeight<headerBefore.rootHeight*.65,
+    'Native player must still be in normal page layout before header PiP click');
   await tapVisible('[data-video-pip]',true);
   await waitNative(s=>s.media3.systemPip&&s.media3.playing,'Header PiP icon must enter system PiP');
   assert.match(adb('shell','dumpsys','activity','activities'),/mode=pinned/);

@@ -56,9 +56,13 @@ try {
     }
     throw new Error(`UI did not settle: ${JSON.stringify(state)}`);
   };
-  await wait(s => !s.loading && !s.error && s.counter === 'Shiurim Played');
-  assert.equal((await read()).eyebrow, false, 'Home eyebrow must be removed');
-  report.checks.push('English Home wording and removed eyebrow');
+  // The app can reopen in a previously saved Hebrew locale. A translated
+  // Home is a successful startup too; never misdiagnose it as a loading failure.
+  const initialHome = await wait(s => !s.loading && !s.error && s.tab === 'home' &&
+    (s.lang?.startsWith('he') ? s.counter === 'שיעורים שהושמעו' :
+      s.lang?.startsWith('en') && s.counter === 'Shiurim Played'));
+  assert.equal(initialHome.eyebrow, false, 'Home eyebrow must be removed');
+  report.checks.push('Home loads with correct wording in the persisted language');
 
   // Obtain the native WebView bounds, including status/navigation bar insets.
   adb('shell', 'uiautomator', 'dump', '/sdcard/irgun-tabs.xml');
@@ -69,6 +73,27 @@ try {
   const [left, top, right, bottom] = bounds.slice(1).map(Number);
   report.bounds = { left, top, right, bottom };
   const nativePoint = p => [Math.round(left + p.x * (right - left) / p.width), Math.round(top + p.y * (bottom - top) / p.height)];
+  const toggleLanguage = async () => {
+    const point = JSON.parse(await evaluate(`JSON.stringify((()=>{
+      const b=document.querySelector('[data-language-toggle]');
+      if (!b) return null;
+      const r=b.getBoundingClientRect();
+      return {x:r.left+r.width/2,y:r.top+r.height/2,width:innerWidth,height:innerHeight};
+    })())`));
+    assert.ok(point, 'Visible language switch must exist');
+    adb('shell', 'input', 'tap', ...nativePoint(point).map(String));
+  };
+  // Traverse in English first, and then explicitly test the Hebrew/RTL path.
+  // Switch locales through real Android input, not a CDP click or a test-only override.
+  if (initialHome.lang.startsWith('he')) {
+    await toggleLanguage();
+    await wait(s => s.lang?.startsWith('en') && s.counter === 'Shiurim Played' &&
+      s.tab === 'home' && !s.loading && !s.error);
+  }
+  const englishHome = await read();
+  assert.equal(englishHome.counter, 'Shiurim Played', 'English Home counter label');
+  assert.equal(englishHome.eyebrow, false, 'English Home eyebrow must be removed');
+  report.checks.push('English Home wording and removed eyebrow');
   const witnessed = {left:false,right:false};
   const swipe = async dx => {
     const from = await read();
@@ -234,12 +259,9 @@ try {
   adb('shell','input','tap',...nativePoint(homeButton).map(String));
   await wait(s => s.tab === 'home');
 
-  const languagePoint = JSON.parse(await evaluate(`JSON.stringify((()=>{
-    const b=document.querySelector('[data-language-toggle]'),r=b.getBoundingClientRect();
-    return {x:r.left+r.width/2,y:r.top+r.height/2,width:innerWidth,height:innerHeight};
-  })())`));
-  adb('shell', 'input', 'tap', ...nativePoint(languagePoint).map(String));
-  await wait(s => s.counter === 'שיעורים שהושמעו');
+  await toggleLanguage();
+  await wait(s => s.lang?.startsWith('he') && s.counter === 'שיעורים שהושמעו' &&
+    s.tab === 'home' && !s.loading && !s.error);
   assert.equal((await read()).eyebrow, false);
   await traverse();
   report.checks.push('Hebrew Home wording and physical tab order, both directions, no wrapping');
