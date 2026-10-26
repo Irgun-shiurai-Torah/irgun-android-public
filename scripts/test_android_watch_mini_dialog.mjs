@@ -158,6 +158,57 @@ test('native Media3 Watch is unique after returning from Audio, including later 
   assert.ok(stale.every(x=>!x.removed),'A stale Video host cannot cover another lecture');
 });
 
+test('native Audio cannot be hidden behind a stale full Video host even when adapter is missing',()=>{
+  const hostCheck=between(main,'function hasPersistentVideoOverlayForCurrentWatch() {','function refreshPersistentMiniVideoChrome() {');
+  const parking=between(main,'function parkHostedVideoForAudio() {','function restoreParkedHostedVideo() {');
+  const reconcile=between(main,'function reconcileAndroidNativeWatchOverlay() {',"function hostCurrentWatchOverlay(mode = 'full') {");
+  const stale=[{removed:false,remove(){this.removed=true;}}];
+  const mount={
+    dataset:{irgunWatchId:'lecture'},
+    className:'persistent-video-mount watch-video-host watch-full-host',
+    classList:{contains(name){return mount.className.split(/\\s+/).includes(name);}},
+    querySelector:selector=>selector.includes('#watchVimeoFrame')?{}:null
+  };
+  const state={watchVideo:{id:'lecture'},watchMode:'audio',
+    nativePlayback:{mode:'AUDIO',lectureId:'lecture',audioIsPlaying:true},
+    watchVimeo:null,mediaSwitchBusy:false,watchAudioToVideoHandoff:false,
+    watchHostedExternally:true,pendingWatchMode:''};
+  const document={body:{classList:{remove(){}}},querySelectorAll:selector=>
+    selector==='#app .watch-overlay'?stale:[]};
+  const ctx=new Function('Capacitor','state','persistentVideoMount','document','videoId',
+    hostCheck+parking+reconcile+
+    'return {parkStaleAndroidVideoHostWhenAudioOwns,reconcileAndroidNativeWatchOverlay,hasPersistentVideoOverlayForCurrentWatch};')(
+    {getPlatform:()=> 'android'},state,mount,document,v=>v.id);
+
+  // Reproduce the captured Android 14 regression: native AUDIO is genuinely
+  // playing, but old Video controls are mounted as watch-full-host.
+  ctx.reconcileAndroidNativeWatchOverlay();
+  assert.match(mount.className,/watch-audio-parked/,
+    'Committed native Audio parks the stale Video overlay without an adapter');
+  assert.equal(state.watchHostedExternally,false);
+  assert.equal(ctx.hasPersistentVideoOverlayForCurrentWatch(),false);
+  assert.equal(stale[0].removed,false,'Real Audio Watch controls must not be deleted');
+  assert.equal(state.nativePlayback.audioIsPlaying,true,'Do not interrupt native playback');
+
+  mount.className='persistent-video-mount watch-video-host watch-full-host';
+  state.mediaSwitchBusy=true;
+  assert.equal(ctx.parkStaleAndroidVideoHostWhenAudioOwns(),false,
+    'Never park a Video host currently being restored for Audio to Video');
+  assert.match(mount.className,/watch-full-host/);
+  state.mediaSwitchBusy=false;
+  state.nativePlayback.lectureId='different';
+  assert.equal(ctx.parkStaleAndroidVideoHostWhenAudioOwns(),false,
+    'Another lecture\'s native Audio event must not park the current Video host');
+  state.nativePlayback.lectureId='lecture';
+  mount.dataset.irgunWatchId='other';
+  assert.equal(ctx.parkStaleAndroidVideoHostWhenAudioOwns(),false,
+    'Never park the host of a different lecture');
+
+  const renderSource=between(main,'function render() {','function syncOpenFilterChecks(');
+  assert.match(renderSource,/parkStaleAndroidVideoHostWhenAudioOwns\\(\\);[\\s\\S]*?app\\.innerHTML = shell\\(content \\+ playlistPickerHtml\\(\\)\\)/,
+    'Audio host must be parked BEFORE shell chooses whether to render Audio Watch');
+});
+
 test('native Watch guard removes a late duplicate after an Audio to Video return',()=>{
   const latest=readFileSync('src/main.js','utf8');
   const guard=between(latest,'const nativeWatchOverlayGuard =','// The Android Audio UI may briefly coexist');
