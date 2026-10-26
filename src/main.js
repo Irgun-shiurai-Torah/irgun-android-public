@@ -4233,7 +4233,9 @@ nativeWatchOverlayGuard?.observe(app, { childList:true, subtree:true });
 // no second in-app Watch, no hidden competing controls, and no player reset.
 function reconcileAndroidNativeWatchOverlay() {
   // Never remove the active Audio Watch under an obsolete full Video host.
-  parkStaleAndroidVideoHostWhenAudioOwns();
+  // Guard because isolated unit harnesses execute this function alone.
+  if (typeof parkStaleAndroidVideoHostWhenAudioOwns === 'function')
+    parkStaleAndroidVideoHostWhenAudioOwns();
   if (!hasPersistentVideoOverlayForCurrentWatch()) return;
   state.watchHostedExternally = true;
   document.querySelectorAll('#app .watch-overlay').forEach(overlay => overlay.remove());
@@ -7386,7 +7388,9 @@ function preserveAuthFormDraft() {
 function render() {
   // Park stale native Video BEFORE shell() decides whether Audio Watch is
   // allowed to render. A later cleanup cannot restore an omitted Audio panel.
-  parkStaleAndroidVideoHostWhenAudioOwns();
+  // The guard also keeps isolated render tests self-contained.
+  if (typeof parkStaleAndroidVideoHostWhenAudioOwns === 'function')
+    parkStaleAndroidVideoHostWhenAudioOwns();
   syncAndroidBottomNavigation();
   syncAndroidVideoDisplay();
   // A deferred render must not leave an earlier Audio Watch covering native Video.
