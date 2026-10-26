@@ -4232,6 +4232,8 @@ nativeWatchOverlayGuard?.observe(app, { childList:true, subtree:true });
 // When Media3 returns to VIDEO, only #persistentVideoMount is authoritative:
 // no second in-app Watch, no hidden competing controls, and no player reset.
 function reconcileAndroidNativeWatchOverlay() {
+  // Never remove the active Audio Watch under an obsolete full Video host.
+  parkStaleAndroidVideoHostWhenAudioOwns();
   if (!hasPersistentVideoOverlayForCurrentWatch()) return;
   state.watchHostedExternally = true;
   document.querySelectorAll('#app .watch-overlay').forEach(overlay => overlay.remove());
@@ -6085,9 +6087,14 @@ function waitForMediaEvent(target, eventName, timeoutMs = 1200) {
 }
 
 function parkHostedVideoForAudio() {
-  if (!persistentVideoMount || !state.watchVimeo) return false;
+  if (!persistentVideoMount) return false;
+  // A native Audio state can commit after an async Watch re-render clears the
+  // Video adapter. The DOM host can still be visible even with watchVimeo=null.
+  // Park the actual same-lecture host, not just hosts with a live JS adapter.
+  const hostedId = String(persistentVideoMount.dataset?.irgunWatchId || '');
+  if (hostedId && state.watchVideo && hostedId !== String(videoId(state.watchVideo))) return false;
   const hasFrame = Boolean(persistentVideoMount.querySelector('#watchVimeoFrame'));
-  const nativeMedia3 = Boolean(state.watchVimeo.isIrgunNativeVideoPlayer);
+  const nativeMedia3 = Boolean(state.watchVimeo?.isIrgunNativeVideoPlayer);
   // A native Media3 host can outlive its DOM anchor during a render/handoff.
   // Still park that host so a committed AUDIO snapshot cannot leave the old
   // Video controls visible over the advancing native Audio player.
@@ -6097,6 +6104,23 @@ function parkHostedVideoForAudio() {
   state.watchHostedExternally = false;
   state.watchMinimized = false;
   return hasFrame || nativeMedia3;
+}
+
+// A real Android 14 emulator run had a playing AUDIO Media3 session, but the
+// previously mounted Video Watch still had watch-full-host and suppressed the
+// Audio panel. Do not rely on an old WebView adapter to park this stale host.
+// During an explicit Audio -> Video handoff, leave the temporarily restored
+// host alone until the same-player native mode switch commits.
+function parkStaleAndroidVideoHostWhenAudioOwns() {
+  if (Capacitor.getPlatform() !== 'android' || !state.watchVideo ||
+      state.watchMode !== 'audio' || state.mediaSwitchBusy ||
+      state.watchAudioToVideoHandoff || state.pendingWatchMode === 'video' ||
+      state.nativePlayback?.mode !== 'AUDIO' ||
+      String(state.nativePlayback?.lectureId || '') !== String(videoId(state.watchVideo))) return false;
+  const visible = persistentVideoMount?.classList?.contains('watch-full-host') ||
+    persistentVideoMount?.classList?.contains('watch-mini-host');
+  if (!visible) return false;
+  return parkHostedVideoForAudio();
 }
 
 function restoreParkedHostedVideo() {
@@ -7360,6 +7384,9 @@ function preserveAuthFormDraft() {
 }
 
 function render() {
+  // Park stale native Video BEFORE shell() decides whether Audio Watch is
+  // allowed to render. A later cleanup cannot restore an omitted Audio panel.
+  parkStaleAndroidVideoHostWhenAudioOwns();
   syncAndroidBottomNavigation();
   syncAndroidVideoDisplay();
   // A deferred render must not leave an earlier Audio Watch covering native Video.
