@@ -1632,6 +1632,7 @@ function svgIcon(name, extraClass = '') {
   const icons = {
     home: `<svg ${common}><path d="M3 10.7 12 3l9 7.7v9.1a1.2 1.2 0 0 1-1.2 1.2h-5.2v-6.1H9.4V21H4.2A1.2 1.2 0 0 1 3 19.8z"/></svg>`,
     search: `<svg ${common}><circle cx="10.5" cy="10.5" r="6.3"/><path d="m15.2 15.2 5.2 5.2"/></svg>`,
+    eye: `<svg ${common}><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.6"/></svg>`,
     history: `<svg ${common}><path d="M4 5v5h5M5.5 9.5A8 8 0 1 1 4.8 15"/><path d="M12 7v5l3 2"/></svg>`,
     play: `<svg ${common}><path d="M8 5.4v13.2L19 12z"/></svg>`,
     live: `<svg ${common}><circle cx="12" cy="12" r="3.1"/><path d="M6.8 6.8a7.4 7.4 0 0 0 0 10.4M17.2 6.8a7.4 7.4 0 0 1 0 10.4M3.7 3.7a11.8 11.8 0 0 0 0 16.6M20.3 3.7a11.8 11.8 0 0 1 0 16.6"/></svg>`,
@@ -3789,7 +3790,7 @@ function shiurViewsHtml(item, isAudio = false) {
   )));
   if (!(state.isAdmin && state.adminMode) && count < 300) return '';
   const label = currentLanguage() === 'he' ? (isAudio ? 'האזנות' : 'צפיות') : (isAudio ? 'listens' : 'views');
-  return `<span class="shiur-views-stat">${count.toLocaleString('en-US')} ${label}</span>`;
+  return `<span class="shiur-views-stat" aria-label="${count.toLocaleString('en-US')} ${label}">${svgIcon('eye')}<span>${count.toLocaleString('en-US')} ${label}</span></span>`;
 }
 
 function itemCard(item, options = {}) {
@@ -3823,10 +3824,9 @@ function itemCard(item, options = {}) {
       <button class="media-title" data-${isAudio ? 'listen-audio' : 'watch'}="${esc(id)}"${isAudio ? '' : watchTimeAttr}>${esc(itemTitle(item))}</button>
       <div class="media-meta">${esc(itemSubtitle(item))}</div>
       ${hasContentMatch ? `<button class="content-match-time content-match-button" data-watch="${esc(id)}" data-watch-time="${matchStart}" type="button">Match at ${esc(fmtTime(matchStart))}</button>` : ''}
-      <div class="media-meta">${date ? esc(fmtDate(date)) : ''}${isAudio ? ` - ${esc(fmtDurationOrUnknown(item.duration))}` : (item.duration ? ` - ${esc(fmtTime(item.duration))}` : '')}</div>
+      <div class="media-meta media-meta-row"><span class="media-date-duration">${date ? esc(fmtDate(date)) : ''}${isAudio ? ` - ${esc(fmtDurationOrUnknown(item.duration))}` : (item.duration ? ` - ${esc(fmtTime(item.duration))}` : '')}</span>${shiurViewsHtml(item, isAudio)}</div>
       ${state.isAdmin && state.adminMode ? `<div class="admin-card-tools media-admin-tools"><button data-admin-video-edit="${esc(id)}" data-admin-media-kind="${isAudio ? 'audio' : 'video'}">Edit Shiur</button></div>` : ''}
       ${catalogCode ? `<div class="card-catalog-code">${esc(catalogCode)}</div>` : ''}
-      ${shiurViewsHtml(item, isAudio)}
       <div class="action-row">
         ${actionIconButton({ cls: liked ? 'active' : '', attrs: `data-like="${esc(actionIdValue)}"`, icon: svgIcon('heart'), label: 'Like', suffix: `<span class="card-like-count">${count}</span>` })}
         ${actionIconButton({ cls: savePresentation.cls, attrs: `data-open-playlist-picker="1" data-playlist-kind="${isAudio ? 'audio' : 'video'}" data-playlist-id="${esc(id)}"`, icon: svgIcon('bookmark'), label: savePresentation.label })}
@@ -6548,6 +6548,7 @@ function watchHtml() {
   const offlineState = v.hasAudio ? offlineActionState('video', id) : null;
   const related = relatedVideos(v);
   const miniSpeaker = v._speakerLabel || v.speaker || 'Irgun Shiurai Torah';
+  const watchViews = shiurViewsHtml(v);
   return `<div class="watch-overlay">
     <div class="watch-host-mini-chrome" aria-hidden="true">
       <div class="watch-host-mini-video-hit" data-expand-watch="1" role="button" aria-label="Open video"></div>
@@ -6565,8 +6566,7 @@ function watchHtml() {
       </div>
       <section class="watch-details">
         <h1>${esc(displayShiurTitle(v.title, ''))}</h1>
-        <div class="watch-meta">${esc([v.showcase, fmtDate(v.lectureDate || v.date || v.created), v.duration ? fmtTime(v.duration) : '', v._speakerLabel, v._topicLabel].filter(Boolean).join(' - '))}</div>
-        ${shiurViewsHtml(v)}
+        <div class="watch-meta">${esc([v.showcase, fmtDate(v.lectureDate || v.date || v.created), v.duration ? fmtTime(v.duration) : '', v._speakerLabel, v._topicLabel].filter(Boolean).join(' - '))}${watchViews ? ` <span class="views-inline-separator" aria-hidden="true">·</span> ${watchViews}` : ""}</div>
         <div class="watch-actions compact-watch-actions">
           <button class="watch-action ${liked ? 'active' : ''}" data-like="${esc(likeId)}">${svgIcon('heart')}<span class="watch-action-text">${likeCount}</span></button>
           <button class="watch-action ${savePresentation.cls}" data-open-playlist-picker="1" data-playlist-kind="video" data-playlist-id="${esc(id)}">${svgIcon('bookmark')}<span class="watch-action-text">${tr(savePresentation.label)}</span></button>
@@ -6628,12 +6628,12 @@ function fullPlayerHtml() {
   const sourceItem = isPaid ? null : (c.kind === 'library-audio' ? state.audioById.get(String(c.id)) : state.videoById.get(String(c.id)));
   const offlineState = !isPaid ? offlineActionState(c.kind === 'library-audio' ? 'audio' : 'video', c.id) : null;
   const followButtons = currentFollowButtons(sourceItem);
+  const playerViews = !isPaid && sourceItem ? shiurViewsHtml(sourceItem, c.kind === 'library-audio') : '';
   return `<div class="sheet-backdrop" data-close-player-backdrop="1">
     <section class="player-sheet" data-player-sheet="1">
       <div class="grabber"></div>
       <div class="player-art ${c.thumbnail ? '' : 'audio-logo'}">${c.thumbnail ? `<img src="${esc(c.thumbnail)}" alt="">` : '<img src="/logo.png" alt="Irgun Shiurai Torah">'}</div>
-      <div class="player-heading"><h2>${esc(c.title || '')}</h2><p>${esc(c.subtitle || '')}</p></div>
-      ${!isPaid && sourceItem ? shiurViewsHtml(sourceItem, c.kind === 'library-audio') : ''}
+      <div class="player-heading"><h2>${esc(c.title || '')}</h2><p>${esc(c.subtitle || '')}${playerViews ? `${c.subtitle ? ' · ' : ''}${playerViews}` : ''}</p></div>
       ${followButtons ? `<div class="follow-bar player-follow-bar">${followButtons}</div>` : ''}
       <input id="fullSeek" class="seek" type="range" min="0" max="${playbackDurationSeconds()}" value="${playbackPositionSeconds()}" step="1">
       <div class="time-row"><span id="fullCurrent">${fmtTime(playbackPositionSeconds())}</span><span id="fullDuration">${fmtDurationOrUnknown(playbackDurationSeconds())}</span></div>
