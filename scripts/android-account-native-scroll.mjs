@@ -7,7 +7,11 @@
 // This helper chooses actual gesture directions; it never injects DOM events
 // or bypasses native UI verification.
 export function accountSwipeDirection(key) {
-  return ['closeWatch','email','settings','audioMode','videoMode','audioPlay'].includes(String(key)) ? 'down' : 'up';
+  // Playlist creation and its Back control are ABOVE the playlist list.
+  // Scroll up the page (a physical DOWN swipe) to reach these controls;
+  // a default upward swipe moves further into the list and loses the field.
+  return ['closeWatch','email','settings','audioMode','videoMode','audioPlay',
+    'playlistName','createPlaylist','playlistBack'].includes(String(key)) ? 'down' : 'up';
 }
 
 // A physical down-swipe inside the observed Watch scroll viewport. The caller
