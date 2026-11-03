@@ -917,7 +917,7 @@ test('Android cold offline restart restores only verified identity even if netwo
     await context.bootstrap({initial:true});
     assert.equal(restores,1,
       'Real catalog failure must attempt offline restore regardless of navigator.onLine');
-    assert.equal(sessionRequests,0,'A failed catalog may prevent /me and must not invent server authorization');
+    assert.equal(sessionRequests,1,'Validate the previous session independently of catalog startup; no privileges are inferred');
     assert.equal(state.user?.name,'Verified listener');
     assert.equal(state.isAdmin,false,'Offline profile must not grant elevated privileges');
     assert.equal(renderedAccount,true,'Cached display identity must render on offline startup');
