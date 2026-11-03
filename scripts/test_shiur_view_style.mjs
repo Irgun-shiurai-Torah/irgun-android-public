@@ -13,7 +13,7 @@ function between(source, from, to) {
   return source.slice(first, last);
 }
 
-test('view counter still hides below 300 for public, including audio, and displays an eye at 300', () => {
+test('view counter hides below 300; videos use an eye and audio listens use headphones', () => {
   const functionSource = between(main, 'function shiurViewsHtml(', '\nfunction itemCard(');
   const state = { trends: { all: new Map() }, isAdmin: false, adminMode: false };
   let language = 'en';
@@ -53,6 +53,7 @@ test('view counter still hides below 300 for public, including audio, and displa
   language = 'en';
   state.trends.all.set('audio:audio-1', 301);
   assert.match(renderViews({ id: 'audio-1' }, true), /301 listens/);
+  assert.match(renderViews({ id: 'audio-1' }, true), /data-icon="headphones"/);
   language = 'he';
   assert.match(renderViews({ id: 'audio-1' }, true), /301 האזנות/);
   state.trends.all.set('audio:audio-1', 299);
@@ -65,6 +66,7 @@ test('Option A places views inline beside date/duration, not in a separate card 
   assert.equal((card.match(/shiurViewsHtml\(item, isAudio\)/g) || []).length, 1);
   assert.ok(card.indexOf('media-meta-row') < card.indexOf('card-catalog-code'));
   assert.match(main, /eye: `<svg \$\{common\}>/);
+  assert.match(main, /headphones: `<svg \$\{common\}>/);
 
   const watch = between(main, 'function watchHtml()', '\nfunction fullPlayerHtml()');
   assert.match(watch, /<div class="watch-meta">[^\n]*\$\{watchViews \?/);
