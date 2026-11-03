@@ -3223,11 +3223,16 @@ function requireLogin(message) {
 
 async function toggleFollow(type, key, label) {
   if (!state.user) return requireLogin('Sign in to follow speakers and topics.');
+  // A native JS alert on a rejected Follow call blocks the Android WebView
+  // event loop (and CDP), so use non-modal feedback and bound the request.
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeout = setTimeout(() => controller?.abort(), 12000);
   try {
     const result = await apiJson('/follows/toggle', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, key, labelEn: label, labelHe: label })
+      body: JSON.stringify({ type, key, labelEn: label, labelHe: label }),
+      ...(controller ? { signal: controller.signal } : {})
     });
     const requestedIdentity = `${type}:${key}`;
     const savedItem = result?.item?.type && result?.item?.key
@@ -3254,7 +3259,14 @@ async function toggleFollow(type, key, label) {
       }
     } catch (error) { console.warn('Could not refresh saved follows', error); }
   } catch (error) {
-    alert(error.message || 'Could not update follow.');
+    // Never block native playback, user taps or read-only regression
+    // observations behind a JavaScript alert dialog.
+    console.warn('Follow update failed', Number(error?.status) || String(error?.name || 'network'));
+    setToast(Number(error?.status) === 401
+      ? 'Your session expired. Please sign in again.'
+      : 'Could not update Follow. Please try again.');
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
