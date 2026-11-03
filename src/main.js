@@ -212,7 +212,9 @@ const state = {
   trends: { week: new Map(), month: new Map(), all: new Map() },
   counter: 1124579,
   likeCounts: {},
-  user: Capacitor.getPlatform()==='android' && navigator.onLine===false ? readCachedAccount(localStorage,localStorage.getItem(TOKEN_KEY)) : null,
+  // Display only the token-bound identity previously verified by /me;
+  // roles, collections and any server actions still require a live session.
+  user: Capacitor.getPlatform()==='android' ? readCachedAccount(localStorage,localStorage.getItem(TOKEN_KEY)) : null,
   token: localStorage.getItem(TOKEN_KEY) || '',
   myLikes: new Set(),
   watchLater: new Set(),
@@ -2705,6 +2707,9 @@ async function bootstrap(options = {}) {
   state.usingCachedLibrary = false;
   state.offlineCacheSavedAt = 0;
   initNativeDownloader().catch(() => {});
+  // Validate the saved account in parallel with catalog loading rather than
+  // making the signed-in header depend on several unrelated catalog requests.
+  const restorePromise = state.token ? restoreSession() : Promise.resolve();
   try {
     await loadMetadata();
     const [videos, audios, week, month, all, counter, likeCounts] = await Promise.all([
@@ -2738,7 +2743,7 @@ async function bootstrap(options = {}) {
     // not hold the whole app behind its initial loading screen.
     state.loading = false;
     render();
-    await restoreSession();
+    await restorePromise;
     render();
     Promise.all([loadSponsorRibbon(), loadScheduleData(), loadLiveStatus()])
       .then(() => { if (['home','schedule','live','live-boro','live-flatbush'].includes(state.screen)) render(); })
@@ -2780,6 +2785,7 @@ async function restoreSession() {
     if (!data.loggedIn || !data.user) {
       setToken('');
       resetUserState();
+      if (typeof render === 'function') render();
       return;
     }
     state.user = data.user;
@@ -2797,12 +2803,14 @@ async function restoreSession() {
       // Server-confirmed revocation always wins over any cached display name.
       setToken('');
       resetUserState();
+      if (typeof render === 'function') render();
     } else if (Number(error?.status) === 403) {
       // Access was explicitly refused by the server. A profile restored while
       // offline cannot stay visible or reappear from its cache on the next
       // offline restart, although the token is retained for server re-check.
       clearCachedAccount(localStorage);
       resetUserState();
+      if (typeof render === 'function') render();
     } else if (!state.user && (!Number(error?.status) || Number(error.status) >= 500)) {
       // navigator.onLine can stay true on an emulator after Wi-Fi and mobile
       // data have both been disconnected. A failed /me fetch may restore ONLY
