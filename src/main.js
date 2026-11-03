@@ -2773,8 +2773,10 @@ async function restoreSession() {
     resetUserState();
     return;
   }
+  const checkedToken = state.token;
   try {
     const data = await apiJson('/me');
+    if (checkedToken !== state.token) return;
     if (!data.loggedIn || !data.user) {
       setToken('');
       resetUserState();
@@ -2782,10 +2784,15 @@ async function restoreSession() {
     }
     state.user = data.user;
     rememberVerifiedAccount();
-    await loadUserCollections();
-    await checkAdminStatus();
+    // /me has already confirmed the session. Show the account now instead
+    // of waiting for slow history, follows and admin requests.
+    if (typeof render === 'function') render();
+    await Promise.allSettled([loadUserCollections(), checkAdminStatus()]);
+    if (checkedToken !== state.token || !state.user) return;
     warmNativePaidCatalog();
+    if (typeof render === 'function') render();
   } catch (error) {
+    if (checkedToken !== state.token) return;
     if (Number(error?.status) === 401) {
       // Server-confirmed revocation always wins over any cached display name.
       setToken('');
@@ -2808,6 +2815,7 @@ async function restoreSession() {
 
 async function loadUserCollections() {
   if (!state.user) return;
+  const checkedToken = state.token;
   try {
     const [likes, later, follows, history, notificationSettings, playlists] = await Promise.all([
       apiJson('/my-like-ids').catch(() => ({ ids: [] })),
@@ -2829,6 +2837,7 @@ async function loadUserCollections() {
       apiJson('/notification-settings').catch(() => ({ pushEnabled:false, emailEnabled:false, pushConfigured:false, emailConfigured:false })),
       apiJson('/custom-playlists').catch(() => ({ items: [] }))
     ]);
+    if (checkedToken !== state.token || !state.user) return;
     state.myLikes = new Set((likes.ids || []).map(String));
     state.watchLater = new Set((later.items || []).map(item => String(item.id || item.vimeoId || '')));
     state.follows = new Map((follows.items || []).map(item => [`${item.type}:${item.key}`, item]));
@@ -2842,7 +2851,8 @@ async function loadUserCollections() {
     try { localStorage.removeItem(PLAYLISTS_KEY); } catch (_) {}
     state.notificationSettings = { ...state.notificationSettings, ...notificationSettings };
     // Push is per app installation. Do not inherit another browser/device's state.
-    state.notificationSettings.pushEnabled = await currentNativePushEnabled();
+    const pushEnabled = await currentNativePushEnabled();
+    if (checkedToken === state.token && state.user) state.notificationSettings.pushEnabled = pushEnabled;
   } catch (error) {
     console.warn('Could not load account collections', error);
   }
@@ -2850,6 +2860,7 @@ async function loadUserCollections() {
 
 
 async function checkAdminStatus(force = false) {
+  const checkedToken = state.token;
   if (!state.user) {
     state.isAdmin = false;
     state.adminChecked = true;
@@ -2858,14 +2869,17 @@ async function checkAdminStatus(force = false) {
   if (state.adminChecked && !force) return state.isAdmin;
   try {
     const data = await apiJson('/admin/status');
+    if (checkedToken !== state.token || !state.user) return false;
     state.isAdmin = Boolean(data?.isAdmin);
     state.adminStatus = data || null;
     state.adminAdmins = Array.isArray(data?.admins) ? data.admins : [];
   } catch (error) {
+    if (checkedToken !== state.token || !state.user) return false;
     state.isAdmin = false;
     state.adminStatus = null;
     if (![401,403].includes(Number(error?.status))) console.warn('Admin status check failed', error);
   }
+  if (checkedToken !== state.token || !state.user) return false;
   state.adminChecked = true;
   if (!state.isAdmin && state.accountSection === 'admin') state.accountSection = 'profile';
   if(!state.cityAdminChecked&&!state.cityAdminLoading)void checkCityAdminStatus();
@@ -2894,6 +2908,28 @@ async function refreshLikeCounts() {
   try { state.likeCounts = await publicJson('/like-counts'); } catch (_) {}
 }
 
+// The server-verified token is enough to show the signed-in UI.
+// Collection and admin refreshes run afterwards, without blocking login.
+function completeSignIn(sessionToken, user, successMessage) {
+  resetUserState();
+  setToken(sessionToken);
+  state.user = user;
+  rememberVerifiedAccount();
+  state.authBusy = false;
+  state.authMessage = '';
+  state.authMode = 'login';
+  state.authVerifyEmail = '';
+  state.authVerifyPassword = '';
+  render();
+  if (successMessage) setToast(successMessage);
+  const checkedToken = state.token;
+  void Promise.allSettled([loadUserCollections(), checkAdminStatus(true)]).then(() => {
+    if (checkedToken !== state.token || !state.user) return;
+    warmNativePaidCatalog();
+    render();
+  });
+}
+
 async function login(email, password) {
   state.authBusy = true;
   state.authMessage = '';
@@ -2916,22 +2952,7 @@ async function login(email, password) {
       throw new Error(data.error || 'Login failed.');
     }
     if (!data.sessionToken) throw new Error('The app Worker is not returning an app session token.');
-    setToken(data.sessionToken);
-    state.user = data.user || { name: data.name || '', email };
-    rememberVerifiedAccount();
-    await loadUserCollections();
-    state.adminChecked = false;
-    await checkAdminStatus(true);
-    state.paidLoaded = false;
-    state.paidCatalog = [];
-    state.recurringLoaded = false;
-    state.recurringDonations = [];
-    warmNativePaidCatalog();
-    state.authMessage = '';
-    state.authMode = 'login';
-    state.authVerifyEmail = '';
-    state.authVerifyPassword = '';
-    setToast('Signed in successfully.');
+    completeSignIn(data.sessionToken, data.user || { name: data.name || '', email }, 'Signed in successfully.');
   } catch (error) {
     state.authMessage = error.message || 'Login failed.';
   } finally {
@@ -2963,20 +2984,9 @@ async function loginWithGoogle() {
       body: JSON.stringify({ credential })
     });
     if (!data.sessionToken) throw new Error('The app Worker did not return an app session token.');
-    setToken(data.sessionToken);
-    state.user = data.user || { name: data.name || nativeResult.name || '', email: nativeResult.email || '' };
-    rememberVerifiedAccount();
-    await loadUserCollections();
-    state.adminChecked = false;
-    await checkAdminStatus(true);
-    state.paidLoaded = false;
-    state.paidCatalog = [];
-    state.recurringLoaded = false;
-    state.recurringDonations = [];
-    warmNativePaidCatalog();
-    state.authMessage = ''
-    state.authMode = 'login';
-    setToast('Signed in with Google.');
+    completeSignIn(data.sessionToken,
+      data.user || { name: data.name || nativeResult.name || '', email: nativeResult.email || '' },
+      'Signed in with Google.');
   } catch (error) {
     const message = String(error && error.message || 'Google sign-in failed.');
     state.authMessage = /cancel/i.test(message) ? 'Google sign-in was cancelled.' : message;
@@ -3002,9 +3012,9 @@ async function loginWithApple() {
     const givenName=String(result?.givenName||'').trim();const familyName=String(result?.familyName||'').trim();const email=String(result?.email||'').trim();
     const data=await apiJson('/apple-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({identityToken,givenName,familyName})});
     if(!data.sessionToken)throw new Error('The app Worker did not return an app session token.');
-    setToken(data.sessionToken);state.user=data.user||{name:data.name||[givenName,familyName].filter(Boolean).join(' '),email};
-    rememberVerifiedAccount();
-    await loadUserCollections();state.adminChecked=false;await checkAdminStatus(true);state.paidLoaded=false;state.paidCatalog=[];state.recurringLoaded=false;state.recurringDonations=[];warmNativePaidCatalog();state.authMessage='';state.authMode='login';setToast('Signed in with Apple.');
+    completeSignIn(data.sessionToken,
+      data.user||{name:data.name||[givenName,familyName].filter(Boolean).join(' '),email},
+      'Signed in with Apple.');
   }catch(error){const message=String(error?.message||'Apple sign-in failed.');state.authMessage=/cancel|canceled|cancelled|1001/i.test(message)?'Apple sign-in was cancelled.':message;}
   finally{state.authBusy=false;render();}
 }
