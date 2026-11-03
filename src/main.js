@@ -3237,9 +3237,13 @@ async function toggleFollow(type, key, label) {
     const requestedIdentity = `${type}:${key}`;
     const savedItem = result?.item?.type && result?.item?.key
       ? result.item : { type, key, labelEn: label, labelHe: label };
-    const savedIdentity = `${savedItem.type}:${savedItem.key}`;
-    // The Worker can canonicalize a lecture's Follow identity. Do not keep an
-    // optimistic key that differs from the entry returned after a real restart.
+    // Unfollow replies contain only {id:"speaker:canonical-key"} and no
+    // item. Always prefer that server-confirmed identity: deleting only the
+    // requested alias leaves an existing canonical follow incorrectly active.
+    const returnedIdentity = String(result?.id || '');
+    const savedIdentity = returnedIdentity.startsWith(`${type}:`) &&
+      returnedIdentity.length > type.length + 1
+      ? returnedIdentity : `${savedItem.type}:${savedItem.key}`;
     state.follows.delete(requestedIdentity);
     if (result.following) state.follows.set(savedIdentity, savedItem);
     else state.follows.delete(savedIdentity);
