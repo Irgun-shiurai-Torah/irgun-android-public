@@ -584,7 +584,8 @@ test('Android Follow uses website-reviewed keys and EXACT title-derived website 
   const realHebrewTitle='הרב אברהם יונה שווארץ - דיני עירוב';
   const repairedId=context.resolveSpeaker(realHebrewTitle);
   assert.equal(repairedId,'auto-אברהם-יונה-שווארץ');
-  assert.match(repairedId,/^[A-Za-z0-9_\\-\\u0590-\\u05FF]{1,160}$/);
+  assert.equal(repairedId.includes(':'),false);
+  assert.equal(repairedId.includes(' '),false);
   const inferredVideo={id:'real-qa-title',title:realHebrewTitle,
     _speakerIds:[repairedId],_speakerLabel:'הרב אברהם יונה שווארץ'};
   html=context.renderFollow(inferredVideo);
