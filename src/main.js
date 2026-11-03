@@ -212,7 +212,9 @@ const state = {
   trends: { week: new Map(), month: new Map(), all: new Map() },
   counter: 1124579,
   likeCounts: {},
-  user: Capacitor.getPlatform()==='android' && navigator.onLine===false ? readCachedAccount(localStorage,localStorage.getItem(TOKEN_KEY)) : null,
+  // Display only the token-bound identity previously verified by /me;
+  // roles, collections and any server actions still require a live session.
+  user: Capacitor.getPlatform()==='android' ? readCachedAccount(localStorage,localStorage.getItem(TOKEN_KEY)) : null,
   token: localStorage.getItem(TOKEN_KEY) || '',
   myLikes: new Set(),
   watchLater: new Set(),
@@ -2385,18 +2387,32 @@ function extractSpeakerFromTitle(title) {
   return '';
 }
 
+// /follows/toggle accepts only alphanumeric, underscore, hyphen and Hebrew
+// characters. Use the website's auto-<slug> format for unreviewed speakers.
+function validFollowKey(value) {
+  return /^[A-Za-z0-9_\-\u0590-\u05FF]{1,160}$/.test(String(value || ''));
+}
+function websiteAutoSpeakerId(name) {
+  const slug=String(name || '').trim().toLowerCase()
+    .replace(/[^a-z0-9\u0590-\u05ff]+/g,'-').replace(/^-|-$/g,'').slice(0,150);
+  return slug ? 'auto-'+slug : '';
+}
+
 function resolveSpeakerFromTitle(title) {
   const raw = extractSpeakerFromTitle(title);
   const detected = normalizeText(raw);
   if (!detected) return '';
-  if (state.speakerAliasToId.has(detected)) return state.speakerAliasToId.get(detected);
+  const knownId = String(state.speakerAliasToId.get(detected) || '');
+  if (validFollowKey(knownId)) return knownId;
   for (const [alias, id] of state.speakerAliasToId.entries()) {
-    if (alias && detected && (alias.includes(detected) || detected.includes(alias))) return id;
+    if (alias && detected && (alias.includes(detected) || detected.includes(alias)) &&
+        validFollowKey(id)) return id;
   }
 
   // V14: unknown complete names can reuse reviewed word-by-word name parts.
   // Never publish a half-guessed translation: every word must be known.
-  const id = `auto-speaker:${detected}`;
+  const id = websiteAutoSpeakerId(raw);
+  if (!id) return '';
   if (!state.speakerById.has(id)) {
     const hebrew = /[\u0590-\u05ff]/.test(raw);
     const generatedEn = hebrew ? generatedEnglishSpeakerName(raw) : '';
@@ -2705,6 +2721,9 @@ async function bootstrap(options = {}) {
   state.usingCachedLibrary = false;
   state.offlineCacheSavedAt = 0;
   initNativeDownloader().catch(() => {});
+  // Validate the saved account in parallel with catalog loading rather than
+  // making the signed-in header depend on several unrelated catalog requests.
+  const restorePromise = restoreSession();
   try {
     await loadMetadata();
     const [videos, audios, week, month, all, counter, likeCounts] = await Promise.all([
@@ -2738,7 +2757,7 @@ async function bootstrap(options = {}) {
     // not hold the whole app behind its initial loading screen.
     state.loading = false;
     render();
-    await restoreSession();
+    await restorePromise;
     render();
     Promise.all([loadSponsorRibbon(), loadScheduleData(), loadLiveStatus()])
       .then(() => { if (['home','schedule','live','live-boro','live-flatbush'].includes(state.screen)) render(); })
@@ -2773,29 +2792,39 @@ async function restoreSession() {
     resetUserState();
     return;
   }
+  const checkedToken = state.token;
   try {
     const data = await apiJson('/me');
+    if (checkedToken !== state.token) return;
     if (!data.loggedIn || !data.user) {
       setToken('');
       resetUserState();
+      if (typeof render === 'function') render();
       return;
     }
     state.user = data.user;
     rememberVerifiedAccount();
-    await loadUserCollections();
-    await checkAdminStatus();
+    // /me has already confirmed the session. Show the account now instead
+    // of waiting for slow history, follows and admin requests.
+    if (typeof render === 'function') render();
+    await Promise.allSettled([loadUserCollections(), checkAdminStatus()]);
+    if (checkedToken !== state.token || !state.user) return;
     warmNativePaidCatalog();
+    if (typeof render === 'function') render();
   } catch (error) {
+    if (checkedToken !== state.token) return;
     if (Number(error?.status) === 401) {
       // Server-confirmed revocation always wins over any cached display name.
       setToken('');
       resetUserState();
+      if (typeof render === 'function') render();
     } else if (Number(error?.status) === 403) {
       // Access was explicitly refused by the server. A profile restored while
       // offline cannot stay visible or reappear from its cache on the next
       // offline restart, although the token is retained for server re-check.
       clearCachedAccount(localStorage);
       resetUserState();
+      if (typeof render === 'function') render();
     } else if (!state.user && (!Number(error?.status) || Number(error.status) >= 500)) {
       // navigator.onLine can stay true on an emulator after Wi-Fi and mobile
       // data have both been disconnected. A failed /me fetch may restore ONLY
@@ -2808,6 +2837,7 @@ async function restoreSession() {
 
 async function loadUserCollections() {
   if (!state.user) return;
+  const checkedToken = state.token;
   try {
     const [likes, later, follows, history, notificationSettings, playlists] = await Promise.all([
       apiJson('/my-like-ids').catch(() => ({ ids: [] })),
@@ -2829,6 +2859,7 @@ async function loadUserCollections() {
       apiJson('/notification-settings').catch(() => ({ pushEnabled:false, emailEnabled:false, pushConfigured:false, emailConfigured:false })),
       apiJson('/custom-playlists').catch(() => ({ items: [] }))
     ]);
+    if (checkedToken !== state.token || !state.user) return;
     state.myLikes = new Set((likes.ids || []).map(String));
     state.watchLater = new Set((later.items || []).map(item => String(item.id || item.vimeoId || '')));
     state.follows = new Map((follows.items || []).map(item => [`${item.type}:${item.key}`, item]));
@@ -2842,7 +2873,8 @@ async function loadUserCollections() {
     try { localStorage.removeItem(PLAYLISTS_KEY); } catch (_) {}
     state.notificationSettings = { ...state.notificationSettings, ...notificationSettings };
     // Push is per app installation. Do not inherit another browser/device's state.
-    state.notificationSettings.pushEnabled = await currentNativePushEnabled();
+    const pushEnabled = await currentNativePushEnabled();
+    if (checkedToken === state.token && state.user) state.notificationSettings.pushEnabled = pushEnabled;
   } catch (error) {
     console.warn('Could not load account collections', error);
   }
@@ -2850,6 +2882,7 @@ async function loadUserCollections() {
 
 
 async function checkAdminStatus(force = false) {
+  const checkedToken = state.token;
   if (!state.user) {
     state.isAdmin = false;
     state.adminChecked = true;
@@ -2858,14 +2891,17 @@ async function checkAdminStatus(force = false) {
   if (state.adminChecked && !force) return state.isAdmin;
   try {
     const data = await apiJson('/admin/status');
+    if (checkedToken !== state.token || !state.user) return false;
     state.isAdmin = Boolean(data?.isAdmin);
     state.adminStatus = data || null;
     state.adminAdmins = Array.isArray(data?.admins) ? data.admins : [];
   } catch (error) {
+    if (checkedToken !== state.token || !state.user) return false;
     state.isAdmin = false;
     state.adminStatus = null;
     if (![401,403].includes(Number(error?.status))) console.warn('Admin status check failed', error);
   }
+  if (checkedToken !== state.token || !state.user) return false;
   state.adminChecked = true;
   if (!state.isAdmin && state.accountSection === 'admin') state.accountSection = 'profile';
   if(!state.cityAdminChecked&&!state.cityAdminLoading)void checkCityAdminStatus();
@@ -2894,6 +2930,28 @@ async function refreshLikeCounts() {
   try { state.likeCounts = await publicJson('/like-counts'); } catch (_) {}
 }
 
+// The server-verified token is enough to show the signed-in UI.
+// Collection and admin refreshes run afterwards, without blocking login.
+function completeSignIn(sessionToken, user, successMessage) {
+  resetUserState();
+  setToken(sessionToken);
+  state.user = user;
+  rememberVerifiedAccount();
+  state.authBusy = false;
+  state.authMessage = '';
+  state.authMode = 'login';
+  state.authVerifyEmail = '';
+  state.authVerifyPassword = '';
+  render();
+  if (successMessage) setToast(successMessage);
+  const checkedToken = state.token;
+  void Promise.allSettled([loadUserCollections(), checkAdminStatus(true)]).then(() => {
+    if (checkedToken !== state.token || !state.user) return;
+    warmNativePaidCatalog();
+    render();
+  });
+}
+
 async function login(email, password) {
   state.authBusy = true;
   state.authMessage = '';
@@ -2916,22 +2974,7 @@ async function login(email, password) {
       throw new Error(data.error || 'Login failed.');
     }
     if (!data.sessionToken) throw new Error('The app Worker is not returning an app session token.');
-    setToken(data.sessionToken);
-    state.user = data.user || { name: data.name || '', email };
-    rememberVerifiedAccount();
-    await loadUserCollections();
-    state.adminChecked = false;
-    await checkAdminStatus(true);
-    state.paidLoaded = false;
-    state.paidCatalog = [];
-    state.recurringLoaded = false;
-    state.recurringDonations = [];
-    warmNativePaidCatalog();
-    state.authMessage = '';
-    state.authMode = 'login';
-    state.authVerifyEmail = '';
-    state.authVerifyPassword = '';
-    setToast('Signed in successfully.');
+    completeSignIn(data.sessionToken, data.user || { name: data.name || '', email }, 'Signed in successfully.');
   } catch (error) {
     state.authMessage = error.message || 'Login failed.';
   } finally {
@@ -2963,20 +3006,9 @@ async function loginWithGoogle() {
       body: JSON.stringify({ credential })
     });
     if (!data.sessionToken) throw new Error('The app Worker did not return an app session token.');
-    setToken(data.sessionToken);
-    state.user = data.user || { name: data.name || nativeResult.name || '', email: nativeResult.email || '' };
-    rememberVerifiedAccount();
-    await loadUserCollections();
-    state.adminChecked = false;
-    await checkAdminStatus(true);
-    state.paidLoaded = false;
-    state.paidCatalog = [];
-    state.recurringLoaded = false;
-    state.recurringDonations = [];
-    warmNativePaidCatalog();
-    state.authMessage = ''
-    state.authMode = 'login';
-    setToast('Signed in with Google.');
+    completeSignIn(data.sessionToken,
+      data.user || { name: data.name || nativeResult.name || '', email: nativeResult.email || '' },
+      'Signed in with Google.');
   } catch (error) {
     const message = String(error && error.message || 'Google sign-in failed.');
     state.authMessage = /cancel/i.test(message) ? 'Google sign-in was cancelled.' : message;
@@ -3002,9 +3034,9 @@ async function loginWithApple() {
     const givenName=String(result?.givenName||'').trim();const familyName=String(result?.familyName||'').trim();const email=String(result?.email||'').trim();
     const data=await apiJson('/apple-login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({identityToken,givenName,familyName})});
     if(!data.sessionToken)throw new Error('The app Worker did not return an app session token.');
-    setToken(data.sessionToken);state.user=data.user||{name:data.name||[givenName,familyName].filter(Boolean).join(' '),email};
-    rememberVerifiedAccount();
-    await loadUserCollections();state.adminChecked=false;await checkAdminStatus(true);state.paidLoaded=false;state.paidCatalog=[];state.recurringLoaded=false;state.recurringDonations=[];warmNativePaidCatalog();state.authMessage='';state.authMode='login';setToast('Signed in with Apple.');
+    completeSignIn(data.sessionToken,
+      data.user||{name:data.name||[givenName,familyName].filter(Boolean).join(' '),email},
+      'Signed in with Apple.');
   }catch(error){const message=String(error?.message||'Apple sign-in failed.');state.authMessage=/cancel|canceled|cancelled|1001/i.test(message)?'Apple sign-in was cancelled.':message;}
   finally{state.authBusy=false;render();}
 }
@@ -3205,18 +3237,27 @@ function requireLogin(message) {
 
 async function toggleFollow(type, key, label) {
   if (!state.user) return requireLogin('Sign in to follow speakers and topics.');
+  // A native JS alert on a rejected Follow call blocks the Android WebView
+  // event loop (and CDP), so use non-modal feedback and bound the request.
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeout = setTimeout(() => controller?.abort(), 12000);
   try {
     const result = await apiJson('/follows/toggle', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, key, labelEn: label, labelHe: label })
+      body: JSON.stringify({ type, key, labelEn: label, labelHe: label }),
+      ...(controller ? { signal: controller.signal } : {})
     });
     const requestedIdentity = `${type}:${key}`;
     const savedItem = result?.item?.type && result?.item?.key
       ? result.item : { type, key, labelEn: label, labelHe: label };
-    const savedIdentity = `${savedItem.type}:${savedItem.key}`;
-    // The Worker can canonicalize a lecture's Follow identity. Do not keep an
-    // optimistic key that differs from the entry returned after a real restart.
+    // Unfollow replies contain only {id:"speaker:canonical-key"} and no
+    // item. Always prefer that server-confirmed identity: deleting only the
+    // requested alias leaves an existing canonical follow incorrectly active.
+    const returnedIdentity = String(result?.id || '');
+    const savedIdentity = returnedIdentity.startsWith(`${type}:`) &&
+      returnedIdentity.length > type.length + 1
+      ? returnedIdentity : `${savedItem.type}:${savedItem.key}`;
     state.follows.delete(requestedIdentity);
     if (result.following) state.follows.set(savedIdentity, savedItem);
     else state.follows.delete(savedIdentity);
@@ -3236,7 +3277,14 @@ async function toggleFollow(type, key, label) {
       }
     } catch (error) { console.warn('Could not refresh saved follows', error); }
   } catch (error) {
-    alert(error.message || 'Could not update follow.');
+    // Never block native playback, user taps or read-only regression
+    // observations behind a JavaScript alert dialog.
+    console.warn('Follow update failed', Number(error?.status) || String(error?.name || 'network'));
+    setToast(Number(error?.status) === 401
+      ? 'Your session expired. Please sign in again.'
+      : 'Could not update Follow. Please try again.');
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -5598,9 +5646,8 @@ function websiteFallbackSpeakerFromTitle(title) {
   const match=String(title || '').match(/(?:^|[-–—]\s*)(?:Rabbi|Rav|הרב|רבי|ר[׳'])\s+(.+?)(?=\s+[-–—#|]|$)/i);
   if (!match) return '';
   const name=match[1].replace(/\s+/g,' ').trim();
-  const key=name.toLowerCase().replace(/[^a-z0-9\u0590-\u05ff]+/g,'-').replace(/^-|-$/g,'').slice(0,150);
-  if (!key) return '';
-  const id='auto-'+key;
+  const id=websiteAutoSpeakerId(name);
+  if (!id) return '';
   if (!state.speakerById.has(id)) {
     const hebrew=/[\u0590-\u05ff]/.test(name);
     const en=hebrew ? generatedEnglishSpeakerName(name) : name;
@@ -5616,13 +5663,16 @@ function websiteFallbackSpeakerFromTitle(title) {
 
 function followSpeakerIdsForLecture(video) {
   const ids = [...new Set((Array.isArray(video?._speakerIds) ? video._speakerIds : [])
-    .map(String).filter(Boolean))];
+    .map(String)
+    .map(id => id.startsWith('auto-speaker:')
+      ? websiteAutoSpeakerId(id.slice('auto-speaker:'.length)) : id)
+    .filter(validFollowKey))];
 
   // Use the website's reviewed lecture-to-speaker mapping first. The website
   // loads library-metadata.json and checks lectures[video.id].speakerIds.
   const reviewed=state.metadata?.lectures?.[videoId(video)]?.speakerIds;
   if (Array.isArray(reviewed) && reviewed.length) {
-    const supported=reviewed.map(String).filter(id=>state.speakerById.has(id));
+    const supported=reviewed.map(String).filter(id=>validFollowKey(id)&&state.speakerById.has(id));
     if (supported.length) { video._speakerIds=supported; return supported; }
   }
 
@@ -5641,7 +5691,7 @@ function followSpeakerIdsForLecture(video) {
         if (normalizeText(bareSpeakerName(alias))===wanted) {canonical=id;break;}
       }
     }
-    if (canonical) {video._speakerIds=[String(canonical)];return video._speakerIds;}
+    if (validFollowKey(canonical)) {video._speakerIds=[String(canonical)];return video._speakerIds;}
   }
 
   // Unknown speakers retain the exact website watch.js auto-<slug> key so
@@ -5652,7 +5702,7 @@ function followSpeakerIdsForLecture(video) {
   const translatedId=websiteFallbackSpeakerFromTitle(translatedTitle);
   if (translatedId) {video._speakerIds=[translatedId];return video._speakerIds;}
 
-  if (ids.length) return ids;
+  if (ids.length) { video._speakerIds=ids; return ids; }
 
   // A direct Hebrew/English speaker field may still be matched to canonical
   // reviewed metadata even when the raw video has no speaker prefix.
@@ -5664,7 +5714,7 @@ function followSpeakerIdsForLecture(video) {
     const normalized=normalizeText(name);
     if(!normalized || /^(irgun shiurai torah|unknown|various speakers|speaker|magid shiur)$/i.test(normalized))continue;
     const id=state.speakerAliasToId.get(normalized);
-    if(id) {video._speakerIds=[String(id)];return video._speakerIds;}
+    if(validFollowKey(id)) {video._speakerIds=[String(id)];return video._speakerIds;}
   }
   return [];
 }
@@ -5679,7 +5729,7 @@ function currentFollowButtons(video) {
     const following = state.follows.has(`speaker:${speakerId}`);
     buttons.push(`<button class="follow-chip ${following ? 'active' : ''}" dir="auto" data-follow-type="speaker" data-follow-key="${esc(speakerId)}" data-follow-label="${esc(label)}">${followButtonText(following, label)}</button>`);
   }
-  if (video._topicId) {
+  if (validFollowKey(video._topicId)) {
     const label = topicLabel(video._topicId) || video._topicLabel;
     if (label) {
       const following = state.follows.has(`topic:${video._topicId}`);

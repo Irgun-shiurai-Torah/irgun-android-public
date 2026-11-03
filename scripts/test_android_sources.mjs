@@ -543,7 +543,7 @@ test('Android Follow uses website-reviewed keys and EXACT title-derived website 
     slice('function cleanSpeakerDisplayName(', 'function cleanTopicDisplayName(')+
     slice('function esc(', 'function shiurTitleParts(')+
     slice('function followButtonText(', 'function commentsHtml()')+
-    '\nthis.renderFollow=currentFollowButtons;',context);
+    '\nthis.renderFollow=currentFollowButtons;this.resolveSpeaker=resolveSpeakerFromTitle;',context);
   // Website metadata overrides an inferred title: account identity stays
   // identical between Android and site for reviewed speakers.
   const reviewed={id:'reviewed-lecture',title:'הרב שמואל יהודה בריסק - שאלות חדשות',
@@ -578,6 +578,34 @@ test('Android Follow uses website-reviewed keys and EXACT title-derived website 
   assert.match(html,/עקבו אחרי הרב שמואל יהודה בריסק/);
   state.follows.set('speaker:auto-שמואל-יהודה-בריסק',{type:'speaker',key:'auto-שמואל-יהודה-בריסק'});
   assert.match(context.renderFollow(unreviewed),/עוקבים אחרי/);
+
+  // Real API 30/34/35/36 regression: enrichVideo used to generate a key with
+  // colon + spaces. /follows/toggle rejects it as HTTP 400 Invalid follow key.
+  const realHebrewTitle='הרב אברהם יונה שווארץ - דיני עירוב';
+  const repairedId=context.resolveSpeaker(realHebrewTitle);
+  assert.equal(repairedId,'auto-אברהם-יונה-שווארץ');
+  assert.equal(repairedId.includes(':'),false);
+  assert.equal(repairedId.includes(' '),false);
+  const inferredVideo={id:'real-qa-title',title:realHebrewTitle,
+    _speakerIds:[repairedId],_speakerLabel:'הרב אברהם יונה שווארץ'};
+  html=context.renderFollow(inferredVideo);
+  assert.match(html,/data-follow-key="auto-אברהם-יונה-שווארץ"/);
+  assert.doesNotMatch(html,/auto-speaker:/);
+  assert.deepEqual(Array.from(inferredVideo._speakerIds),[repairedId]);
+
+  // A previously enriched lecture can still have the old invalid ID.
+  // The Watch Follow control must repair it even without a tagged title.
+  const inherited={id:'legacy-qa-title',title:'דיני עירוב',
+    _speakerIds:['auto-speaker:אברהם יונה שווארץ'],
+    _speakerLabel:'הרב אברהם יונה שווארץ'};
+  html=context.renderFollow(inherited);
+  assert.match(html,/data-follow-key="auto-אברהם-יונה-שווארץ"/);
+  assert.deepEqual(Array.from(inherited._speakerIds),[repairedId]);
+  assert.doesNotMatch(html,/auto-speaker:/);
+
+  // Invalid topic IDs must not create server-rejected Follow controls.
+  assert.equal(context.renderFollow({id:'bad-topic',title:'General lecture',
+    _speakerIds:[],_topicId:'invalid topic:spaces'}),'');
   // Fallback is still allowed for a canonical speaker field without a tagged title.
   state.speakerAliasToId.set('שמואל יהודה בריסק','shmuel-yehuda-brisk');
   const bySpeaker={id:'other',title:'שאלות חדשות',speakerHe:'הרב שמואל יהודה בריסק',_speakerIds:[]};
@@ -917,7 +945,7 @@ test('Android cold offline restart restores only verified identity even if netwo
     await context.bootstrap({initial:true});
     assert.equal(restores,1,
       'Real catalog failure must attempt offline restore regardless of navigator.onLine');
-    assert.equal(sessionRequests,0,'A failed catalog may prevent /me and must not invent server authorization');
+    assert.equal(sessionRequests,1,'Validate the previous session independently of catalog startup; no privileges are inferred');
     assert.equal(state.user?.name,'Verified listener');
     assert.equal(state.isAdmin,false,'Offline profile must not grant elevated privileges');
     assert.equal(renderedAccount,true,'Cached display identity must render on offline startup');
@@ -1202,6 +1230,8 @@ test('Follow success adopts the server canonical identity, persists after refres
   const canonical = {type:'speaker',key:'reviewed-rav',labelEn:'Test Speaker'};
   const context = {
     state, alert:message=>alerts.push(message), console:{warn(){}},
+    setTimeout, clearTimeout, AbortController,
+    setToast(){},
     apiJson: async (path,options) => {
       if(path==='/follows/toggle')return {following:true,item:canonical};
       if(path==='/follows'){getCalls++;assert.equal(options.cache,'no-store');return {items:[canonical]};}
@@ -1219,8 +1249,41 @@ test('Follow success adopts the server canonical identity, persists after refres
   await context.toggleFollow('speaker','reviewed-rav','Test Speaker');
   assert.equal(state.follows.size,0, 'Successful un-follow must not reverse on a refresh failure');
   assert.equal(alerts.length,0);
+  // The Worker deliberately omits item on removal; it returns only the
+  // canonical id. An alias must still un-follow the canonical saved speaker.
+  state.follows.set('speaker:reviewed-rav',canonical);
+  context.apiJson=async path=>path==='/follows/toggle'
+    ? {following:false,id:'speaker:reviewed-rav'}
+    : (()=>{throw new Error('Offline follows refresh');})();
+  await context.toggleFollow('speaker','legacy-rav','Test Speaker');
+  assert.equal(state.follows.size,0,
+    'Server canonical ID must remove saved follow even when requested alias differs');
+  assert.equal(alerts.length,0);
 });
 
+
+test('Follow API rejection never blocks Android WebView behind an alert',async()=>{
+  const start=mainSource.indexOf('async function toggleFollow(type, key, label) {');
+  const end=mainSource.indexOf('function historyIdFor(',start);
+  assert.ok(start>=0&&end>start);
+  const alerts=[],toasts=[];
+  const existing={type:'speaker',key:'qa-rav',labelEn:'QA'};
+  const state={user:{id:'listener'},follows:new Map([['speaker:qa-rav',existing]]),
+    watchVideo:{id:'lecture'},screen:'home',librarySection:'following'};
+  const context={state,setTimeout,clearTimeout,AbortController,
+    console:{warn(){}},alert:message=>alerts.push(message),setToast:message=>toasts.push(message),
+    apiJson:async path=>{
+      assert.equal(path,'/follows/toggle');
+      throw Object.assign(new Error('Login required'),{status:401});
+    },requireLogin:()=>{throw new Error('unexpected guest login')},
+    refreshInteractiveUi:()=>{},render:()=>{}};
+  runInNewContext(mainSource.slice(start,end)+'\nthis.toggleFollow=toggleFollow;',context);
+  await context.toggleFollow('speaker','qa-rav','QA');
+  assert.equal(alerts.length,0,'WebView modal blocks app interaction and CDP');
+  assert.equal(toasts.length,1);
+  assert.match(toasts[0],/session expired/i);
+  assert.deepEqual([...state.follows.keys()],['speaker:qa-rav'],'failed mutation cannot change saved follows');
+});
 
 test('audio downloads use the validated audio stream and preserve unlisted source identity', () => {
   assert.equal(audioDownloadPath('1233236785:585d5d53db'),'/audio/1233236785%3A585d5d53db');
