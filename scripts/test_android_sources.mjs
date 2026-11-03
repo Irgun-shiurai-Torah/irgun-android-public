@@ -1239,7 +1239,7 @@ test('Follow API rejection never blocks Android WebView behind an alert',async()
       throw Object.assign(new Error('Login required'),{status:401});
     },requireLogin:()=>{throw new Error('unexpected guest login')},
     refreshInteractiveUi:()=>{},render:()=>{}};
-  runInNewContext(mainSource.slice(start,end)+'\\nthis.toggleFollow=toggleFollow;',context);
+  runInNewContext(mainSource.slice(start,end)+'\nthis.toggleFollow=toggleFollow;',context);
   await context.toggleFollow('speaker','qa-rav','QA');
   assert.equal(alerts.length,0,'WebView modal blocks app interaction and CDP');
   assert.equal(toasts.length,1);
