@@ -1633,6 +1633,7 @@ function svgIcon(name, extraClass = '') {
     home: `<svg ${common}><path d="M3 10.7 12 3l9 7.7v9.1a1.2 1.2 0 0 1-1.2 1.2h-5.2v-6.1H9.4V21H4.2A1.2 1.2 0 0 1 3 19.8z"/></svg>`,
     search: `<svg ${common}><circle cx="10.5" cy="10.5" r="6.3"/><path d="m15.2 15.2 5.2 5.2"/></svg>`,
     eye: `<svg ${common}><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.6"/></svg>`,
+    headphones: `<svg ${common}><path d="M3 14h3a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8a9 9 0 0 1 18 0v8a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h3"/></svg>`,
     history: `<svg ${common}><path d="M4 5v5h5M5.5 9.5A8 8 0 1 1 4.8 15"/><path d="M12 7v5l3 2"/></svg>`,
     play: `<svg ${common}><path d="M8 5.4v13.2L19 12z"/></svg>`,
     live: `<svg ${common}><circle cx="12" cy="12" r="3.1"/><path d="M6.8 6.8a7.4 7.4 0 0 0 0 10.4M17.2 6.8a7.4 7.4 0 0 1 0 10.4M3.7 3.7a11.8 11.8 0 0 0 0 16.6M20.3 3.7a11.8 11.8 0 0 1 0 16.6"/></svg>`,
@@ -3790,7 +3791,7 @@ function shiurViewsHtml(item, isAudio = false) {
   )));
   if (!(state.isAdmin && state.adminMode) && count < 300) return '';
   const label = currentLanguage() === 'he' ? (isAudio ? 'האזנות' : 'צפיות') : (isAudio ? 'listens' : 'views');
-  return `<span class="shiur-views-stat" aria-label="${count.toLocaleString('en-US')} ${label}">${svgIcon('eye')}<span>${count.toLocaleString('en-US')} ${label}</span></span>`;
+  return `<span class="shiur-views-stat" aria-label="${count.toLocaleString('en-US')} ${label}">${svgIcon(isAudio ? 'headphones' : 'eye')}<span>${count.toLocaleString('en-US')} ${label}</span></span>`;
 }
 
 function itemCard(item, options = {}) {
