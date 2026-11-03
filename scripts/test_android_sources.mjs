@@ -1202,6 +1202,8 @@ test('Follow success adopts the server canonical identity, persists after refres
   const canonical = {type:'speaker',key:'reviewed-rav',labelEn:'Test Speaker'};
   const context = {
     state, alert:message=>alerts.push(message), console:{warn(){}},
+    setTimeout, clearTimeout, AbortController,
+    setToast(){},
     apiJson: async (path,options) => {
       if(path==='/follows/toggle')return {following:true,item:canonical};
       if(path==='/follows'){getCalls++;assert.equal(options.cache,'no-store');return {items:[canonical]};}
@@ -1221,6 +1223,29 @@ test('Follow success adopts the server canonical identity, persists after refres
   assert.equal(alerts.length,0);
 });
 
+
+test('Follow API rejection never blocks Android WebView behind an alert',async()=>{
+  const start=mainSource.indexOf('async function toggleFollow(type, key, label) {');
+  const end=mainSource.indexOf('function historyIdFor(',start);
+  assert.ok(start>=0&&end>start);
+  const alerts=[],toasts=[];
+  const existing={type:'speaker',key:'qa-rav',labelEn:'QA'};
+  const state={user:{id:'listener'},follows:new Map([['speaker:qa-rav',existing]]),
+    watchVideo:{id:'lecture'},screen:'home',librarySection:'following'};
+  const context={state,setTimeout,clearTimeout,AbortController,
+    console:{warn(){}},alert:message=>alerts.push(message),setToast:message=>toasts.push(message),
+    apiJson:async path=>{
+      assert.equal(path,'/follows/toggle');
+      throw Object.assign(new Error('Login required'),{status:401});
+    },requireLogin:()=>{throw new Error('unexpected guest login')},
+    refreshInteractiveUi:()=>{},render:()=>{}};
+  runInNewContext(mainSource.slice(start,end)+'\\nthis.toggleFollow=toggleFollow;',context);
+  await context.toggleFollow('speaker','qa-rav','QA');
+  assert.equal(alerts.length,0,'WebView modal blocks app interaction and CDP');
+  assert.equal(toasts.length,1);
+  assert.match(toasts[0],/session expired/i);
+  assert.deepEqual([...state.follows.keys()],['speaker:qa-rav'],'failed mutation cannot change saved follows');
+});
 
 test('audio downloads use the validated audio stream and preserve unlisted source identity', () => {
   assert.equal(audioDownloadPath('1233236785:585d5d53db'),'/audio/1233236785%3A585d5d53db');
