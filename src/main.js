@@ -2709,7 +2709,7 @@ async function bootstrap(options = {}) {
   initNativeDownloader().catch(() => {});
   // Validate the saved account in parallel with catalog loading rather than
   // making the signed-in header depend on several unrelated catalog requests.
-  const restorePromise = state.token ? restoreSession() : Promise.resolve();
+  const restorePromise = restoreSession();
   try {
     await loadMetadata();
     const [videos, audios, week, month, all, counter, likeCounts] = await Promise.all([
