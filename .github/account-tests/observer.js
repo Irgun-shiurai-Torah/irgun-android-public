@@ -12,20 +12,21 @@ window.__ISTAccountApiRequests = window.__ISTAccountApiRequests || [];
     const normalized = String(path || '').split('?')[0];
     if (normalized !== '/follows/toggle') return originalApiJson(path, options);
     const started = Date.now();
+    // Preserve the pending request in read-only QA state. This distinguishes a
+    // server error from a WebView modal or a stuck HTTP request after a tap.
+    const observation = {path:normalized,status:'pending',elapsedMs:0};
+    window.__ISTAccountApiRequests.push(observation);
+    if(window.__ISTAccountApiRequests.length>20)window.__ISTAccountApiRequests.shift();
     try {
       const result = await originalApiJson(path, options);
-      window.__ISTAccountApiRequests.push({
-        path: normalized, status: 200,
-        following: typeof result?.following === 'boolean' ? result.following : null,
-        elapsedMs: Date.now() - started
-      });
+      observation.status = 200;
+      observation.following = typeof result?.following === 'boolean' ? result.following : null;
+      observation.elapsedMs = Date.now() - started;
       return result;
     } catch (error) {
-      window.__ISTAccountApiRequests.push({
-        path: normalized, status: Number(error?.status) || 0,
-        error: String(error?.message || 'request failed').slice(0, 120),
-        elapsedMs: Date.now() - started
-      });
+      observation.status = Number(error?.status) || 0;
+      observation.error = String(error?.message || 'request failed').slice(0, 120);
+      observation.elapsedMs = Date.now() - started;
       throw error;
     }
   };
