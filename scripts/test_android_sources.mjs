@@ -543,7 +543,7 @@ test('Android Follow uses website-reviewed keys and EXACT title-derived website 
     slice('function cleanSpeakerDisplayName(', 'function cleanTopicDisplayName(')+
     slice('function esc(', 'function shiurTitleParts(')+
     slice('function followButtonText(', 'function commentsHtml()')+
-    '\nthis.renderFollow=currentFollowButtons;',context);
+    '\nthis.renderFollow=currentFollowButtons;this.resolveSpeaker=resolveSpeakerFromTitle;',context);
   // Website metadata overrides an inferred title: account identity stays
   // identical between Android and site for reviewed speakers.
   const reviewed={id:'reviewed-lecture',title:'הרב שמואל יהודה בריסק - שאלות חדשות',
@@ -578,6 +578,33 @@ test('Android Follow uses website-reviewed keys and EXACT title-derived website 
   assert.match(html,/עקבו אחרי הרב שמואל יהודה בריסק/);
   state.follows.set('speaker:auto-שמואל-יהודה-בריסק',{type:'speaker',key:'auto-שמואל-יהודה-בריסק'});
   assert.match(context.renderFollow(unreviewed),/עוקבים אחרי/);
+
+  // Real API 30/34/35/36 regression: enrichVideo used to generate a key with
+  // colon + spaces. /follows/toggle rejects it as HTTP 400 Invalid follow key.
+  const realHebrewTitle='הרב אברהם יונה שווארץ - דיני עירוב';
+  const repairedId=context.resolveSpeaker(realHebrewTitle);
+  assert.equal(repairedId,'auto-אברהם-יונה-שווארץ');
+  assert.match(repairedId,/^[A-Za-z0-9_\\-\\u0590-\\u05FF]{1,160}$/);
+  const inferredVideo={id:'real-qa-title',title:realHebrewTitle,
+    _speakerIds:[repairedId],_speakerLabel:'הרב אברהם יונה שווארץ'};
+  html=context.renderFollow(inferredVideo);
+  assert.match(html,/data-follow-key="auto-אברהם-יונה-שווארץ"/);
+  assert.doesNotMatch(html,/auto-speaker:/);
+  assert.deepEqual(Array.from(inferredVideo._speakerIds),[repairedId]);
+
+  // A previously enriched lecture can still have the old invalid ID.
+  // The Watch Follow control must repair it even without a tagged title.
+  const inherited={id:'legacy-qa-title',title:'דיני עירוב',
+    _speakerIds:['auto-speaker:אברהם יונה שווארץ'],
+    _speakerLabel:'הרב אברהם יונה שווארץ'};
+  html=context.renderFollow(inherited);
+  assert.match(html,/data-follow-key="auto-אברהם-יונה-שווארץ"/);
+  assert.deepEqual(Array.from(inherited._speakerIds),[repairedId]);
+  assert.doesNotMatch(html,/auto-speaker:/);
+
+  // Invalid topic IDs must not create server-rejected Follow controls.
+  assert.equal(context.renderFollow({id:'bad-topic',title:'General lecture',
+    _speakerIds:[],_topicId:'invalid topic:spaces'}),'');
   // Fallback is still allowed for a canonical speaker field without a tagged title.
   state.speakerAliasToId.set('שמואל יהודה בריסק','shmuel-yehuda-brisk');
   const bySpeaker={id:'other',title:'שאלות חדשות',speakerHe:'הרב שמואל יהודה בריסק',_speakerIds:[]};
