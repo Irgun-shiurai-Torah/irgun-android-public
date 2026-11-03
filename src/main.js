@@ -2387,18 +2387,32 @@ function extractSpeakerFromTitle(title) {
   return '';
 }
 
+// /follows/toggle accepts only alphanumeric, underscore, hyphen and Hebrew
+// characters. Use the website's auto-<slug> format for unreviewed speakers.
+function validFollowKey(value) {
+  return /^[A-Za-z0-9_\-\u0590-\u05FF]{1,160}$/.test(String(value || ''));
+}
+function websiteAutoSpeakerId(name) {
+  const slug=String(name || '').trim().toLowerCase()
+    .replace(/[^a-z0-9\u0590-\u05ff]+/g,'-').replace(/^-|-$/g,'').slice(0,150);
+  return slug ? 'auto-'+slug : '';
+}
+
 function resolveSpeakerFromTitle(title) {
   const raw = extractSpeakerFromTitle(title);
   const detected = normalizeText(raw);
   if (!detected) return '';
-  if (state.speakerAliasToId.has(detected)) return state.speakerAliasToId.get(detected);
+  const knownId = String(state.speakerAliasToId.get(detected) || '');
+  if (validFollowKey(knownId)) return knownId;
   for (const [alias, id] of state.speakerAliasToId.entries()) {
-    if (alias && detected && (alias.includes(detected) || detected.includes(alias))) return id;
+    if (alias && detected && (alias.includes(detected) || detected.includes(alias)) &&
+        validFollowKey(id)) return id;
   }
 
   // V14: unknown complete names can reuse reviewed word-by-word name parts.
   // Never publish a half-guessed translation: every word must be known.
-  const id = `auto-speaker:${detected}`;
+  const id = websiteAutoSpeakerId(raw);
+  if (!id) return '';
   if (!state.speakerById.has(id)) {
     const hebrew = /[\u0590-\u05ff]/.test(raw);
     const generatedEn = hebrew ? generatedEnglishSpeakerName(raw) : '';
@@ -5632,9 +5646,8 @@ function websiteFallbackSpeakerFromTitle(title) {
   const match=String(title || '').match(/(?:^|[-–—]\s*)(?:Rabbi|Rav|הרב|רבי|ר[׳'])\s+(.+?)(?=\s+[-–—#|]|$)/i);
   if (!match) return '';
   const name=match[1].replace(/\s+/g,' ').trim();
-  const key=name.toLowerCase().replace(/[^a-z0-9\u0590-\u05ff]+/g,'-').replace(/^-|-$/g,'').slice(0,150);
-  if (!key) return '';
-  const id='auto-'+key;
+  const id=websiteAutoSpeakerId(name);
+  if (!id) return '';
   if (!state.speakerById.has(id)) {
     const hebrew=/[\u0590-\u05ff]/.test(name);
     const en=hebrew ? generatedEnglishSpeakerName(name) : name;
@@ -5650,13 +5663,16 @@ function websiteFallbackSpeakerFromTitle(title) {
 
 function followSpeakerIdsForLecture(video) {
   const ids = [...new Set((Array.isArray(video?._speakerIds) ? video._speakerIds : [])
-    .map(String).filter(Boolean))];
+    .map(String)
+    .map(id => id.startsWith('auto-speaker:')
+      ? websiteAutoSpeakerId(id.slice('auto-speaker:'.length)) : id)
+    .filter(validFollowKey))];
 
   // Use the website's reviewed lecture-to-speaker mapping first. The website
   // loads library-metadata.json and checks lectures[video.id].speakerIds.
   const reviewed=state.metadata?.lectures?.[videoId(video)]?.speakerIds;
   if (Array.isArray(reviewed) && reviewed.length) {
-    const supported=reviewed.map(String).filter(id=>state.speakerById.has(id));
+    const supported=reviewed.map(String).filter(id=>validFollowKey(id)&&state.speakerById.has(id));
     if (supported.length) { video._speakerIds=supported; return supported; }
   }
 
@@ -5675,7 +5691,7 @@ function followSpeakerIdsForLecture(video) {
         if (normalizeText(bareSpeakerName(alias))===wanted) {canonical=id;break;}
       }
     }
-    if (canonical) {video._speakerIds=[String(canonical)];return video._speakerIds;}
+    if (validFollowKey(canonical)) {video._speakerIds=[String(canonical)];return video._speakerIds;}
   }
 
   // Unknown speakers retain the exact website watch.js auto-<slug> key so
@@ -5686,7 +5702,7 @@ function followSpeakerIdsForLecture(video) {
   const translatedId=websiteFallbackSpeakerFromTitle(translatedTitle);
   if (translatedId) {video._speakerIds=[translatedId];return video._speakerIds;}
 
-  if (ids.length) return ids;
+  if (ids.length) { video._speakerIds=ids; return ids; }
 
   // A direct Hebrew/English speaker field may still be matched to canonical
   // reviewed metadata even when the raw video has no speaker prefix.
@@ -5698,7 +5714,7 @@ function followSpeakerIdsForLecture(video) {
     const normalized=normalizeText(name);
     if(!normalized || /^(irgun shiurai torah|unknown|various speakers|speaker|magid shiur)$/i.test(normalized))continue;
     const id=state.speakerAliasToId.get(normalized);
-    if(id) {video._speakerIds=[String(id)];return video._speakerIds;}
+    if(validFollowKey(id)) {video._speakerIds=[String(id)];return video._speakerIds;}
   }
   return [];
 }
@@ -5713,7 +5729,7 @@ function currentFollowButtons(video) {
     const following = state.follows.has(`speaker:${speakerId}`);
     buttons.push(`<button class="follow-chip ${following ? 'active' : ''}" dir="auto" data-follow-type="speaker" data-follow-key="${esc(speakerId)}" data-follow-label="${esc(label)}">${followButtonText(following, label)}</button>`);
   }
-  if (video._topicId) {
+  if (validFollowKey(video._topicId)) {
     const label = topicLabel(video._topicId) || video._topicLabel;
     if (label) {
       const following = state.follows.has(`topic:${video._topicId}`);
