@@ -1221,6 +1221,16 @@ test('Follow success adopts the server canonical identity, persists after refres
   await context.toggleFollow('speaker','reviewed-rav','Test Speaker');
   assert.equal(state.follows.size,0, 'Successful un-follow must not reverse on a refresh failure');
   assert.equal(alerts.length,0);
+  // The Worker deliberately omits item on removal; it returns only the
+  // canonical id. An alias must still un-follow the canonical saved speaker.
+  state.follows.set('speaker:reviewed-rav',canonical);
+  context.apiJson=async path=>path==='/follows/toggle'
+    ? {following:false,id:'speaker:reviewed-rav'}
+    : (()=>{throw new Error('Offline follows refresh');})();
+  await context.toggleFollow('speaker','legacy-rav','Test Speaker');
+  assert.equal(state.follows.size,0,
+    'Server canonical ID must remove saved follow even when requested alias differs');
+  assert.equal(alerts.length,0);
 });
 
 
